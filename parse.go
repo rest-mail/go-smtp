@@ -20,7 +20,9 @@ func parseCmd(line string) (cmd string, arg string, err error) {
 
 	l := len(line)
 	switch {
-	case strings.HasPrefix(strings.ToUpper(line), "STARTTLS"):
+	case strings.EqualFold(line, "STARTTLS") || strings.HasPrefix(strings.ToUpper(line), "STARTTLS "):
+		// STARTTLS takes no arguments; require an exact match (or a
+		// space-separated form) so e.g. "STARTTLSx" is not dispatched as STARTTLS.
 		return "STARTTLS", "", nil
 	case l == 0:
 		return "", "", nil
@@ -52,15 +54,10 @@ func parseCmd(line string) (cmd string, arg string, err error) {
 func parseArgs(s string) (map[string]string, error) {
 	argMap := map[string]string{}
 	for _, arg := range strings.Fields(s) {
-		m := strings.Split(arg, "=")
-		switch len(m) {
-		case 2:
-			argMap[strings.ToUpper(m[0])] = m[1]
-		case 1:
-			argMap[strings.ToUpper(m[0])] = ""
-		default:
-			return nil, fmt.Errorf("failed to parse arg string: %q", arg)
-		}
+		// Split on the first '=' only: a parameter value may itself contain
+		// '=' (e.g. base64-ish or AUTH values).
+		key, value, _ := strings.Cut(arg, "=")
+		argMap[strings.ToUpper(key)] = value
 	}
 	return argMap, nil
 }

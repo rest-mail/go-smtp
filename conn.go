@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net"
 	"net/textproto"
 	"regexp"
@@ -19,7 +18,8 @@ import (
 	"github.com/emersion/go-sasl"
 )
 
-// Number of errors we'll tolerate per connection before closing. Defaults to 3.
+// Number of protocol errors tolerated per connection: the connection is closed
+// once errCount exceeds this, i.e. on the 4th error.
 const errThreshold = 3
 
 type Conn struct {
@@ -35,11 +35,19 @@ type Conn struct {
 	locker     sync.Mutex
 	binarymime bool
 
+	// First error encountered writing a response. Once set, the command loop
+	// stops: further responses cannot reach the peer.
+	writeErr error
+
 	lineLimitReader *lineLimitReader
-	bdatPipe        *io.PipeWriter
-	bdatStatus      *statusCollector // used for BDAT on LMTP
-	dataResult      chan error
-	bytesReceived   int64 // counts total size of chunks when BDAT is used
+	// When > 0, the read deadline is re-armed to now+bodyReadDeadline before
+	// each underlying connection read (see deadlineReader). Set only while a
+	// DATA/BDAT message body is being read.
+	bodyReadDeadline time.Duration
+	bdatPipe         *io.PipeWriter
+	bdatStatus       *statusCollector // used for BDAT on LMTP
+	dataResult       chan error
+	bytesReceived    int64 // counts total size of chunks when BDAT is used
 
 	fromReceived bool
 	recipients   []string
@@ -58,7 +66,7 @@ func newConn(c net.Conn, s *Server) *Conn {
 
 func (c *Conn) init() {
 	c.lineLimitReader = &lineLimitReader{
-		R:         c.conn,
+		R:         &deadlineReader{c: c, r: c.conn},
 		LineLimit: c.server.MaxLineLength,
 	}
 	rwc := struct {
@@ -449,36 +457,48 @@ func (c *Conn) handleMail(arg string) {
 	c.fromReceived = true
 }
 
-// This regexp matches 'hexchar' token defined in
-// https://tools.ietf.org/html/rfc4954#section-8 however it is intentionally
-// relaxed by requiring only '+' to be present.  It allows us to detect
-// malformed values such as +A or +HH and report them appropriately.
-var hexcharRe = regexp.MustCompile(`\+[0-9A-F]?[0-9A-F]?`)
+func fromHexDigit(b byte) (byte, bool) {
+	switch {
+	case b >= '0' && b <= '9':
+		return b - '0', true
+	case b >= 'A' && b <= 'F':
+		return b - 'A' + 10, true
+	case b >= 'a' && b <= 'f':
+		return b - 'a' + 10, true
+	}
+	return 0, false
+}
 
+// decodeXtext decodes the xtext form defined in RFC 3461 section 4 / RFC 4954
+// section 8, where each octet outside the safe range is encoded as "+HH" with
+// two hex digits. It operates on octets, so all byte values (including
+// 0x80-0xFF) round-trip.
 func decodeXtext(val string) (string, error) {
 	if !strings.Contains(val, "+") {
 		return val, nil
 	}
 
-	var replaceErr error
-	decoded := hexcharRe.ReplaceAllStringFunc(val, func(match string) string {
-		if len(match) != 3 {
-			replaceErr = errors.New("incomplete hexchar")
-			return ""
+	var out strings.Builder
+	out.Grow(len(val))
+	for i := 0; i < len(val); i++ {
+		ch := val[i]
+		if ch != '+' {
+			out.WriteByte(ch)
+			continue
 		}
-		char, err := strconv.ParseInt(match, 16, 8)
-		if err != nil {
-			replaceErr = err
-			return ""
+		if i+2 >= len(val) {
+			return "", errors.New("smtp: incomplete xtext hexchar")
 		}
-
-		return string(rune(char))
-	})
-	if replaceErr != nil {
-		return "", replaceErr
+		hi, ok1 := fromHexDigit(val[i+1])
+		lo, ok2 := fromHexDigit(val[i+2])
+		if !ok1 || !ok2 {
+			return "", errors.New("smtp: invalid xtext hexchar")
+		}
+		out.WriteByte(hi<<4 | lo)
+		i += 2
 	}
 
-	return decoded, nil
+	return out.String(), nil
 }
 
 // This regexp matches 'EmbeddedUnicodeChar' token defined in
@@ -598,17 +618,22 @@ func decodeTypedAddress(val string) (DSNAddressType, string, error) {
 }
 
 func encodeXtext(raw string) string {
+	const hex = "0123456789ABCDEF"
+
 	var out strings.Builder
 	out.Grow(len(raw))
 
-	for _, ch := range raw {
-		switch {
-		case ch >= '!' && ch <= '~' && ch != '+' && ch != '=':
+	// xtext is defined over octets, so iterate bytes and emit each unsafe octet
+	// as "+HH" with two upper-case hex digits.
+	for i := 0; i < len(raw); i++ {
+		ch := raw[i]
+		if ch >= '!' && ch <= '~' && ch != '+' && ch != '=' {
 			// printable non-space US-ASCII except '+' and '='
-			out.WriteRune(ch)
-		default:
-			out.WriteRune('+')
-			out.WriteString(strings.ToUpper(strconv.FormatInt(int64(ch), 16)))
+			out.WriteByte(ch)
+		} else {
+			out.WriteByte('+')
+			out.WriteByte(hex[ch>>4])
+			out.WriteByte(hex[ch&0x0F])
 		}
 	}
 	return out.String()
@@ -933,8 +958,21 @@ func (c *Conn) handleStartTLS() {
 	// Upgrade to TLS
 	tlsConn := tls.Server(c.conn, c.server.TLSConfig)
 
+	// Bound the handshake with the configured deadlines, mirroring the
+	// implicit-TLS listener path in Server.handleConn, so a peer that stalls
+	// before or during the handshake cannot block the connection indefinitely.
+	if d := c.server.ReadTimeout; d != 0 {
+		c.conn.SetReadDeadline(time.Now().Add(d))
+	}
+	if d := c.server.WriteTimeout; d != 0 {
+		c.conn.SetWriteDeadline(time.Now().Add(d))
+	}
+
 	if err := tlsConn.Handshake(); err != nil {
 		c.writeResponse(550, EnhancedCode{5, 0, 0}, "Handshake error")
+		// The connection is in an indeterminate, half-upgraded state; do not
+		// keep serving commands on it.
+		c.Close()
 		return
 	}
 
@@ -985,9 +1023,24 @@ func (c *Conn) handleData(arg string) {
 	}
 
 	r := newDataReader(c)
-	code, enhancedCode, msg := dataErrorToStatus(c.Session().Data(r))
+	c.bodyReadDeadline = c.server.ReadTimeout
+	dataErr := c.Session().Data(r)
+
+	// A read timeout while consuming the body leaves the connection unusable:
+	// the client is mid-message, so any further bytes would be re-parsed as
+	// commands. Respond and close instead of draining and continuing.
+	var netErr net.Error
+	if errors.As(dataErr, &netErr) && netErr.Timeout() {
+		c.bodyReadDeadline = 0
+		c.writeResponse(451, EnhancedCode{4, 4, 2}, "Timeout waiting for data")
+		c.Close()
+		return
+	}
+
 	r.limited = false
-	io.Copy(ioutil.Discard, r) // Make sure all the data has been consumed
+	io.Copy(io.Discard, r) // Make sure all the data has been consumed
+	c.bodyReadDeadline = 0
+	code, enhancedCode, msg := dataErrorToStatus(dataErr)
 	c.writeResponse(code, enhancedCode, msg)
 }
 
@@ -1027,7 +1080,7 @@ func (c *Conn) handleBdat(arg string) {
 		c.writeResponse(552, EnhancedCode{5, 3, 4}, "Max message size exceeded")
 
 		// Discard chunk itself without passing it to backend.
-		io.Copy(ioutil.Discard, io.LimitReader(c.text.R, int64(size)))
+		io.Copy(io.Discard, io.LimitReader(c.text.R, int64(size)))
 
 		c.reset()
 		return
@@ -1076,11 +1129,13 @@ func (c *Conn) handleBdat(arg string) {
 	c.lineLimitReader.LineLimit = 0
 
 	chunk := io.LimitReader(c.text.R, int64(size))
+	c.bodyReadDeadline = c.server.ReadTimeout
 	_, err = io.Copy(c.bdatPipe, chunk)
 	if err != nil {
 		// Backend might return an error early using CloseWithError without consuming
 		// the whole chunk.
-		io.Copy(ioutil.Discard, chunk)
+		io.Copy(io.Discard, chunk)
+		c.bodyReadDeadline = 0
 
 		c.writeResponse(dataErrorToStatus(err))
 
@@ -1092,6 +1147,7 @@ func (c *Conn) handleBdat(arg string) {
 		c.lineLimitReader.LineLimit = c.server.MaxLineLength
 		return
 	}
+	c.bodyReadDeadline = 0
 
 	c.bytesReceived += int64(size)
 
@@ -1208,6 +1264,7 @@ func (s *statusCollector) SetStatus(rcptTo string, err error) {
 
 func (c *Conn) handleDataLMTP() {
 	r := newDataReader(c)
+	c.bodyReadDeadline = c.server.ReadTimeout
 	status := c.createStatusCollector()
 
 	done := make(chan bool, 1)
@@ -1216,7 +1273,7 @@ func (c *Conn) handleDataLMTP() {
 	if !ok {
 		// Fallback to using a single status for all recipients.
 		err := c.Session().Data(r)
-		io.Copy(ioutil.Discard, r) // Make sure all the data has been consumed
+		io.Copy(io.Discard, r) // Make sure all the data has been consumed
 		for _, rcpt := range c.recipients {
 			status.SetStatus(rcpt, err)
 		}
@@ -1225,11 +1282,7 @@ func (c *Conn) handleDataLMTP() {
 		go func() {
 			defer func() {
 				if err := recover(); err != nil {
-					status.fillRemaining(&SMTPError{
-						Code:         421,
-						EnhancedCode: EnhancedCode{4, 0, 0},
-						Message:      "Internal server error",
-					})
+					status.fillRemaining(errPanic)
 
 					stack := debug.Stack()
 					c.server.ErrorLog.Printf("panic serving %v: %v\n%s", c.conn.RemoteAddr(), err, stack)
@@ -1238,7 +1291,7 @@ func (c *Conn) handleDataLMTP() {
 			}()
 
 			status.fillRemaining(lmtpSession.LMTPData(r, status))
-			io.Copy(ioutil.Discard, r) // Make sure all the data has been consumed
+			io.Copy(io.Discard, r) // Make sure all the data has been consumed
 			done <- true
 		}()
 	}
@@ -1250,18 +1303,20 @@ func (c *Conn) handleDataLMTP() {
 
 	// If done gets false, the panic occured in LMTPData and the connection
 	// should be closed.
-	if !<-done {
+	ok = <-done
+	c.bodyReadDeadline = 0
+	if !ok {
 		c.Close()
 	}
 }
 
 func dataErrorToStatus(err error) (code int, enchCode EnhancedCode, msg string) {
 	if err != nil {
-		if smtperr, ok := err.(*SMTPError); ok {
+		var smtperr *SMTPError
+		if errors.As(err, &smtperr) {
 			return smtperr.Code, smtperr.EnhancedCode, smtperr.Message
-		} else {
-			return 554, EnhancedCode{5, 0, 0}, "Error: transaction failed: " + err.Error()
 		}
+		return 554, EnhancedCode{5, 0, 0}, "Error: transaction failed: " + err.Error()
 	}
 
 	return 250, EnhancedCode{2, 0, 0}, "OK: queued"
@@ -1281,7 +1336,6 @@ func (c *Conn) greet() {
 }
 
 func (c *Conn) writeResponse(code int, enhCode EnhancedCode, text ...string) {
-	// TODO: error handling
 	if c.server.WriteTimeout != 0 {
 		c.conn.SetWriteDeadline(time.Now().Add(c.server.WriteTimeout))
 	}
@@ -1303,21 +1357,55 @@ func (c *Conn) writeResponse(code int, enhCode EnhancedCode, text ...string) {
 
 	lastLineIndex := len(text) - 1
 	for i := 0; i < lastLineIndex; i++ {
-		c.text.PrintfLine("%d-%v", code, text[i])
+		if err := c.text.PrintfLine("%d-%v", code, text[i]); err != nil {
+			c.setWriteError(err)
+			return
+		}
 	}
+	var err error
 	if enhCode == NoEnhancedCode {
-		c.text.PrintfLine("%d %v", code, text[lastLineIndex])
+		err = c.text.PrintfLine("%d %v", code, text[lastLineIndex])
 	} else {
-		c.text.PrintfLine("%d %v.%v.%v %v", code, enhCode[0], enhCode[1], enhCode[2], text[lastLineIndex])
+		err = c.text.PrintfLine("%d %v.%v.%v %v", code, enhCode[0], enhCode[1], enhCode[2], text[lastLineIndex])
+	}
+	if err != nil {
+		c.setWriteError(err)
+	}
+}
+
+// setWriteError records the first response-write error seen on the connection.
+func (c *Conn) setWriteError(err error) {
+	if c.writeErr == nil {
+		c.writeErr = err
 	}
 }
 
 func (c *Conn) writeError(code int, enhCode EnhancedCode, err error) {
-	if smtpErr, ok := err.(*SMTPError); ok {
+	var smtpErr *SMTPError
+	if errors.As(err, &smtpErr) {
 		c.writeResponse(smtpErr.Code, smtpErr.EnhancedCode, smtpErr.Message)
 	} else {
 		c.writeResponse(code, enhCode, err.Error())
 	}
+}
+
+// deadlineReader sits at the bottom of the connection read chain. While a
+// message body transfer is in progress (c.bodyReadDeadline > 0) it re-arms the
+// read deadline before every underlying read, so that Server.ReadTimeout acts
+// as an idle timeout for the duration of the body rather than a single absolute
+// deadline measured from the DATA/BDAT command line. Outside of body transfers
+// it is a passthrough, leaving the per-command absolute deadline (armed by
+// readLine) in force.
+type deadlineReader struct {
+	c *Conn
+	r io.Reader
+}
+
+func (dr *deadlineReader) Read(b []byte) (int, error) {
+	if d := dr.c.bodyReadDeadline; d > 0 {
+		dr.c.conn.SetReadDeadline(time.Now().Add(d))
+	}
+	return dr.r.Read(b)
 }
 
 // Reads a line of input

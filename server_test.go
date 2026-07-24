@@ -193,7 +193,12 @@ func (l *failingListener) Send(err error) {
 }
 
 func (l *failingListener) Accept() (net.Conn, error) {
-	return nil, <-l.c
+	err, ok := <-l.c
+	if !ok {
+		// Channel closed by Close(): report the listener as closed.
+		return nil, net.ErrClosed
+	}
+	return nil, err
 }
 
 func (l *failingListener) Close() error {
@@ -326,20 +331,20 @@ func TestServerAcceptErrorHandling(t *testing.T) {
 		l.Close()
 	}()
 
-	temporaryError := newMockError("temporary mock error", true)
-	l.Send(temporaryError)
-	permanentError := newMockError("permanent mock error", false)
-	l.Send(permanentError)
+	// An accept error is logged and retried rather than being fatal; only a
+	// closed listener ends Serve.
+	acceptError := newMockError("mock accept error", false)
+	l.Send(acceptError)
+
+	// Closing the server makes Serve return nil cleanly.
 	s.Close()
 
 	serveError := <-done
-	if serveError == nil {
-		t.Fatal("Serve had exited without an expected error")
-	} else if serveError != permanentError {
-		t.Fatal("Unexpected error:", serveError)
+	if serveError != nil {
+		t.Fatal("Serve returned an unexpected error:", serveError)
 	}
-	if !strings.Contains(errorLog.String(), temporaryError.String()) {
-		t.Fatal("Missing temporary error in log output:", errorLog.String())
+	if !strings.Contains(errorLog.String(), acceptError.String()) {
+		t.Fatal("Missing accept error in log output:", errorLog.String())
 	}
 }
 

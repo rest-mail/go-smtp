@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -91,8 +92,9 @@ type Server struct {
 	// The server backend.
 	Backend Backend
 
-	wg   sync.WaitGroup
-	done chan struct{}
+	wg        sync.WaitGroup
+	done      chan struct{}
+	closeOnce sync.Once
 
 	locker    sync.Mutex
 	listeners []net.Listener
@@ -106,7 +108,7 @@ func NewServer(be Backend) *Server {
 		MaxLineLength: 2000,
 
 		Backend:  be,
-		done:     make(chan struct{}, 1),
+		done:     make(chan struct{}),
 		ErrorLog: log.New(os.Stderr, "smtp/server ", log.LstdFlags),
 		conns:    make(map[*Conn]struct{}),
 	}
@@ -129,20 +131,23 @@ func (s *Server) Serve(l net.Listener) error {
 				return nil
 			default:
 			}
-			if ne, ok := err.(net.Error); ok && ne.Temporary() {
-				if tempDelay == 0 {
-					tempDelay = 5 * time.Millisecond
-				} else {
-					tempDelay *= 2
-				}
-				if max := 1 * time.Second; tempDelay > max {
-					tempDelay = max
-				}
-				s.ErrorLog.Printf("accept error: %s; retrying in %s", err, tempDelay)
-				time.Sleep(tempDelay)
-				continue
+			// A closed listener ends Serve. Any other accept error is treated
+			// as transient and retried with backoff (the net/http pattern;
+			// net.Error.Temporary is deprecated).
+			if errors.Is(err, net.ErrClosed) {
+				return nil
 			}
-			return err
+			if tempDelay == 0 {
+				tempDelay = 5 * time.Millisecond
+			} else {
+				tempDelay *= 2
+			}
+			if max := 1 * time.Second; tempDelay > max {
+				tempDelay = max
+			}
+			s.ErrorLog.Printf("accept error: %s; retrying in %s", err, tempDelay)
+			time.Sleep(tempDelay)
+			continue
 		}
 
 		s.wg.Add(1)
@@ -184,16 +189,24 @@ func (s *Server) handleConn(c *Conn) error {
 
 	c.greet()
 
+	gotCmd := false
 	for {
 		line, err := c.readLine()
 		if err == nil {
+			gotCmd = true
+
 			cmd, arg, err := parseCmd(line)
 			if err != nil {
 				c.protocolError(501, EnhancedCode{5, 5, 2}, "Bad command")
-				continue
+			} else {
+				c.handle(cmd, arg)
 			}
 
-			c.handle(cmd, arg)
+			// Stop once a response could not be written: the peer is gone, so
+			// continuing to read and process commands is pointless.
+			if c.writeErr != nil {
+				return c.writeErr
+			}
 		} else {
 			if err == io.EOF || errors.Is(err, net.ErrClosed) {
 				return nil
@@ -205,6 +218,13 @@ func (s *Server) handleConn(c *Conn) error {
 
 			if neterr, ok := err.(net.Error); ok && neterr.Timeout() {
 				c.writeResponse(421, EnhancedCode{4, 4, 2}, "Idle timeout, bye bye")
+				return nil
+			}
+
+			// A connection that is reset or closed before issuing any command
+			// (e.g. a bare TCP health check) is a clean close, not an error
+			// worth logging.
+			if !gotCmd && errors.Is(err, syscall.ECONNRESET) {
 				return nil
 			}
 
@@ -264,16 +284,24 @@ func (s *Server) ListenAndServeTLS() error {
 	return s.Serve(l)
 }
 
+// signalDone closes the done channel exactly once, regardless of how many
+// goroutines call Close/Shutdown concurrently. It reports whether this call was
+// the one that performed the close (i.e. the first caller).
+func (s *Server) signalDone() (first bool) {
+	s.closeOnce.Do(func() {
+		close(s.done)
+		first = true
+	})
+	return first
+}
+
 // Close immediately closes all active listeners and connections.
 //
 // Close returns any error returned from closing the server's underlying
 // listener(s).
 func (s *Server) Close() error {
-	select {
-	case <-s.done:
+	if !s.signalDone() {
 		return ErrServerClosed
-	default:
-		close(s.done)
 	}
 
 	var err error
@@ -300,11 +328,8 @@ func (s *Server) Close() error {
 // Shutdown returns the context's error, otherwise it returns any
 // error returned from closing the Server's underlying Listener(s).
 func (s *Server) Shutdown(ctx context.Context) error {
-	select {
-	case <-s.done:
+	if !s.signalDone() {
 		return ErrServerClosed
-	default:
-		close(s.done)
 	}
 
 	var err error
