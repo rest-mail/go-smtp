@@ -1,11 +1,16 @@
 package smtp_test
 
 import (
+	"bytes"
+	"context"
 	"fmt"
 	"io"
+	"log"
 	"net"
+	"os"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -327,5 +332,103 @@ func TestWriteErrorBreaksLoop(t *testing.T) {
 		// handleConn exited (and closed the conn) after the write error.
 	case <-time.After(3 * time.Second):
 		t.Fatal("handleConn kept running after a write error (loop did not break)")
+	}
+}
+
+// step is one scripted result from stepConn.Read.
+type step struct {
+	data []byte
+	err  error
+}
+
+// stepConn is a net.Conn whose Read returns a scripted sequence of results and
+// whose Write silently succeeds. Once the script is exhausted Read returns EOF.
+type stepConn struct {
+	steps  []step
+	i      int
+	once   sync.Once
+	closed chan struct{}
+}
+
+func (sc *stepConn) Read(b []byte) (int, error) {
+	if sc.i >= len(sc.steps) {
+		return 0, io.EOF
+	}
+	s := sc.steps[sc.i]
+	sc.i++
+	n := copy(b, s.data)
+	return n, s.err
+}
+
+func (sc *stepConn) Write(b []byte) (int, error)      { return len(b), nil }
+func (sc *stepConn) Close() error                     { sc.once.Do(func() { close(sc.closed) }); return nil }
+func (sc *stepConn) LocalAddr() net.Addr              { return dummyAddr{} }
+func (sc *stepConn) RemoteAddr() net.Addr             { return dummyAddr{} }
+func (sc *stepConn) SetDeadline(time.Time) error      { return nil }
+func (sc *stepConn) SetReadDeadline(time.Time) error  { return nil }
+func (sc *stepConn) SetWriteDeadline(time.Time) error { return nil }
+
+// econnreset returns a realistically-wrapped connection-reset error.
+func econnreset() error {
+	return &net.OpError{Op: "read", Net: "tcp", Err: os.NewSyscallError("read", syscall.ECONNRESET)}
+}
+
+// serveOneAndDrain serves a single scripted connection and waits for its
+// handler goroutine (and thus any error log it would emit) to complete.
+func serveOneAndDrain(t *testing.T, sc *stepConn, s *smtp.Server) {
+	t.Helper()
+	l := &singleConnListener{conn: sc, done: make(chan struct{})}
+	go s.Serve(l)
+
+	select {
+	case <-sc.closed:
+	case <-time.After(3 * time.Second):
+		t.Fatal("connection was not handled in time")
+	}
+
+	// Shutdown waits for the per-connection goroutine to finish, which happens
+	// after it has logged (or chosen not to log).
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := s.Shutdown(ctx); err != nil {
+		t.Fatalf("shutdown: %v", err)
+	}
+}
+
+// TestHealthcheckNoCommandNotLogged verifies that a connection reset before any
+// command is issued (a bare TCP health check) does not produce an error-log
+// entry.
+func TestHealthcheckNoCommandNotLogged(t *testing.T) {
+	var logBuf bytes.Buffer
+	sc := &stepConn{steps: []step{{nil, econnreset()}}, closed: make(chan struct{})}
+
+	s := smtp.NewServer(new(backend))
+	s.Domain = "localhost"
+	s.ErrorLog = log.New(&logBuf, "", 0)
+
+	serveOneAndDrain(t, sc, s)
+
+	if logBuf.Len() != 0 {
+		t.Fatalf("expected no error log for zero-command connection, got: %q", logBuf.String())
+	}
+}
+
+// TestMidSessionErrorStillLogged verifies the silencing is scoped: a connection
+// reset after a command has been processed is still logged.
+func TestMidSessionErrorStillLogged(t *testing.T) {
+	var logBuf bytes.Buffer
+	sc := &stepConn{
+		steps:  []step{{[]byte("NOOP\r\n"), nil}, {nil, econnreset()}},
+		closed: make(chan struct{}),
+	}
+
+	s := smtp.NewServer(new(backend))
+	s.Domain = "localhost"
+	s.ErrorLog = log.New(&logBuf, "", 0)
+
+	serveOneAndDrain(t, sc, s)
+
+	if logBuf.Len() == 0 {
+		t.Fatal("expected a mid-session connection error to be logged, but log was empty")
 	}
 }

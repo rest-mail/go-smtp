@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -185,9 +186,12 @@ func (s *Server) handleConn(c *Conn) error {
 
 	c.greet()
 
+	gotCmd := false
 	for {
 		line, err := c.readLine()
 		if err == nil {
+			gotCmd = true
+
 			cmd, arg, err := parseCmd(line)
 			if err != nil {
 				c.protocolError(501, EnhancedCode{5, 5, 2}, "Bad command")
@@ -211,6 +215,13 @@ func (s *Server) handleConn(c *Conn) error {
 
 			if neterr, ok := err.(net.Error); ok && neterr.Timeout() {
 				c.writeResponse(421, EnhancedCode{4, 4, 2}, "Idle timeout, bye bye")
+				return nil
+			}
+
+			// A connection that is reset or closed before issuing any command
+			// (e.g. a bare TCP health check) is a clean close, not an error
+			// worth logging.
+			if !gotCmd && errors.Is(err, syscall.ECONNRESET) {
 				return nil
 			}
 
