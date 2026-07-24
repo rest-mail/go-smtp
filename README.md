@@ -4,21 +4,14 @@
 
 An ESMTP client and server library written in Go.
 
-## Hard fork
-
-This is an independent rest-mail hard fork of
-[emersion/go-smtp](https://github.com/emersion/go-smtp). It has diverged from
-upstream (it adds the RESTMAIL EHLO `ExtraCaps` hook for advertising
-site-specific capabilities) and no longer tracks upstream: it is developed
-under its own module path `github.com/rest-mail/go-smtp` and accepts no
-upstream relationship.
-
 ## Features
 
 * ESMTP client & server implementing [RFC 5321]
 * Support for additional SMTP extensions such as [AUTH] and [PIPELINING]
 * UTF-8 support for subject and message
 * [LMTP] support
+* Server-side advertising of site-specific EHLO capabilities via the
+  `ExtraCaps` hook
 
 ## Relationship with net/smtp
 
