@@ -103,6 +103,12 @@ type Server struct {
 	closeOnce sync.Once
 	initOnce  sync.Once
 
+	// baseCtx is the parent of every connection's Context. It is cancelled when
+	// the server is closed or shut down, so a backend can observe shutdown via
+	// Conn.Context().
+	baseCtx    context.Context
+	baseCancel context.CancelFunc
+
 	locker    sync.Mutex
 	listeners []net.Listener
 	conns     map[*Conn]struct{}
@@ -163,7 +169,19 @@ func (s *Server) init() {
 			// Doubled maximum line length per RFC 5321 (Section 4.5.3.1.6)
 			s.MaxLineLength = 2000
 		}
+		if s.baseCtx == nil {
+			s.baseCtx, s.baseCancel = context.WithCancel(context.Background())
+		}
 	})
+}
+
+// baseContext returns the parent context for new connections, falling back to
+// context.Background if the server has not been initialized.
+func (s *Server) baseContext() context.Context {
+	if s.baseCtx != nil {
+		return s.baseCtx
+	}
+	return context.Background()
 }
 
 // Serve accepts incoming connections on the Listener l.
@@ -352,6 +370,9 @@ func (s *Server) ListenAndServeTLS() error {
 func (s *Server) signalDone() (first bool) {
 	s.closeOnce.Do(func() {
 		close(s.done)
+		if s.baseCancel != nil {
+			s.baseCancel()
+		}
 		first = true
 	})
 	return first

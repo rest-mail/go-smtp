@@ -1,6 +1,7 @@
 package smtp
 
 import (
+	"context"
 	"crypto/tls"
 	"encoding/base64"
 	"errors"
@@ -26,6 +27,8 @@ type Conn struct {
 	conn   net.Conn
 	text   *textproto.Conn
 	server *Server
+	ctx    context.Context
+	cancel context.CancelFunc
 	helo   string
 
 	// Number of errors witnessed on this connection
@@ -65,6 +68,7 @@ func newConn(c net.Conn, s *Server) *Conn {
 		server: s,
 		conn:   c,
 	}
+	sc.ctx, sc.cancel = context.WithCancel(s.baseContext())
 
 	sc.init()
 	return sc
@@ -168,6 +172,16 @@ func (c *Conn) Server() *Server {
 	return c.server
 }
 
+// Context returns the connection's context. It is cancelled when the connection
+// is closed or the server is shut down, so a backend can observe those events
+// (for example to cancel in-flight work). It is never nil.
+func (c *Conn) Context() context.Context {
+	if c.ctx != nil {
+		return c.ctx
+	}
+	return context.Background()
+}
+
 func (c *Conn) Session() Session {
 	c.locker.Lock()
 	defer c.locker.Unlock()
@@ -194,6 +208,10 @@ func (c *Conn) setSession(session Session) {
 func (c *Conn) Close() error {
 	c.locker.Lock()
 	defer c.locker.Unlock()
+
+	if c.cancel != nil {
+		c.cancel()
+	}
 
 	if c.bdatPipe != nil {
 		c.bdatPipe.CloseWithError(ErrDataReset)
