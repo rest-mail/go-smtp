@@ -2,6 +2,7 @@ package smtp
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 )
@@ -51,12 +52,79 @@ func (err *SMTPError) Temporary() bool {
 // code, and a message formatted per fmt.Sprintf. It is a convenience for
 // backends, which should return an *SMTPError so the server sends the chosen
 // status line rather than leaking a raw error (see SMTPError).
+//
+// Errorf is not only for failures: returning an *SMTPError whose Code is in the
+// 2xx range from Mail, Rcpt or Data sets a custom non-failure status line in
+// place of the server's default (for example the "250 ... OK: queued" after the
+// final dot). The transaction proceeds exactly as if nil had been returned; only
+// the status text differs. This is the additive way to customize a success
+// response, since those methods can only communicate back through their error
+// return.
 func Errorf(code int, enhancedCode EnhancedCode, format string, a ...interface{}) *SMTPError {
 	return &SMTPError{
 		Code:         code,
 		EnhancedCode: enhancedCode,
 		Message:      fmt.Sprintf(format, a...),
 	}
+}
+
+// terminatingError wraps another error to signal that, after the server has sent
+// the status line derived from it, the connection must be closed. See
+// CloseConnection.
+type terminatingError struct {
+	err error
+}
+
+func (e *terminatingError) Error() string { return e.err.Error() }
+
+func (e *terminatingError) Unwrap() error { return e.err }
+
+// CloseConnection wraps err so that a Backend or Session method (NewSession,
+// Mail, Rcpt, Data, or an AUTH step) can ask the server to send the status line
+// for err and then immediately close the connection. It is intended for policy
+// and abuse handling, where the peer should be cut off rather than allowed to
+// continue the session.
+//
+// The wrapped err determines the status line exactly as if it had been returned
+// directly: wrap an *SMTPError (see Errorf) to choose the code and message, for
+// example
+//
+//	return smtp.CloseConnection(smtp.Errorf(554, smtp.EnhancedCode{5, 7, 1}, "too many bad recipients"))
+//
+// A 2xx *SMTPError sends that success line and then closes (a graceful
+// goodbye); any other error sends its rejection and then closes. Wrapping a nil
+// error is a no-op and returns nil, so it never terminates the connection.
+//
+// Connection termination is honored for the SMTP commands MAIL, RCPT, DATA and
+// BDAT, for NewSession, and for AUTH. It is not applied to per-recipient LMTP
+// data responses.
+func CloseConnection(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &terminatingError{err: err}
+}
+
+// isTerminating reports whether err, or anything it wraps, requests connection
+// termination via CloseConnection.
+func isTerminating(err error) bool {
+	var te *terminatingError
+	return errors.As(err, &te)
+}
+
+// successResponse returns the *SMTPError carrying a custom non-failure (2xx)
+// status line if err is, or wraps, one. Backends use this convention to replace
+// a default success response (see Errorf). It reports ok=false for a nil error
+// or for any non-2xx error, which is an ordinary rejection.
+func successResponse(err error) (*SMTPError, bool) {
+	if err == nil {
+		return nil, false
+	}
+	var se *SMTPError
+	if errors.As(err, &se) && se.Code >= 200 && se.Code < 300 {
+		return se, true
+	}
+	return nil, false
 }
 
 var ErrDataTooLarge = &SMTPError{
