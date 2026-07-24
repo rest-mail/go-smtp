@@ -131,20 +131,23 @@ func (s *Server) Serve(l net.Listener) error {
 				return nil
 			default:
 			}
-			if ne, ok := err.(net.Error); ok && ne.Temporary() {
-				if tempDelay == 0 {
-					tempDelay = 5 * time.Millisecond
-				} else {
-					tempDelay *= 2
-				}
-				if max := 1 * time.Second; tempDelay > max {
-					tempDelay = max
-				}
-				s.ErrorLog.Printf("accept error: %s; retrying in %s", err, tempDelay)
-				time.Sleep(tempDelay)
-				continue
+			// A closed listener ends Serve. Any other accept error is treated
+			// as transient and retried with backoff (the net/http pattern;
+			// net.Error.Temporary is deprecated).
+			if errors.Is(err, net.ErrClosed) {
+				return nil
 			}
-			return err
+			if tempDelay == 0 {
+				tempDelay = 5 * time.Millisecond
+			} else {
+				tempDelay *= 2
+			}
+			if max := 1 * time.Second; tempDelay > max {
+				tempDelay = max
+			}
+			s.ErrorLog.Printf("accept error: %s; retrying in %s", err, tempDelay)
+			time.Sleep(tempDelay)
+			continue
 		}
 
 		s.wg.Add(1)
