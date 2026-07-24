@@ -44,10 +44,16 @@ type Conn struct {
 	// each underlying connection read (see deadlineReader). Set only while a
 	// DATA/BDAT message body is being read.
 	bodyReadDeadline time.Duration
-	bdatPipe         *io.PipeWriter
-	bdatStatus       *statusCollector // used for BDAT on LMTP
-	dataResult       chan error
-	bytesReceived    int64 // counts total size of chunks when BDAT is used
+	// bdatPipe is shared between the connection's own goroutine (handleBdat) and
+	// the Server.Close() goroutine, which tears an in-flight transfer down. All
+	// access to the field goes through the connection lock (c.locker) — read it
+	// via bdatWriter() — so those goroutines do not race on it. The
+	// *io.PipeWriter's own methods (Write/Close/CloseWithError) are already
+	// goroutine-safe, so they are called outside the lock.
+	bdatPipe      *io.PipeWriter
+	bdatStatus    *statusCollector // used for BDAT on LMTP
+	dataResult    chan error
+	bytesReceived int64 // counts total size of chunks when BDAT is used
 
 	fromReceived bool
 	recipients   []string
@@ -168,6 +174,17 @@ func (c *Conn) Session() Session {
 	return c.session
 }
 
+// bdatWriter returns the in-flight BDAT pipe writer (or nil) under the
+// connection lock, so a read in the connection's own goroutine does not race
+// Server.Close()/reset() clearing the field from another goroutine. The returned
+// writer's own methods are goroutine-safe, so the caller uses it without the
+// lock held.
+func (c *Conn) bdatWriter() *io.PipeWriter {
+	c.locker.Lock()
+	defer c.locker.Unlock()
+	return c.bdatPipe
+}
+
 func (c *Conn) setSession(session Session) {
 	c.locker.Lock()
 	defer c.locker.Unlock()
@@ -238,7 +255,9 @@ func (c *Conn) handleGreet(enhanced bool, arg string) {
 	c.helo = domain
 
 	// RFC 5321: "An EHLO command MAY be issued by a client later in the session"
-	if c.session != nil {
+	// Session() reads c.session under the connection lock so this does not race a
+	// concurrent Server.Close() clearing it.
+	if c.Session() != nil {
 		// RFC 5321: "... the SMTP server MUST clear all buffers
 		// and reset the state exactly as if a RSET command has been issued."
 		c.reset()
@@ -329,7 +348,7 @@ func (c *Conn) handleMail(arg string) {
 		c.writeResponse(502, EnhancedCode{5, 5, 1}, "Please introduce yourself first.")
 		return
 	}
-	if c.bdatPipe != nil {
+	if c.bdatWriter() != nil {
 		c.writeResponse(502, EnhancedCode{5, 5, 1}, "MAIL not allowed during message transfer")
 		return
 	}
@@ -700,7 +719,7 @@ func (c *Conn) handleRcpt(arg string) {
 		c.writeResponse(502, EnhancedCode{5, 5, 1}, "Missing MAIL FROM command.")
 		return
 	}
-	if c.bdatPipe != nil {
+	if c.bdatWriter() != nil {
 		c.writeResponse(502, EnhancedCode{5, 5, 1}, "RCPT not allowed during message transfer")
 		return
 	}
@@ -998,7 +1017,7 @@ func (c *Conn) handleData(arg string) {
 		c.writeResponse(501, EnhancedCode{5, 5, 4}, "DATA command should not have any arguments")
 		return
 	}
-	if c.bdatPipe != nil {
+	if c.bdatWriter() != nil {
 		c.writeResponse(502, EnhancedCode{5, 5, 1}, "DATA not allowed during message transfer")
 		return
 	}
@@ -1117,10 +1136,16 @@ func (c *Conn) handleBdat(arg string) {
 		c.bdatStatus = c.createStatusCollector()
 	}
 
+	c.locker.Lock()
+	var r *io.PipeReader
 	if c.bdatPipe == nil {
-		var r *io.PipeReader
-		r, c.bdatPipe = io.Pipe()
+		var w *io.PipeWriter
+		r, w = io.Pipe()
+		c.bdatPipe = w
+	}
+	c.locker.Unlock()
 
+	if r != nil {
 		c.dataResult = make(chan error, 1)
 
 		go func() {
@@ -1157,7 +1182,14 @@ func (c *Conn) handleBdat(arg string) {
 
 	chunk := io.LimitReader(c.text.R, int64(size))
 	c.bodyReadDeadline = c.server.ReadTimeout
-	_, err = io.Copy(c.bdatPipe, chunk)
+	pipe := c.bdatWriter()
+	if pipe == nil {
+		// The transfer was torn down concurrently (e.g. Server.Close); the
+		// connection is going away, so stop consuming this chunk.
+		c.bodyReadDeadline = 0
+		return
+	}
+	_, err = io.Copy(pipe, chunk)
 	if err != nil {
 		// Backend might return an error early using CloseWithError without consuming
 		// the whole chunk.
@@ -1181,7 +1213,9 @@ func (c *Conn) handleBdat(arg string) {
 	if last {
 		c.lineLimitReader.LineLimit = c.server.MaxLineLength
 
-		c.bdatPipe.Close()
+		if p := c.bdatWriter(); p != nil {
+			p.Close()
+		}
 
 		err := <-c.dataResult
 
