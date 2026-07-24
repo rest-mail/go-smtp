@@ -1,6 +1,7 @@
 package smtp_test
 
 import (
+	"fmt"
 	"io"
 	"net"
 	"strings"
@@ -165,5 +166,65 @@ func TestDataReadTimeoutClosesConnection(t *testing.T) {
 		t.Fatal("expected connection to be closed after DATA timeout, but read succeeded")
 	} else if ne, ok := err.(net.Error); ok && ne.Timeout() {
 		t.Fatalf("connection was left open after DATA timeout: %v", err)
+	}
+}
+
+// TestDataWrappedSMTPError verifies that a *SMTPError returned wrapped (via %w)
+// from Session.Data keeps its code/enhanced-code/message, rather than being
+// flattened to a generic 554.
+func TestDataWrappedSMTPError(t *testing.T) {
+	be, s, c, scanner := testServerGreeted(t)
+	defer s.Close()
+	defer c.Close()
+
+	be.dataErr = fmt.Errorf("backend wrap: %w", &smtp.SMTPError{
+		Code:         501,
+		EnhancedCode: smtp.EnhancedCode{5, 5, 1},
+		Message:      "custom data failure",
+	})
+
+	io.WriteString(c, "EHLO localhost\r\n")
+	drainEhlo(scanner)
+	io.WriteString(c, "MAIL FROM:<root@nsa.gov>\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatalf("MAIL response: %q", scanner.Text())
+	}
+	io.WriteString(c, "RCPT TO:<root@gchq.gov.uk>\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatalf("RCPT response: %q", scanner.Text())
+	}
+	io.WriteString(c, "DATA\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "354 ") {
+		t.Fatalf("DATA response: %q", scanner.Text())
+	}
+	io.WriteString(c, "hi\r\n.\r\n")
+	scanner.Scan()
+	if got := scanner.Text(); !strings.HasPrefix(got, "501 5.5.1") {
+		t.Fatalf("expected 501 5.5.1 from wrapped SMTPError, got %q", got)
+	}
+}
+
+// TestMailWrappedSMTPError verifies the same errors.As handling for the
+// writeError path (Session.Mail returning a wrapped *SMTPError).
+func TestMailWrappedSMTPError(t *testing.T) {
+	be, s, c, scanner := testServerGreeted(t)
+	defer s.Close()
+	defer c.Close()
+
+	be.userErr = fmt.Errorf("backend wrap: %w", &smtp.SMTPError{
+		Code:         550,
+		EnhancedCode: smtp.EnhancedCode{5, 7, 1},
+		Message:      "sender blocked",
+	})
+
+	io.WriteString(c, "EHLO localhost\r\n")
+	drainEhlo(scanner)
+	io.WriteString(c, "MAIL FROM:<root@nsa.gov>\r\n")
+	scanner.Scan()
+	if got := scanner.Text(); !strings.HasPrefix(got, "550 5.7.1") {
+		t.Fatalf("expected 550 5.7.1 from wrapped SMTPError, got %q", got)
 	}
 }

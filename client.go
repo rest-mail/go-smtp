@@ -631,7 +631,8 @@ func (cmd *DataCommand) CloseWithLMTPResponse() (map[string]*DataResponse, error
 		rcpt := cmd.client.rcpts[i]
 		_, msg, err := cmd.client.readResponse(250)
 		if err != nil {
-			if smtpErr, ok := err.(*SMTPError); ok {
+			var smtpErr *SMTPError
+			if errors.As(err, &smtpErr) {
 				lmtpErr[rcpt] = smtpErr
 			} else {
 				if len(lmtpErr) > 0 {
