@@ -24,6 +24,13 @@ func parseCmd(line string) (cmd string, arg string, err error) {
 		// STARTTLS takes no arguments; require an exact match (or a
 		// space-separated form) so e.g. "STARTTLSx" is not dispatched as STARTTLS.
 		return "STARTTLS", "", nil
+	case strings.EqualFold(line, "XCLIENT") || strings.HasPrefix(strings.ToUpper(line), "XCLIENT "):
+		// XCLIENT is a 7-letter verb (not the 4-letter form the logic below
+		// assumes) and carries attribute arguments.
+		if i := strings.IndexByte(line, ' '); i >= 0 {
+			return "XCLIENT", strings.TrimSpace(line[i+1:]), nil
+		}
+		return "XCLIENT", "", nil
 	case l == 0:
 		return "", "", nil
 	case l < 4:

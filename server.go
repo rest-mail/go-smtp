@@ -89,6 +89,22 @@ type Server struct {
 	// to handle any commands such an extension defines.
 	ExtraCaps []string
 
+	// EnableXCLIENT advertises and honors the XCLIENT extension, which lets a
+	// trusted proxy (haproxy/nginx/Postfix) assert the real client's identity
+	// (ADDR/NAME/PROTO/HELO/LOGIN) on behalf of the connection.
+	//
+	// XCLIENT is only advertised and honored on connections for which
+	// TrustXCLIENT returns true. Without a TrustXCLIENT that returns true it is
+	// never honored — allowing an untrusted peer to assert XCLIENT would let it
+	// spoof any client identity.
+	EnableXCLIENT bool
+
+	// TrustXCLIENT reports whether the peer on the given connection is a trusted
+	// proxy permitted to assert client identity via XCLIENT. It is required for
+	// XCLIENT to have any effect and is typically an IP/CIDR or TLS-client-cert
+	// check against the connection's peer.
+	TrustXCLIENT func(*Conn) bool
+
 	// The server backend.
 	Backend Backend
 

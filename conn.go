@@ -61,6 +61,10 @@ type Conn struct {
 	fromReceived bool
 	recipients   []string
 	didAuth      bool
+
+	// xclient holds the client identity a trusted proxy asserted via XCLIENT,
+	// or nil if none. See Server.EnableXCLIENT.
+	xclient *XClientAttrs
 }
 
 func newConn(c net.Conn, s *Server) *Conn {
@@ -162,6 +166,8 @@ func (c *Conn) handle(cmd string, arg string) {
 		c.handleAuth(arg)
 	case "STARTTLS":
 		c.handleStartTLS()
+	case "XCLIENT":
+		c.handleXClient(arg)
 	default:
 		msg := fmt.Sprintf("Syntax errors, %v command unrecognized", cmd)
 		c.protocolError(500, EnhancedCode{5, 5, 2}, msg)
@@ -242,6 +248,76 @@ func (c *Conn) Hostname() string {
 
 func (c *Conn) Conn() net.Conn {
 	return c.conn
+}
+
+// XClientAttrs holds the client identity a trusted proxy asserted via the
+// XCLIENT extension. Empty fields were not asserted.
+type XClientAttrs struct {
+	Addr  string // real client IP address (ADDR)
+	Name  string // real client reverse-DNS name (NAME)
+	Proto string // client protocol (PROTO), e.g. "SMTP" or "ESMTP"
+	Helo  string // client HELO/EHLO name (HELO)
+	Login string // authenticated username (LOGIN)
+}
+
+// XClient returns the client identity a trusted proxy asserted via XCLIENT, or
+// nil if none was asserted on this connection. See Server.EnableXCLIENT.
+func (c *Conn) XClient() *XClientAttrs {
+	return c.xclient
+}
+
+func (c *Conn) xclientAllowed() bool {
+	return c.server.EnableXCLIENT && c.server.TrustXCLIENT != nil && c.server.TrustXCLIENT(c)
+}
+
+// handleXClient processes the XCLIENT command, letting a trusted proxy assert
+// the real client's identity. It is honored only for peers TrustXCLIENT
+// approves; per the widely-used (Postfix) semantics, a successful XCLIENT resets
+// the session and the server issues a fresh greeting, after which the client
+// re-issues EHLO.
+func (c *Conn) handleXClient(arg string) {
+	if !c.xclientAllowed() {
+		c.writeResponse(550, EnhancedCode{5, 7, 1}, "XCLIENT not allowed")
+		return
+	}
+	if c.bdatWriter() != nil {
+		c.writeResponse(502, EnhancedCode{5, 5, 1}, "XCLIENT not allowed during message transfer")
+		return
+	}
+
+	attrs := c.xclient
+	if attrs == nil {
+		attrs = &XClientAttrs{}
+	}
+	for _, field := range strings.Fields(arg) {
+		key, value, ok := strings.Cut(field, "=")
+		if !ok {
+			c.writeResponse(501, EnhancedCode{5, 5, 4}, "Malformed XCLIENT attribute: "+field)
+			return
+		}
+		switch strings.ToUpper(key) {
+		case "ADDR":
+			attrs.Addr = value
+		case "NAME":
+			attrs.Name = value
+		case "PROTO":
+			attrs.Proto = value
+		case "HELO":
+			attrs.Helo = value
+			c.helo = value
+		case "LOGIN":
+			attrs.Login = value
+		case "PORT", "DESTADDR", "DESTPORT":
+			// Accepted for compatibility but not currently surfaced.
+		default:
+			c.writeResponse(501, EnhancedCode{5, 5, 4}, "Unknown XCLIENT attribute: "+key)
+			return
+		}
+	}
+	c.xclient = attrs
+
+	c.reset()
+	c.greet()
 }
 
 func (c *Conn) authAllowed() bool {
@@ -352,6 +428,9 @@ func (c *Conn) handleGreet(enhanced bool, arg string) {
 		} else {
 			caps = append(caps, fmt.Sprintf("MT-PRIORITY %s", c.server.MtPriorityProfile))
 		}
+	}
+	if c.xclientAllowed() {
+		caps = append(caps, "XCLIENT ADDR NAME PROTO HELO LOGIN")
 	}
 	caps = append(caps, c.server.ExtraCaps...)
 
