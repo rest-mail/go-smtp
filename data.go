@@ -10,6 +10,12 @@ type EnhancedCode [3]int
 
 // SMTPError specifies the error code, enhanced error code (if any) and
 // message returned by the server.
+//
+// Backend and Session methods should return an *SMTPError (or an error that
+// wraps one) so the server sends a deliberate, well-formed status line. A plain
+// error is surfaced to the client as "554 5.0.0 Error: transaction failed:
+// <error text>", which leaks the raw internal message — return an *SMTPError,
+// for example via Errorf, to choose the status code and message instead.
 type SMTPError struct {
 	Code         int
 	EnhancedCode EnhancedCode
@@ -39,6 +45,18 @@ func (err *SMTPError) Error() string {
 
 func (err *SMTPError) Temporary() bool {
 	return err.Code/100 == 4
+}
+
+// Errorf returns an *SMTPError with the given SMTP status code, enhanced status
+// code, and a message formatted per fmt.Sprintf. It is a convenience for
+// backends, which should return an *SMTPError so the server sends the chosen
+// status line rather than leaking a raw error (see SMTPError).
+func Errorf(code int, enhancedCode EnhancedCode, format string, a ...interface{}) *SMTPError {
+	return &SMTPError{
+		Code:         code,
+		EnhancedCode: enhancedCode,
+		Message:      fmt.Sprintf(format, a...),
+	}
 }
 
 var ErrDataTooLarge = &SMTPError{
