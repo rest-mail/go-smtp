@@ -69,15 +69,6 @@ func newDataReader(c *Conn) *dataReader {
 }
 
 func (r *dataReader) Read(b []byte) (n int, err error) {
-	if r.limited {
-		if r.n <= 0 {
-			return 0, ErrDataTooLarge
-		}
-		if int64(len(b)) > r.n {
-			b = b[0:r.n]
-		}
-	}
-
 	// Code below is taken from net/textproto with only one modification to
 	// not rewrite CRLF -> LF.
 
@@ -134,6 +125,19 @@ func (r *dataReader) Read(b []byte) (n int, err error) {
 				r.state = stateCR
 			}
 		}
+		// Enforce the size limit where a content byte would be delivered:
+		// MaxMessageBytes is an inclusive ceiling, so the first byte that would
+		// carry the delivered content past it (byte MaxMessageBytes+1) is
+		// rejected. Terminator and dot-stuffing bytes take the `continue` paths
+		// above and never reach here, so a message of exactly MaxMessageBytes
+		// still reads its end-of-data marker and is accepted.
+		if r.limited {
+			if r.n <= 0 {
+				err = ErrDataTooLarge
+				break
+			}
+			r.n--
+		}
 		b[n] = c
 		n++
 	}
@@ -141,8 +145,5 @@ func (r *dataReader) Read(b []byte) (n int, err error) {
 		err = io.EOF
 	}
 
-	if r.limited {
-		r.n -= int64(n)
-	}
 	return
 }
