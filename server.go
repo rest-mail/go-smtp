@@ -91,8 +91,9 @@ type Server struct {
 	// The server backend.
 	Backend Backend
 
-	wg   sync.WaitGroup
-	done chan struct{}
+	wg        sync.WaitGroup
+	done      chan struct{}
+	closeOnce sync.Once
 
 	locker    sync.Mutex
 	listeners []net.Listener
@@ -264,16 +265,24 @@ func (s *Server) ListenAndServeTLS() error {
 	return s.Serve(l)
 }
 
+// signalDone closes the done channel exactly once, regardless of how many
+// goroutines call Close/Shutdown concurrently. It reports whether this call was
+// the one that performed the close (i.e. the first caller).
+func (s *Server) signalDone() (first bool) {
+	s.closeOnce.Do(func() {
+		close(s.done)
+		first = true
+	})
+	return first
+}
+
 // Close immediately closes all active listeners and connections.
 //
 // Close returns any error returned from closing the server's underlying
 // listener(s).
 func (s *Server) Close() error {
-	select {
-	case <-s.done:
+	if !s.signalDone() {
 		return ErrServerClosed
-	default:
-		close(s.done)
 	}
 
 	var err error
@@ -300,11 +309,8 @@ func (s *Server) Close() error {
 // Shutdown returns the context's error, otherwise it returns any
 // error returned from closing the Server's underlying Listener(s).
 func (s *Server) Shutdown(ctx context.Context) error {
-	select {
-	case <-s.done:
+	if !s.signalDone() {
 		return ErrServerClosed
-	default:
-		close(s.done)
 	}
 
 	var err error
