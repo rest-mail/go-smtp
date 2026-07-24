@@ -34,6 +34,19 @@ type Backend interface {
 	NewSession(c *Conn) (Session, error)
 }
 
+// FeatureBackend is an optional interface a Backend may implement to advertise
+// additional ESMTP capabilities in the EHLO response, computed per connection.
+//
+// The returned strings are appended after the server's built-in capabilities and
+// Server.ExtraCaps; each entry is one capability line, advertised verbatim (e.g.
+// "X-EXAMPLE" or "SIZE 1024"). It is the backend's responsibility to handle any
+// command an advertised extension defines. Returning nil advertises nothing
+// extra.
+type FeatureBackend interface {
+	Backend
+	Features(c *Conn) []string
+}
+
 // BackendFunc is an adapter to allow the use of an ordinary function as a
 // Backend.
 type BackendFunc func(c *Conn) (Session, error)
