@@ -360,6 +360,9 @@ func (c *Conn) handleGreet(enhanced bool, arg string) {
 		if err != nil {
 			c.helo = ""
 			c.writeError(451, EnhancedCode{4, 0, 0}, err)
+			if isTerminating(err) {
+				c.Close()
+			}
 			return
 		}
 
@@ -569,7 +572,19 @@ func (c *Conn) handleMail(arg string) {
 	}
 
 	if err := c.Session().Mail(from, opts); err != nil {
+		if se, ok := successResponse(err); ok {
+			// The backend accepted the sender but supplied a custom 2xx line.
+			c.writeResponse(se.Code, se.EnhancedCode, se.Message)
+			c.fromReceived = true
+			if isTerminating(err) {
+				c.Close()
+			}
+			return
+		}
 		c.writeError(451, EnhancedCode{4, 0, 0}, err)
+		if isTerminating(err) {
+			c.Close()
+		}
 		return
 	}
 
@@ -930,7 +945,19 @@ func (c *Conn) handleRcpt(arg string) {
 	}
 
 	if err := c.Session().Rcpt(recipient, opts); err != nil {
+		if se, ok := successResponse(err); ok {
+			// The backend accepted the recipient but supplied a custom 2xx line.
+			c.recipients = append(c.recipients, recipient)
+			c.writeResponse(se.Code, se.EnhancedCode, se.Message)
+			if isTerminating(err) {
+				c.Close()
+			}
+			return
+		}
 		c.writeError(451, EnhancedCode{4, 0, 0}, err)
+		if isTerminating(err) {
+			c.Close()
+		}
 		return
 	}
 	c.recipients = append(c.recipients, recipient)
@@ -998,6 +1025,9 @@ func (c *Conn) handleAuth(arg string) {
 	sasl, err := c.auth(mechanism)
 	if err != nil {
 		c.writeError(454, EnhancedCode{4, 7, 0}, err)
+		if isTerminating(err) {
+			c.Close()
+		}
 		return
 	}
 
@@ -1006,6 +1036,9 @@ func (c *Conn) handleAuth(arg string) {
 		challenge, done, err := sasl.Next(response)
 		if err != nil {
 			c.writeError(454, EnhancedCode{4, 7, 0}, err)
+			if isTerminating(err) {
+				c.Close()
+			}
 			return
 		}
 
@@ -1157,6 +1190,15 @@ func (c *Conn) handleData(arg string) {
 		return
 	}
 
+	// The backend asked to send the response and then drop the connection
+	// (policy/abuse). Skip the drain — the connection is going away regardless.
+	if isTerminating(dataErr) {
+		c.bodyReadDeadline = 0
+		c.writeResponse(dataErrorToStatus(dataErr))
+		c.Close()
+		return
+	}
+
 	// The backend is done with the body (it succeeded, rejected the message, or
 	// hit the size limit). Fast-forward to the end-of-data marker so the
 	// connection is framed for the next command and the client gets a clean,
@@ -1299,7 +1341,7 @@ func (c *Conn) handleBdat(arg string) {
 
 		c.writeResponse(dataErrorToStatus(err))
 
-		if err == errPanic {
+		if err == errPanic || isTerminating(err) {
 			c.Close()
 		}
 
@@ -1330,7 +1372,9 @@ func (c *Conn) handleBdat(arg string) {
 			c.writeResponse(dataErrorToStatus(err))
 		}
 
-		if err == errPanic {
+		// Termination is honored for single-response (non-LMTP) BDAT; per-recipient
+		// LMTP responses are not subject to it.
+		if err == errPanic || (!c.server.LMTP && isTerminating(err)) {
 			c.Close()
 			return
 		}
