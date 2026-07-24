@@ -1037,11 +1037,35 @@ func (c *Conn) handleData(arg string) {
 		return
 	}
 
+	// The backend is done with the body (it succeeded, rejected the message, or
+	// hit the size limit). Consume the rest up to the end-of-data marker so the
+	// connection is left clean for the next command — but bound how much we read.
+	//
+	// No legitimate message exceeds MaxMessageBytes, so no legitimate remaining
+	// body up to the <CRLF>.<CRLF> marker exceeds it either. If a full extra
+	// MaxMessageBytes goes by without the marker, the peer is streaming past a
+	// message it has already been told is too large: stop, answer, and close
+	// instead of draining unboundedly. With no limit configured the operator has
+	// opted out of bounding message size, so the drain stays unbounded.
 	r.limited = false
-	io.Copy(io.Discard, r) // Make sure all the data has been consumed
+	var drainErr error
+	if c.server.MaxMessageBytes > 0 {
+		_, drainErr = io.CopyN(io.Discard, r, c.server.MaxMessageBytes)
+	} else {
+		_, drainErr = io.Copy(io.Discard, r)
+	}
 	c.bodyReadDeadline = 0
+
 	code, enhancedCode, msg := dataErrorToStatus(dataErr)
 	c.writeResponse(code, enhancedCode, msg)
+
+	// Reaching the end-of-data marker drains the reader to io.EOF; a full
+	// MaxMessageBytes copied without it (io.CopyN returns a nil error) means the
+	// budget was exhausted, and any other error means the read failed. In either
+	// non-EOF case the connection can't be safely reused, so close it.
+	if c.server.MaxMessageBytes > 0 && drainErr != io.EOF {
+		c.Close()
+	}
 }
 
 func (c *Conn) handleBdat(arg string) {
