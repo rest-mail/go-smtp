@@ -308,6 +308,7 @@ func (c *Conn) handleGreet(enhanced bool, arg string) {
 			caps = append(caps, fmt.Sprintf("MT-PRIORITY %s", c.server.MtPriorityProfile))
 		}
 	}
+	caps = append(caps, c.server.ExtraCaps...)
 
 	args := []string{"Hello " + domain}
 	args = append(args, caps...)

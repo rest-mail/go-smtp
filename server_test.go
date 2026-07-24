@@ -16,7 +16,7 @@ import (
 	"time"
 
 	"github.com/emersion/go-sasl"
-	"github.com/emersion/go-smtp"
+	"github.com/rest-mail/go-smtp"
 )
 
 type message struct {
@@ -353,6 +353,22 @@ func TestServer_helo(t *testing.T) {
 	if !strings.HasPrefix(scanner.Text(), "250 ") {
 		t.Fatal("Invalid HELO response:", scanner.Text())
 	}
+}
+
+func TestServerExtraCaps(t *testing.T) {
+	_, s, c, scanner, caps := testServerEhlo(t,
+		func(s *smtp.Server) {
+			s.ExtraCaps = []string{"XEXAMPLE https://example.org/smtp-ext"}
+		})
+	defer s.Close()
+	defer c.Close()
+
+	if _, ok := caps["XEXAMPLE https://example.org/smtp-ext"]; !ok {
+		t.Fatal("Missing extra capability in EHLO response")
+	}
+
+	io.WriteString(c, "QUIT\r\n")
+	scanner.Scan()
 }
 
 func testServerAuthenticated(t *testing.T) (be *backend, s *smtp.Server, c net.Conn, scanner *bufio.Scanner) {
