@@ -51,6 +51,9 @@ type backend struct {
 
 	panicOnMail bool
 	userErr     error
+
+	// Error that will be returned by the Rcpt method, if set.
+	rcptErr error
 }
 
 func (be *backend) NewSession(_ *smtp.Conn) (smtp.Session, error) {
@@ -106,19 +109,25 @@ func (s *session) Logout() error {
 }
 
 func (s *session) Mail(from string, opts *smtp.MailOptions) error {
+	// Initialize the message state up-front so a backend that returns a custom
+	// 2xx success line from userErr still has a live message for the following
+	// RCPT/DATA (a real backend would set up its own state before accepting).
+	s.Reset()
 	if s.backend.userErr != nil {
 		return s.backend.userErr
 	}
 	if s.backend.panicOnMail {
 		panic("Everything is on fire!")
 	}
-	s.Reset()
 	s.msg.From = from
 	s.msg.Opts = opts
 	return nil
 }
 
 func (s *session) Rcpt(to string, opts *smtp.RcptOptions) error {
+	if s.backend.rcptErr != nil {
+		return s.backend.rcptErr
+	}
 	s.msg.To = append(s.msg.To, to)
 	s.msg.RcptOpts = append(s.msg.RcptOpts, opts)
 	return nil
