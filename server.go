@@ -79,6 +79,15 @@ type Server struct {
 	// Default value of NONE to advertise no specific profile.
 	MtPriorityProfile PriorityProfile
 
+	// Additional capabilities to advertise in response to EHLO, e.g.
+	// "XEXAMPLE https://example.org/smtp-ext". Each entry is advertised
+	// verbatim as a separate capability line.
+	//
+	// This can be used to advertise site-specific extensions that are not
+	// natively supported by this package. It is the caller's responsibility
+	// to handle any commands such an extension defines.
+	ExtraCaps []string
+
 	// The server backend.
 	Backend Backend
 
