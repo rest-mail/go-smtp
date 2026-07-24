@@ -92,3 +92,20 @@ func TestStartTLSClosesOnHandshakeFailure(t *testing.T) {
 		t.Fatal("server did not close the connection after STARTTLS handshake failure")
 	}
 }
+
+// TestXtextRoundTrip verifies that encodeXtext/decodeXtext round-trip every
+// octet value, including 0x80-0xFF which the previous decoder (ParseInt with
+// bitSize 8) could not represent.
+func TestXtextRoundTrip(t *testing.T) {
+	for i := 0; i < 256; i++ {
+		raw := string([]byte{byte(i)})
+		enc := encodeXtext(raw)
+		dec, err := decodeXtext(enc)
+		if err != nil {
+			t.Fatalf("byte %#02x: decodeXtext(%q) error: %v", i, enc, err)
+		}
+		if dec != raw {
+			t.Fatalf("byte %#02x: round-trip = %q (encoded %q), want %q", i, dec, enc, raw)
+		}
+	}
+}

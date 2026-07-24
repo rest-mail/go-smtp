@@ -457,36 +457,48 @@ func (c *Conn) handleMail(arg string) {
 	c.fromReceived = true
 }
 
-// This regexp matches 'hexchar' token defined in
-// https://tools.ietf.org/html/rfc4954#section-8 however it is intentionally
-// relaxed by requiring only '+' to be present.  It allows us to detect
-// malformed values such as +A or +HH and report them appropriately.
-var hexcharRe = regexp.MustCompile(`\+[0-9A-F]?[0-9A-F]?`)
+func fromHexDigit(b byte) (byte, bool) {
+	switch {
+	case b >= '0' && b <= '9':
+		return b - '0', true
+	case b >= 'A' && b <= 'F':
+		return b - 'A' + 10, true
+	case b >= 'a' && b <= 'f':
+		return b - 'a' + 10, true
+	}
+	return 0, false
+}
 
+// decodeXtext decodes the xtext form defined in RFC 3461 section 4 / RFC 4954
+// section 8, where each octet outside the safe range is encoded as "+HH" with
+// two hex digits. It operates on octets, so all byte values (including
+// 0x80-0xFF) round-trip.
 func decodeXtext(val string) (string, error) {
 	if !strings.Contains(val, "+") {
 		return val, nil
 	}
 
-	var replaceErr error
-	decoded := hexcharRe.ReplaceAllStringFunc(val, func(match string) string {
-		if len(match) != 3 {
-			replaceErr = errors.New("incomplete hexchar")
-			return ""
+	var out strings.Builder
+	out.Grow(len(val))
+	for i := 0; i < len(val); i++ {
+		ch := val[i]
+		if ch != '+' {
+			out.WriteByte(ch)
+			continue
 		}
-		char, err := strconv.ParseInt(match, 16, 8)
-		if err != nil {
-			replaceErr = err
-			return ""
+		if i+2 >= len(val) {
+			return "", errors.New("smtp: incomplete xtext hexchar")
 		}
-
-		return string(rune(char))
-	})
-	if replaceErr != nil {
-		return "", replaceErr
+		hi, ok1 := fromHexDigit(val[i+1])
+		lo, ok2 := fromHexDigit(val[i+2])
+		if !ok1 || !ok2 {
+			return "", errors.New("smtp: invalid xtext hexchar")
+		}
+		out.WriteByte(hi<<4 | lo)
+		i += 2
 	}
 
-	return decoded, nil
+	return out.String(), nil
 }
 
 // This regexp matches 'EmbeddedUnicodeChar' token defined in
@@ -606,17 +618,22 @@ func decodeTypedAddress(val string) (DSNAddressType, string, error) {
 }
 
 func encodeXtext(raw string) string {
+	const hex = "0123456789ABCDEF"
+
 	var out strings.Builder
 	out.Grow(len(raw))
 
-	for _, ch := range raw {
-		switch {
-		case ch >= '!' && ch <= '~' && ch != '+' && ch != '=':
+	// xtext is defined over octets, so iterate bytes and emit each unsafe octet
+	// as "+HH" with two upper-case hex digits.
+	for i := 0; i < len(raw); i++ {
+		ch := raw[i]
+		if ch >= '!' && ch <= '~' && ch != '+' && ch != '=' {
 			// printable non-space US-ASCII except '+' and '='
-			out.WriteRune(ch)
-		default:
-			out.WriteRune('+')
-			out.WriteString(strings.ToUpper(strconv.FormatInt(int64(ch), 16)))
+			out.WriteByte(ch)
+		} else {
+			out.WriteByte('+')
+			out.WriteByte(hex[ch>>4])
+			out.WriteByte(hex[ch&0x0F])
 		}
 	}
 	return out.String()
