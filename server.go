@@ -92,6 +92,12 @@ type Server struct {
 	// The server backend.
 	Backend Backend
 
+	// ConnState, if non-nil, is called when a client connection changes state:
+	// StateNew when it is accepted (before the greeting) and StateClosed when it
+	// is torn down. It mirrors net/http.Server.ConnState and is a single place to
+	// hook connection-level metrics, logging and debugging. It must not block.
+	ConnState func(net.Conn, ConnState)
+
 	wg        sync.WaitGroup
 	done      chan struct{}
 	closeOnce sync.Once
@@ -100,6 +106,29 @@ type Server struct {
 	locker    sync.Mutex
 	listeners []net.Listener
 	conns     map[*Conn]struct{}
+}
+
+// ConnState represents the lifecycle state of a client connection, as reported
+// to Server.ConnState.
+type ConnState int
+
+const (
+	// StateNew is reported when a connection has been accepted, before the
+	// server greeting is sent.
+	StateNew ConnState = iota
+	// StateClosed is reported when a connection has been closed.
+	StateClosed
+)
+
+func (c ConnState) String() string {
+	switch c {
+	case StateNew:
+		return "new"
+	case StateClosed:
+		return "closed"
+	default:
+		return "unknown"
+	}
 }
 
 // New creates a new SMTP server.
@@ -192,12 +221,20 @@ func (s *Server) handleConn(c *Conn) error {
 	s.conns[c] = struct{}{}
 	s.locker.Unlock()
 
+	if s.ConnState != nil {
+		s.ConnState(c.conn, StateNew)
+	}
+
 	defer func() {
 		c.Close()
 
 		s.locker.Lock()
 		delete(s.conns, c)
 		s.locker.Unlock()
+
+		if s.ConnState != nil {
+			s.ConnState(c.conn, StateClosed)
+		}
 	}()
 
 	if tlsConn, ok := c.conn.(*tls.Conn); ok {
