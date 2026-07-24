@@ -1,8 +1,17 @@
 # go-smtp
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/emersion/go-smtp.svg)](https://pkg.go.dev/github.com/emersion/go-smtp)
+[![Go Reference](https://pkg.go.dev/badge/github.com/rest-mail/go-smtp.svg)](https://pkg.go.dev/github.com/rest-mail/go-smtp)
 
 An ESMTP client and server library written in Go.
+
+## Hard fork
+
+This is an independent rest-mail hard fork of
+[emersion/go-smtp](https://github.com/emersion/go-smtp). It has diverged from
+upstream (it adds the RESTMAIL EHLO `ExtraCaps` hook for advertising
+site-specific capabilities) and no longer tracks upstream: it is developed
+under its own module path `github.com/rest-mail/go-smtp` and accepts no
+upstream relationship.
 
 ## Features
 
