@@ -108,7 +108,7 @@ func NewServer(be Backend) *Server {
 		MaxLineLength: 2000,
 
 		Backend:  be,
-		done:     make(chan struct{}, 1),
+		done:     make(chan struct{}),
 		ErrorLog: log.New(os.Stderr, "smtp/server ", log.LstdFlags),
 		conns:    make(map[*Conn]struct{}),
 	}
