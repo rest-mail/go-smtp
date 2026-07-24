@@ -337,6 +337,10 @@ func (c *Conn) handleGreet(enhanced bool, arg string) {
 	}
 	caps = append(caps, c.server.ExtraCaps...)
 
+	if fb, ok := c.server.Backend.(FeatureBackend); ok {
+		caps = append(caps, fb.Features(c)...)
+	}
+
 	args := []string{"Hello " + domain}
 	args = append(args, caps...)
 	c.writeResponse(250, NoEnhancedCode, args...)
