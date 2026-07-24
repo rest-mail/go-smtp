@@ -42,3 +42,19 @@ func TestParser(t *testing.T) {
 		}
 	}
 }
+
+func TestParseArgsEqualsInValue(t *testing.T) {
+	args, err := parseArgs(" X=a=b SIMPLE=1 FLAG")
+	if err != nil {
+		t.Fatalf("parseArgs returned error: %v", err)
+	}
+	if got := args["X"]; got != "a=b" {
+		t.Errorf("args[X] = %q, want %q", got, "a=b")
+	}
+	if got := args["SIMPLE"]; got != "1" {
+		t.Errorf("args[SIMPLE] = %q, want %q", got, "1")
+	}
+	if got, ok := args["FLAG"]; !ok || got != "" {
+		t.Errorf("args[FLAG] = %q (present=%v), want empty and present", got, ok)
+	}
+}
