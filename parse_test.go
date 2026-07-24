@@ -58,3 +58,13 @@ func TestParseArgsEqualsInValue(t *testing.T) {
 		t.Errorf("args[FLAG] = %q (present=%v), want empty and present", got, ok)
 	}
 }
+
+func TestParseCmdSTARTTLSExact(t *testing.T) {
+	if cmd, _, err := parseCmd("STARTTLS\r\n"); err != nil || cmd != "STARTTLS" {
+		t.Fatalf("parseCmd(STARTTLS) = (%q, err=%v); want (STARTTLS, nil)", cmd, err)
+	}
+	// STARTTLSx must not be dispatched as STARTTLS; it is an unknown command.
+	if cmd, _, err := parseCmd("STARTTLSx\r\n"); err == nil && cmd == "STARTTLS" {
+		t.Fatalf("parseCmd(STARTTLSx) dispatched as STARTTLS; want it treated as an unknown command")
+	}
+}

@@ -20,7 +20,9 @@ func parseCmd(line string) (cmd string, arg string, err error) {
 
 	l := len(line)
 	switch {
-	case strings.HasPrefix(strings.ToUpper(line), "STARTTLS"):
+	case strings.EqualFold(line, "STARTTLS") || strings.HasPrefix(strings.ToUpper(line), "STARTTLS "):
+		// STARTTLS takes no arguments; require an exact match (or a
+		// space-separated form) so e.g. "STARTTLSx" is not dispatched as STARTTLS.
 		return "STARTTLS", "", nil
 	case l == 0:
 		return "", "", nil
