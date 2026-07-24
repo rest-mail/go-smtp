@@ -1,11 +1,27 @@
 package smtp_test
 
 import (
+	"io"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/rest-mail/go-smtp"
 )
+
+// drainEhlo consumes an EHLO multiline response up to and including the final
+// "250 " line.
+func drainEhlo(scanner interface {
+	Scan() bool
+	Text() string
+}) {
+	for scanner.Scan() {
+		if strings.HasPrefix(scanner.Text(), "250 ") {
+			return
+		}
+	}
+}
 
 // TestServerCloseConcurrent verifies that concurrent calls to Server.Close do
 // not race on the internal done channel (previously two callers could both
@@ -43,5 +59,60 @@ func TestServerCloseConcurrent(t *testing.T) {
 		if nonClosed != 1 {
 			t.Fatalf("iteration %d: expected exactly one non-ErrServerClosed result, got %d", i, nonClosed)
 		}
+	}
+}
+
+// TestDataBodyReadDeadlineRefresh verifies that ReadTimeout is enforced as an
+// idle timeout throughout a DATA body transfer, rather than as a single
+// absolute deadline measured from the DATA command. A body that is dripped over
+// a period longer than ReadTimeout, but with each inter-write gap comfortably
+// under it, must be accepted.
+func TestDataBodyReadDeadlineRefresh(t *testing.T) {
+	_, s, c, scanner := testServerGreeted(t, func(s *smtp.Server) {
+		s.ReadTimeout = 250 * time.Millisecond
+	})
+	defer s.Close()
+	defer c.Close()
+
+	io.WriteString(c, "EHLO localhost\r\n")
+	drainEhlo(scanner)
+
+	io.WriteString(c, "MAIL FROM:<root@nsa.gov>\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatalf("MAIL response: %q", scanner.Text())
+	}
+	io.WriteString(c, "RCPT TO:<root@gchq.gov.uk>\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatalf("RCPT response: %q", scanner.Text())
+	}
+	io.WriteString(c, "DATA\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "354 ") {
+		t.Fatalf("DATA response: %q", scanner.Text())
+	}
+
+	// 7 writes at 80ms spacing = ~560ms total, each gap well under the 250ms
+	// ReadTimeout. Without deadline refresh the transfer is cut off around
+	// 250ms and rejected.
+	body := []string{
+		"From: root@nsa.gov\r\n",
+		"\r\n",
+		"line one\r\n",
+		"line two\r\n",
+		"line three\r\n",
+		"line four\r\n",
+		"line five\r\n",
+	}
+	for _, part := range body {
+		io.WriteString(c, part)
+		time.Sleep(80 * time.Millisecond)
+	}
+	io.WriteString(c, ".\r\n")
+
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatalf("expected 250 after dripped body, got %q", scanner.Text())
 	}
 }

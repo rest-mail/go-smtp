@@ -36,10 +36,14 @@ type Conn struct {
 	binarymime bool
 
 	lineLimitReader *lineLimitReader
-	bdatPipe        *io.PipeWriter
-	bdatStatus      *statusCollector // used for BDAT on LMTP
-	dataResult      chan error
-	bytesReceived   int64 // counts total size of chunks when BDAT is used
+	// When > 0, the read deadline is re-armed to now+bodyReadDeadline before
+	// each underlying connection read (see deadlineReader). Set only while a
+	// DATA/BDAT message body is being read.
+	bodyReadDeadline time.Duration
+	bdatPipe         *io.PipeWriter
+	bdatStatus       *statusCollector // used for BDAT on LMTP
+	dataResult       chan error
+	bytesReceived    int64 // counts total size of chunks when BDAT is used
 
 	fromReceived bool
 	recipients   []string
@@ -58,7 +62,7 @@ func newConn(c net.Conn, s *Server) *Conn {
 
 func (c *Conn) init() {
 	c.lineLimitReader = &lineLimitReader{
-		R:         c.conn,
+		R:         &deadlineReader{c: c, r: c.conn},
 		LineLimit: c.server.MaxLineLength,
 	}
 	rwc := struct {
@@ -998,9 +1002,11 @@ func (c *Conn) handleData(arg string) {
 	}
 
 	r := newDataReader(c)
+	c.bodyReadDeadline = c.server.ReadTimeout
 	code, enhancedCode, msg := dataErrorToStatus(c.Session().Data(r))
 	r.limited = false
 	io.Copy(ioutil.Discard, r) // Make sure all the data has been consumed
+	c.bodyReadDeadline = 0
 	c.writeResponse(code, enhancedCode, msg)
 }
 
@@ -1089,11 +1095,13 @@ func (c *Conn) handleBdat(arg string) {
 	c.lineLimitReader.LineLimit = 0
 
 	chunk := io.LimitReader(c.text.R, int64(size))
+	c.bodyReadDeadline = c.server.ReadTimeout
 	_, err = io.Copy(c.bdatPipe, chunk)
 	if err != nil {
 		// Backend might return an error early using CloseWithError without consuming
 		// the whole chunk.
 		io.Copy(ioutil.Discard, chunk)
+		c.bodyReadDeadline = 0
 
 		c.writeResponse(dataErrorToStatus(err))
 
@@ -1105,6 +1113,7 @@ func (c *Conn) handleBdat(arg string) {
 		c.lineLimitReader.LineLimit = c.server.MaxLineLength
 		return
 	}
+	c.bodyReadDeadline = 0
 
 	c.bytesReceived += int64(size)
 
@@ -1221,6 +1230,7 @@ func (s *statusCollector) SetStatus(rcptTo string, err error) {
 
 func (c *Conn) handleDataLMTP() {
 	r := newDataReader(c)
+	c.bodyReadDeadline = c.server.ReadTimeout
 	status := c.createStatusCollector()
 
 	done := make(chan bool, 1)
@@ -1263,7 +1273,9 @@ func (c *Conn) handleDataLMTP() {
 
 	// If done gets false, the panic occured in LMTPData and the connection
 	// should be closed.
-	if !<-done {
+	ok = <-done
+	c.bodyReadDeadline = 0
+	if !ok {
 		c.Close()
 	}
 }
@@ -1331,6 +1343,25 @@ func (c *Conn) writeError(code int, enhCode EnhancedCode, err error) {
 	} else {
 		c.writeResponse(code, enhCode, err.Error())
 	}
+}
+
+// deadlineReader sits at the bottom of the connection read chain. While a
+// message body transfer is in progress (c.bodyReadDeadline > 0) it re-arms the
+// read deadline before every underlying read, so that Server.ReadTimeout acts
+// as an idle timeout for the duration of the body rather than a single absolute
+// deadline measured from the DATA/BDAT command line. Outside of body transfers
+// it is a passthrough, leaving the per-command absolute deadline (armed by
+// readLine) in force.
+type deadlineReader struct {
+	c *Conn
+	r io.Reader
+}
+
+func (dr *deadlineReader) Read(b []byte) (int, error) {
+	if d := dr.c.bodyReadDeadline; d > 0 {
+		dr.c.conn.SetReadDeadline(time.Now().Add(d))
+	}
+	return dr.r.Read(b)
 }
 
 // Reads a line of input
