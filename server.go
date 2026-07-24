@@ -95,6 +95,7 @@ type Server struct {
 	wg        sync.WaitGroup
 	done      chan struct{}
 	closeOnce sync.Once
+	initOnce  sync.Once
 
 	locker    sync.Mutex
 	listeners []net.Listener
@@ -114,8 +115,32 @@ func NewServer(be Backend) *Server {
 	}
 }
 
+// init lazily fills the internal state that NewServer sets, so a zero-value
+// &Server{} is safe to use. It is idempotent and only fills fields left
+// nil/zero, so a Server built with NewServer (or one whose fields the caller set
+// explicitly) is unaffected.
+func (s *Server) init() {
+	s.initOnce.Do(func() {
+		if s.done == nil {
+			s.done = make(chan struct{})
+		}
+		if s.conns == nil {
+			s.conns = make(map[*Conn]struct{})
+		}
+		if s.ErrorLog == nil {
+			s.ErrorLog = log.New(os.Stderr, "smtp/server ", log.LstdFlags)
+		}
+		if s.MaxLineLength == 0 {
+			// Doubled maximum line length per RFC 5321 (Section 4.5.3.1.6)
+			s.MaxLineLength = 2000
+		}
+	})
+}
+
 // Serve accepts incoming connections on the Listener l.
 func (s *Server) Serve(l net.Listener) error {
+	s.init()
+
 	s.locker.Lock()
 	s.listeners = append(s.listeners, l)
 	s.locker.Unlock()
@@ -300,6 +325,7 @@ func (s *Server) signalDone() (first bool) {
 // Close returns any error returned from closing the server's underlying
 // listener(s).
 func (s *Server) Close() error {
+	s.init()
 	if !s.signalDone() {
 		return ErrServerClosed
 	}
@@ -328,6 +354,7 @@ func (s *Server) Close() error {
 // Shutdown returns the context's error, otherwise it returns any
 // error returned from closing the Server's underlying Listener(s).
 func (s *Server) Shutdown(ctx context.Context) error {
+	s.init()
 	if !s.signalDone() {
 		return ErrServerClosed
 	}
