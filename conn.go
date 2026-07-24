@@ -35,6 +35,10 @@ type Conn struct {
 	locker     sync.Mutex
 	binarymime bool
 
+	// First error encountered writing a response. Once set, the command loop
+	// stops: further responses cannot reach the peer.
+	writeErr error
+
 	lineLimitReader *lineLimitReader
 	// When > 0, the read deadline is re-armed to now+bodyReadDeadline before
 	// each underlying connection read (see deadlineReader). Set only while a
@@ -1319,7 +1323,6 @@ func (c *Conn) greet() {
 }
 
 func (c *Conn) writeResponse(code int, enhCode EnhancedCode, text ...string) {
-	// TODO: error handling
 	if c.server.WriteTimeout != 0 {
 		c.conn.SetWriteDeadline(time.Now().Add(c.server.WriteTimeout))
 	}
@@ -1341,12 +1344,26 @@ func (c *Conn) writeResponse(code int, enhCode EnhancedCode, text ...string) {
 
 	lastLineIndex := len(text) - 1
 	for i := 0; i < lastLineIndex; i++ {
-		c.text.PrintfLine("%d-%v", code, text[i])
+		if err := c.text.PrintfLine("%d-%v", code, text[i]); err != nil {
+			c.setWriteError(err)
+			return
+		}
 	}
+	var err error
 	if enhCode == NoEnhancedCode {
-		c.text.PrintfLine("%d %v", code, text[lastLineIndex])
+		err = c.text.PrintfLine("%d %v", code, text[lastLineIndex])
 	} else {
-		c.text.PrintfLine("%d %v.%v.%v %v", code, enhCode[0], enhCode[1], enhCode[2], text[lastLineIndex])
+		err = c.text.PrintfLine("%d %v.%v.%v %v", code, enhCode[0], enhCode[1], enhCode[2], text[lastLineIndex])
+	}
+	if err != nil {
+		c.setWriteError(err)
+	}
+}
+
+// setWriteError records the first response-write error seen on the connection.
+func (c *Conn) setWriteError(err error) {
+	if c.writeErr == nil {
+		c.writeErr = err
 	}
 }
 

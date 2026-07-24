@@ -191,10 +191,15 @@ func (s *Server) handleConn(c *Conn) error {
 			cmd, arg, err := parseCmd(line)
 			if err != nil {
 				c.protocolError(501, EnhancedCode{5, 5, 2}, "Bad command")
-				continue
+			} else {
+				c.handle(cmd, arg)
 			}
 
-			c.handle(cmd, arg)
+			// Stop once a response could not be written: the peer is gone, so
+			// continuing to read and process commands is pointless.
+			if c.writeErr != nil {
+				return c.writeErr
+			}
 		} else {
 			if err == io.EOF || errors.Is(err, net.ErrClosed) {
 				return nil

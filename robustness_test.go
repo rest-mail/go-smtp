@@ -228,3 +228,104 @@ func TestMailWrappedSMTPError(t *testing.T) {
 		t.Fatalf("expected 550 5.7.1 from wrapped SMTPError, got %q", got)
 	}
 }
+
+// dummyAddr is a stand-in net.Addr for mock connections.
+type dummyAddr struct{}
+
+func (dummyAddr) Network() string { return "tcp" }
+func (dummyAddr) String() string  { return "127.0.0.1:0" }
+
+// flakyConn is a net.Conn whose Read supplies an endless stream of NOOP
+// commands and whose Write fails after failAfter bytes have been written. Close
+// signals the closed channel exactly once.
+type flakyConn struct {
+	readOff   int
+	written   int
+	failAfter int
+	once      sync.Once
+	closed    chan struct{}
+}
+
+var noopLine = []byte("NOOP\r\n")
+
+func (fc *flakyConn) Read(b []byte) (int, error) {
+	select {
+	case <-fc.closed:
+		return 0, io.EOF
+	default:
+	}
+	n := 0
+	for n < len(b) {
+		m := copy(b[n:], noopLine[fc.readOff:])
+		n += m
+		fc.readOff += m
+		if fc.readOff >= len(noopLine) {
+			fc.readOff = 0
+		}
+	}
+	return n, nil
+}
+
+func (fc *flakyConn) Write(b []byte) (int, error) {
+	if fc.written >= fc.failAfter {
+		return 0, fmt.Errorf("flakyConn: simulated write failure after %d bytes", fc.written)
+	}
+	fc.written += len(b)
+	return len(b), nil
+}
+
+func (fc *flakyConn) Close() error {
+	fc.once.Do(func() { close(fc.closed) })
+	return nil
+}
+
+func (fc *flakyConn) LocalAddr() net.Addr              { return dummyAddr{} }
+func (fc *flakyConn) RemoteAddr() net.Addr             { return dummyAddr{} }
+func (fc *flakyConn) SetDeadline(time.Time) error      { return nil }
+func (fc *flakyConn) SetReadDeadline(time.Time) error  { return nil }
+func (fc *flakyConn) SetWriteDeadline(time.Time) error { return nil }
+
+// singleConnListener yields one connection then blocks until closed.
+type singleConnListener struct {
+	conn net.Conn
+	gave bool
+	done chan struct{}
+	once sync.Once
+}
+
+func (l *singleConnListener) Accept() (net.Conn, error) {
+	if !l.gave {
+		l.gave = true
+		return l.conn, nil
+	}
+	<-l.done
+	return nil, net.ErrClosed
+}
+
+func (l *singleConnListener) Close() error {
+	l.once.Do(func() { close(l.done) })
+	return nil
+}
+
+func (l *singleConnListener) Addr() net.Addr { return dummyAddr{} }
+
+// TestWriteErrorBreaksLoop verifies that once a response write fails, the
+// connection command loop stops instead of spinning forever processing
+// commands whose responses can never reach the (gone) peer.
+func TestWriteErrorBreaksLoop(t *testing.T) {
+	fc := &flakyConn{failAfter: 100, closed: make(chan struct{})}
+	l := &singleConnListener{conn: fc, done: make(chan struct{})}
+
+	s := smtp.NewServer(new(backend))
+	s.Domain = "localhost"
+	s.AllowInsecureAuth = true
+	go s.Serve(l)
+	defer s.Close()
+
+	select {
+	case <-fc.closed:
+		// handleConn exited (and closed the conn) after the write error.
+	case <-time.After(3 * time.Second):
+		t.Fatal("handleConn kept running after a write error (loop did not break)")
+	}
+}
