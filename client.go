@@ -424,11 +424,23 @@ func (c *Client) Auth(a sasl.Client) error {
 //
 // If server returns an error, it will be of type *SMTPError.
 func (c *Client) Mail(from string, opts *MailOptions) error {
-	if err := validateLine(from); err != nil {
-		return err
-	}
 	if err := c.hello(); err != nil {
 		return err
+	}
+	cmd, err := c.buildMailCmd(from, opts)
+	if err != nil {
+		return err
+	}
+	_, _, err = c.cmd(250, "%s", cmd)
+	return err
+}
+
+// buildMailCmd validates the sender and options and renders the MAIL FROM
+// command line. It depends on the advertised extensions (c.ext), so hello must
+// have completed before it is called.
+func (c *Client) buildMailCmd(from string, opts *MailOptions) (string, error) {
+	if err := validateLine(from); err != nil {
+		return "", err
 	}
 
 	var sb strings.Builder
@@ -445,14 +457,14 @@ func (c *Client) Mail(from string, opts *MailOptions) error {
 		if _, ok := c.ext["REQUIRETLS"]; ok {
 			sb.WriteString(" REQUIRETLS")
 		} else {
-			return errors.New("smtp: server does not support REQUIRETLS")
+			return "", errors.New("smtp: server does not support REQUIRETLS")
 		}
 	}
 	if opts != nil && opts.UTF8 {
 		if _, ok := c.ext["SMTPUTF8"]; ok {
 			sb.WriteString(" SMTPUTF8")
 		} else {
-			return errors.New("smtp: server does not support SMTPUTF8")
+			return "", errors.New("smtp: server does not support SMTPUTF8")
 		}
 	}
 	if _, ok := c.ext["DSN"]; ok && opts != nil {
@@ -462,11 +474,11 @@ func (c *Client) Mail(from string, opts *MailOptions) error {
 		case "":
 			// This space is intentionally left blank
 		default:
-			return errors.New("smtp: Unknown RET parameter value")
+			return "", errors.New("smtp: Unknown RET parameter value")
 		}
 		if opts.EnvelopeID != "" {
 			if !isPrintableASCII(opts.EnvelopeID) {
-				return errors.New("smtp: Malformed ENVID parameter value")
+				return "", errors.New("smtp: Malformed ENVID parameter value")
 			}
 			fmt.Fprintf(&sb, " ENVID=%s", encodeXtext(opts.EnvelopeID))
 		}
@@ -477,8 +489,7 @@ func (c *Client) Mail(from string, opts *MailOptions) error {
 		}
 		// We can safely discard parameter if server does not support AUTH.
 	}
-	_, _, err := c.cmd(250, "%s", sb.String())
-	return err
+	return sb.String(), nil
 }
 
 // Rcpt issues a RCPT command to the server using the provided email address.
@@ -490,8 +501,23 @@ func (c *Client) Mail(from string, opts *MailOptions) error {
 //
 // If server returns an error, it will be of type *SMTPError.
 func (c *Client) Rcpt(to string, opts *RcptOptions) error {
-	if err := validateLine(to); err != nil {
+	cmd, err := c.buildRcptCmd(to, opts)
+	if err != nil {
 		return err
+	}
+	if _, _, err := c.cmd(25, "%s", cmd); err != nil {
+		return err
+	}
+	c.rcpts = append(c.rcpts, to)
+	return nil
+}
+
+// buildRcptCmd validates the recipient and options and renders the RCPT TO
+// command line. It depends on the advertised extensions (c.ext), so hello must
+// have completed before it is called.
+func (c *Client) buildRcptCmd(to string, opts *RcptOptions) (string, error) {
+	if err := validateLine(to); err != nil {
+		return "", err
 	}
 
 	var sb strings.Builder
@@ -502,7 +528,7 @@ func (c *Client) Rcpt(to string, opts *RcptOptions) error {
 		if len(opts.Notify) != 0 {
 			sb.WriteString(" NOTIFY=")
 			if err := checkNotifySet(opts.Notify); err != nil {
-				return errors.New("smtp: Malformed NOTIFY parameter value")
+				return "", errors.New("smtp: Malformed NOTIFY parameter value")
 			}
 			for i, v := range opts.Notify {
 				if i != 0 {
@@ -516,7 +542,7 @@ func (c *Client) Rcpt(to string, opts *RcptOptions) error {
 			switch opts.OriginalRecipientType {
 			case DSNAddressTypeRFC822:
 				if !isPrintableASCII(opts.OriginalRecipient) {
-					return errors.New("smtp: Illegal address")
+					return "", errors.New("smtp: Illegal address")
 				}
 				enc = encodeXtext(opts.OriginalRecipient)
 			case DSNAddressTypeUTF8:
@@ -526,7 +552,7 @@ func (c *Client) Rcpt(to string, opts *RcptOptions) error {
 					enc = encodeUTF8AddrXtext(opts.OriginalRecipient)
 				}
 			default:
-				return errors.New("smtp: Unknown address type")
+				return "", errors.New("smtp: Unknown address type")
 			}
 			fmt.Fprintf(&sb, " ORCPT=%s;%s", string(opts.OriginalRecipientType), enc)
 		}
@@ -536,7 +562,7 @@ func (c *Client) Rcpt(to string, opts *RcptOptions) error {
 	}
 	if _, ok := c.ext["DELIVERBY"]; ok && opts != nil && opts.DeliverBy != nil {
 		if opts.DeliverBy.Mode == DeliverByReturn && opts.DeliverBy.Time < 1 {
-			return errors.New("smtp: DELIVERBY mode must be greater than zero with return mode")
+			return "", errors.New("smtp: DELIVERBY mode must be greater than zero with return mode")
 		}
 		arg := fmt.Sprintf(" BY=%d;%s", int(opts.DeliverBy.Time.Seconds()), opts.DeliverBy.Mode)
 		if opts.DeliverBy.Trace {
@@ -546,15 +572,11 @@ func (c *Client) Rcpt(to string, opts *RcptOptions) error {
 	}
 	if _, ok := c.ext["MT-PRIORITY"]; ok && opts != nil && opts.MTPriority != nil {
 		if *opts.MTPriority < -9 || *opts.MTPriority > 9 {
-			return errors.New("smtp: MT-PRIORITY must be between -9 and 9")
+			return "", errors.New("smtp: MT-PRIORITY must be between -9 and 9")
 		}
 		sb.WriteString(fmt.Sprintf(" MT-PRIORITY=%d", *opts.MTPriority))
 	}
-	if _, _, err := c.cmd(25, "%s", sb.String()); err != nil {
-		return err
-	}
-	c.rcpts = append(c.rcpts, to)
-	return nil
+	return sb.String(), nil
 }
 
 // DataCommand is a pending DATA command. DataCommand is an io.WriteCloser.
