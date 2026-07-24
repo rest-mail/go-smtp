@@ -1038,19 +1038,22 @@ func (c *Conn) handleData(arg string) {
 	}
 
 	// The backend is done with the body (it succeeded, rejected the message, or
-	// hit the size limit). Consume the rest up to the end-of-data marker so the
-	// connection is left clean for the next command — but bound how much we read.
+	// hit the size limit). Fast-forward to the end-of-data marker so the
+	// connection is framed for the next command and the client gets a clean,
+	// permanent rejection instead of an ambiguous connection drop — but bound
+	// how far we read.
 	//
-	// No legitimate message exceeds MaxMessageBytes, so no legitimate remaining
-	// body up to the <CRLF>.<CRLF> marker exceeds it either. If a full extra
-	// MaxMessageBytes goes by without the marker, the peer is streaming past a
-	// message it has already been told is too large: stop, answer, and close
-	// instead of draining unboundedly. With no limit configured the operator has
-	// opted out of bounding message size, so the drain stays unbounded.
+	// A legitimate oversized message is only a small multiple of the limit, so
+	// reading up to another 2*MaxMessageBytes past the point the limit was hit
+	// reaches the marker for any such message and the connection survives for a
+	// retry. A stream that still has not produced the marker after that is
+	// never-ending or many times the limit, so we stop and close instead of
+	// draining unboundedly. With no limit configured the operator has opted out
+	// of bounding message size, so the drain stays unbounded.
 	r.limited = false
 	var drainErr error
 	if c.server.MaxMessageBytes > 0 {
-		_, drainErr = io.CopyN(io.Discard, r, c.server.MaxMessageBytes)
+		_, drainErr = io.CopyN(io.Discard, r, 2*c.server.MaxMessageBytes)
 	} else {
 		_, drainErr = io.Copy(io.Discard, r)
 	}
@@ -1059,10 +1062,10 @@ func (c *Conn) handleData(arg string) {
 	code, enhancedCode, msg := dataErrorToStatus(dataErr)
 	c.writeResponse(code, enhancedCode, msg)
 
-	// Reaching the end-of-data marker drains the reader to io.EOF; a full
-	// MaxMessageBytes copied without it (io.CopyN returns a nil error) means the
-	// budget was exhausted, and any other error means the read failed. In either
-	// non-EOF case the connection can't be safely reused, so close it.
+	// Reaching the end-of-data marker drains the reader to io.EOF; copying the
+	// full budget without it (io.CopyN returns a nil error) means the marker
+	// never came, and any other error means the read failed. In either non-EOF
+	// case the connection can't be safely reused, so close it.
 	if c.server.MaxMessageBytes > 0 && drainErr != io.EOF {
 		c.Close()
 	}

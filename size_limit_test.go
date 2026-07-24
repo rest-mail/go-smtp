@@ -163,10 +163,43 @@ func TestServerSizeLimit_RejectWithinLimitKeepsConnection(t *testing.T) {
 	}
 }
 
-// F4: a client that exceeds MaxMessageBytes and then keeps streaming past a
-// whole additional MaxMessageBytes without ever sending the end-of-data marker
-// is abusing the connection. The server must bound the drain, respond 552 and
-// close — not read unboundedly (which, on the unfixed code, hangs forever).
+// F4: a message that overshoots the limit but is still only a small multiple of
+// it (here ~2x) is drained to the end-of-data marker within budget, so the
+// client gets a clean permanent 552 and the connection stays usable for a retry
+// — matching standard MTA behavior instead of an ambiguous connection drop.
+func TestServerSizeLimit_OversizedKeepsConnection(t *testing.T) {
+	be, s, c, scanner := dataLimitServer(t, func(be *backend, s *smtp.Server) {
+		s.MaxMessageBytes = 64
+	})
+	defer s.Close()
+	defer c.Close()
+
+	beginData(t, c, scanner)
+	// Over the ceiling, but well within the drain budget (2x64), so the marker
+	// is reached and the connection survives.
+	io.WriteString(c, "From: a@example.com\r\n\r\n"+strings.Repeat("a", 96)+"\r\n")
+	io.WriteString(c, ".\r\n")
+
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "552 ") {
+		t.Fatalf("expected 552 for the oversized message, got: %q", scanner.Text())
+	}
+	if len(be.messages) != 0 {
+		t.Fatalf("an oversized message must not be delivered, got %d", len(be.messages))
+	}
+
+	// The connection must remain usable for a follow-up transaction.
+	io.WriteString(c, "MAIL FROM:<c@example.com>\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatalf("connection must stay alive after an oversized-but-bounded rejection, MAIL got: %q", scanner.Text())
+	}
+}
+
+// F4: a client that exceeds MaxMessageBytes and then keeps streaming past the
+// whole drain budget without ever sending the end-of-data marker is abusing the
+// connection. The server must bound the drain, respond 552 and close — not read
+// unboundedly (which, on the unfixed code, hangs forever).
 func TestServerSizeLimit_OverLimitDrainBounded(t *testing.T) {
 	_, s, c, scanner := dataLimitServer(t, func(be *backend, s *smtp.Server) {
 		s.MaxMessageBytes = 10
@@ -176,8 +209,10 @@ func TestServerSizeLimit_OverLimitDrainBounded(t *testing.T) {
 
 	beginData(t, c, scanner)
 
-	// 30 bytes = 3x the limit, no terminating dot, connection kept open.
-	io.WriteString(c, strings.Repeat("x", 30))
+	// The limit is 10 and the drain budget is 2*10 = 20, so send well past
+	// (delivered limit + drain budget) bytes with no terminating dot and keep
+	// the connection open — the drain budget is exhausted before any marker.
+	io.WriteString(c, strings.Repeat("x", 64))
 
 	// Bound the wait: unfixed code drains unboundedly and never replies, so this
 	// deadline is what turns the hang into a visible test failure.
