@@ -933,8 +933,21 @@ func (c *Conn) handleStartTLS() {
 	// Upgrade to TLS
 	tlsConn := tls.Server(c.conn, c.server.TLSConfig)
 
+	// Bound the handshake with the configured deadlines, mirroring the
+	// implicit-TLS listener path in Server.handleConn, so a peer that stalls
+	// before or during the handshake cannot block the connection indefinitely.
+	if d := c.server.ReadTimeout; d != 0 {
+		c.conn.SetReadDeadline(time.Now().Add(d))
+	}
+	if d := c.server.WriteTimeout; d != 0 {
+		c.conn.SetWriteDeadline(time.Now().Add(d))
+	}
+
 	if err := tlsConn.Handshake(); err != nil {
 		c.writeResponse(550, EnhancedCode{5, 0, 0}, "Handshake error")
+		// The connection is in an indeterminate, half-upgraded state; do not
+		// keep serving commands on it.
+		c.Close()
 		return
 	}
 
