@@ -1003,10 +1003,23 @@ func (c *Conn) handleData(arg string) {
 
 	r := newDataReader(c)
 	c.bodyReadDeadline = c.server.ReadTimeout
-	code, enhancedCode, msg := dataErrorToStatus(c.Session().Data(r))
+	dataErr := c.Session().Data(r)
+
+	// A read timeout while consuming the body leaves the connection unusable:
+	// the client is mid-message, so any further bytes would be re-parsed as
+	// commands. Respond and close instead of draining and continuing.
+	var netErr net.Error
+	if errors.As(dataErr, &netErr) && netErr.Timeout() {
+		c.bodyReadDeadline = 0
+		c.writeResponse(451, EnhancedCode{4, 4, 2}, "Timeout waiting for data")
+		c.Close()
+		return
+	}
+
 	r.limited = false
 	io.Copy(ioutil.Discard, r) // Make sure all the data has been consumed
 	c.bodyReadDeadline = 0
+	code, enhancedCode, msg := dataErrorToStatus(dataErr)
 	c.writeResponse(code, enhancedCode, msg)
 }
 

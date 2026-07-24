@@ -2,6 +2,7 @@ package smtp_test
 
 import (
 	"io"
+	"net"
 	"strings"
 	"sync"
 	"testing"
@@ -114,5 +115,55 @@ func TestDataBodyReadDeadlineRefresh(t *testing.T) {
 	scanner.Scan()
 	if !strings.HasPrefix(scanner.Text(), "250 ") {
 		t.Fatalf("expected 250 after dripped body, got %q", scanner.Text())
+	}
+}
+
+// TestDataReadTimeoutClosesConnection verifies that when a read times out while
+// the server is consuming the DATA body it responds 451 4.4.2 and closes the
+// connection, rather than returning a generic 554 and leaving the socket open
+// (which would cause any further client bytes to be re-parsed as commands).
+func TestDataReadTimeoutClosesConnection(t *testing.T) {
+	_, s, c, scanner := testServerGreeted(t, func(s *smtp.Server) {
+		s.ReadTimeout = 200 * time.Millisecond
+	})
+	defer s.Close()
+	defer c.Close()
+
+	io.WriteString(c, "EHLO localhost\r\n")
+	drainEhlo(scanner)
+
+	io.WriteString(c, "MAIL FROM:<root@nsa.gov>\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatalf("MAIL response: %q", scanner.Text())
+	}
+	io.WriteString(c, "RCPT TO:<root@gchq.gov.uk>\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatalf("RCPT response: %q", scanner.Text())
+	}
+	io.WriteString(c, "DATA\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "354 ") {
+		t.Fatalf("DATA response: %q", scanner.Text())
+	}
+
+	// Send a partial body with no terminator, then stall past ReadTimeout.
+	io.WriteString(c, "From: root@nsa.gov\r\npartial body without a terminator")
+
+	if !scanner.Scan() {
+		t.Fatalf("expected a response line, got scan error: %v", scanner.Err())
+	}
+	if got := scanner.Text(); !strings.HasPrefix(got, "451 4.4.2") {
+		t.Fatalf("expected 451 4.4.2 timeout response, got %q", got)
+	}
+
+	// The connection must be closed: a subsequent read returns EOF, not a
+	// timeout (which would indicate the socket was left open).
+	c.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, err := c.Read(make([]byte, 1)); err == nil {
+		t.Fatal("expected connection to be closed after DATA timeout, but read succeeded")
+	} else if ne, ok := err.(net.Error); ok && ne.Timeout() {
+		t.Fatalf("connection was left open after DATA timeout: %v", err)
 	}
 }
