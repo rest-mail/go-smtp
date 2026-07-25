@@ -23,6 +23,12 @@ import (
 // once errCount exceeds this, i.e. on the 4th error.
 const errThreshold = 3
 
+// Upper bound on server->client challenge round-trips within a single AUTH
+// command. Real SASL mechanisms complete in a handful of steps; this cap keeps
+// the continuation loop bounded so a misbehaving mechanism cannot spin it
+// indefinitely.
+const maxAuthContinuations = 100
+
 type Conn struct {
 	conn   net.Conn
 	text   *textproto.Conn
@@ -1060,7 +1066,7 @@ func (c *Conn) handleAuth(arg string) {
 	}
 
 	response := ir
-	for {
+	for round := 0; ; round++ {
 		challenge, done, err := sasl.Next(response)
 		if err != nil {
 			c.writeError(454, EnhancedCode{4, 7, 0}, err)
@@ -1074,6 +1080,14 @@ func (c *Conn) handleAuth(arg string) {
 			break
 		}
 
+		if round >= maxAuthContinuations {
+			// A well-behaved mechanism finishes in a few steps; refuse to keep
+			// looping and close, rather than trusting the mechanism to stop.
+			c.writeResponse(454, EnhancedCode{4, 7, 0}, "Too many authentication steps")
+			c.Close()
+			return
+		}
+
 		encoded := ""
 		if len(challenge) > 0 {
 			encoded = base64.StdEncoding.EncodeToString(challenge)
@@ -1082,7 +1096,15 @@ func (c *Conn) handleAuth(arg string) {
 
 		encoded, err = c.readLine()
 		if err != nil {
-			return // TODO: error handling
+			// A failed read mid-exchange must not fall through into the main
+			// command loop: the exchange is half-finished, so the client's next
+			// line (its base64 SASL response) would be misparsed as an SMTP
+			// command, desyncing the connection (RFC 4954). Terminate the AUTH
+			// exchange and close the connection instead. This is distinct from
+			// the client-cancel case ("*") handled below, which only applies to
+			// a line that was read successfully.
+			c.handleAuthReadError(err)
+			return
 		}
 
 		if encoded == "*" {
@@ -1100,6 +1122,29 @@ func (c *Conn) handleAuth(arg string) {
 
 	c.writeResponse(235, EnhancedCode{2, 0, 0}, "Authentication succeeded")
 	c.didAuth = true
+}
+
+// handleAuthReadError terminates an in-progress AUTH exchange after a SASL
+// continuation line could not be read. It mirrors the connection's top-level
+// read-error handling (see Server.handleConn): a clean disconnect closes
+// silently, an idle timeout or over-long line gets a final status line, and any
+// other transport error gets a generic 4xx. In every case the connection is
+// closed so the command loop cannot resume and reprocess buffered bytes as
+// commands.
+func (c *Conn) handleAuthReadError(err error) {
+	switch {
+	case err == io.EOF || errors.Is(err, net.ErrClosed):
+		// Peer is gone; there is nothing to send.
+	case err == ErrTooLongLine:
+		c.writeResponse(500, EnhancedCode{5, 4, 0}, "Too long line, closing connection")
+	default:
+		if neterr, ok := err.(net.Error); ok && neterr.Timeout() {
+			c.writeResponse(421, EnhancedCode{4, 4, 2}, "Idle timeout, bye bye")
+		} else {
+			c.writeResponse(421, EnhancedCode{4, 4, 0}, "Connection error, sorry")
+		}
+	}
+	c.Close()
 }
 
 func decodeSASLResponse(s string) ([]byte, error) {
