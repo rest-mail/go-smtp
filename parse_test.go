@@ -84,6 +84,53 @@ func TestParserRejectsControlBytes(t *testing.T) {
 	}
 }
 
+// TestParsePostmasterPath covers the domainless "<Postmaster>" forward-path
+// form (RFC 5321 §4.1.1.3): it is matched case-insensitively, the local-part is
+// returned with its original casing, the token is consumed leaving any trailing
+// ESMTP parameters in p.s, and non-delimited or non-matching input is left
+// untouched with ok == false so the caller falls back to normal path parsing.
+func TestParsePostmasterPath(t *testing.T) {
+	matched := []struct {
+		raw, mbox, after string
+	}{
+		{"<Postmaster>", "Postmaster", ""},
+		{"<postmaster>", "postmaster", ""},
+		{"<POSTMASTER>", "POSTMASTER", ""},
+		{"<PostMaster> NOTIFY=NEVER", "PostMaster", " NOTIFY=NEVER"},
+		{"<Postmaster>\tORCPT=rfc822;x", "Postmaster", "\tORCPT=rfc822;x"},
+	}
+	for _, tc := range matched {
+		p := parser{tc.raw}
+		mbox, ok := p.parsePostmasterPath()
+		if !ok {
+			t.Errorf("parsePostmasterPath(%q): ok = false, want true", tc.raw)
+		} else if mbox != tc.mbox {
+			t.Errorf("parsePostmasterPath(%q) = %q, want %q", tc.raw, mbox, tc.mbox)
+		} else if p.s != tc.after {
+			t.Errorf("parsePostmasterPath(%q): after = %q, want %q", tc.raw, p.s, tc.after)
+		}
+	}
+
+	// These must NOT be taken as the postmaster special form; p.s must be left
+	// intact so the caller can fall back to parsePath.
+	notMatched := []string{
+		"<Postmaster@example.com>", // domain-qualified: normal path parsing
+		"<Postmasterx>",            // not delimited by '>' at the token boundary
+		"<Postmaster>x",            // trailing non-whitespace after '>'
+		"Postmaster",               // missing angle brackets
+		"<root@nsa.gov>",           // ordinary mailbox
+		"<>",                       // empty path
+	}
+	for _, tc := range notMatched {
+		p := parser{tc}
+		if mbox, ok := p.parsePostmasterPath(); ok {
+			t.Errorf("parsePostmasterPath(%q) = (%q, true), want ok=false", tc, mbox)
+		} else if p.s != tc {
+			t.Errorf("parsePostmasterPath(%q): p.s mutated to %q, want unchanged", tc, p.s)
+		}
+	}
+}
+
 func TestParseArgsEqualsInValue(t *testing.T) {
 	args, err := parseArgs(" X=a=b SIMPLE=1 FLAG")
 	if err != nil {

@@ -604,6 +604,61 @@ func TestServerEmptyTo(t *testing.T) {
 	}
 }
 
+// TestServerPostmasterRcpt verifies the domainless "<Postmaster>" forward-path
+// form. RFC 5321 §4.1.1.3 defines it and §4.5.1 requires every receiver to
+// accept it. The bare form must be accepted (case-insensitively) and surfaced
+// to the backend, and the domain-qualified "<Postmaster@domain>" form must keep
+// working through normal address parsing.
+func TestServerPostmasterRcpt(t *testing.T) {
+	cases := []struct {
+		name   string
+		rcpt   string
+		wantTo string
+	}{
+		{"bare mixed-case", "<Postmaster>", "Postmaster"},
+		{"bare lowercase", "<postmaster>", "postmaster"},
+		{"bare uppercase", "<POSTMASTER>", "POSTMASTER"},
+		{"domain-qualified", "<Postmaster@gchq.gov.uk>", "Postmaster@gchq.gov.uk"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			be, s, c, scanner := testServerAuthenticated(t)
+			defer s.Close()
+			defer c.Close()
+
+			io.WriteString(c, "MAIL FROM:<root@nsa.gov>\r\n")
+			scanner.Scan()
+			if !strings.HasPrefix(scanner.Text(), "250 ") {
+				t.Fatal("Invalid MAIL response:", scanner.Text())
+			}
+
+			io.WriteString(c, "RCPT TO:"+tc.rcpt+"\r\n")
+			scanner.Scan()
+			if !strings.HasPrefix(scanner.Text(), "250 ") {
+				t.Fatalf("RCPT TO:%s: got %q, want 250", tc.rcpt, scanner.Text())
+			}
+
+			io.WriteString(c, "DATA\r\n")
+			scanner.Scan()
+			if !strings.HasPrefix(scanner.Text(), "354 ") {
+				t.Fatal("Invalid DATA response:", scanner.Text())
+			}
+			io.WriteString(c, "From: root@nsa.gov\r\n\r\nbody\r\n.\r\n")
+			scanner.Scan()
+			if !strings.HasPrefix(scanner.Text(), "250 ") {
+				t.Fatal("Invalid DATA response:", scanner.Text())
+			}
+
+			if len(be.messages) != 1 {
+				t.Fatalf("got %d messages, want 1", len(be.messages))
+			}
+			if to := be.messages[0].To; len(to) != 1 || to[0] != tc.wantTo {
+				t.Fatalf("recipient surfaced to backend = %v, want [%q]", to, tc.wantTo)
+			}
+		})
+	}
+}
+
 func TestServer(t *testing.T) {
 	be, s, c, scanner := testServerAuthenticated(t)
 	defer s.Close()

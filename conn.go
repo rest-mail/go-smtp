@@ -847,10 +847,17 @@ func (c *Conn) handleRcpt(arg string) {
 	}
 
 	p := parser{s: strings.TrimSpace(arg)}
-	recipient, err := p.parsePath()
-	if err != nil {
-		c.writeResponse(501, EnhancedCode{5, 5, 2}, "Was expecting RCPT arg syntax of TO:<address>")
-		return
+	// RFC 5321 §4.1.1.3/§4.5.1: accept the domainless "<Postmaster>" form, which
+	// parsePath cannot parse (it has no "@domain"). Fall back to normal path
+	// parsing for every other address.
+	recipient, ok := p.parsePostmasterPath()
+	if !ok {
+		var err error
+		recipient, err = p.parsePath()
+		if err != nil {
+			c.writeResponse(501, EnhancedCode{5, 5, 2}, "Was expecting RCPT arg syntax of TO:<address>")
+			return
+		}
 	}
 
 	if c.server.MaxRecipients > 0 && len(c.recipients) >= c.server.MaxRecipients {
