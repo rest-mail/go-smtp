@@ -211,6 +211,18 @@ func (c *Conn) setSession(session Session) {
 	c.session = session
 }
 
+// setConn swaps the underlying connection under the connection lock. The
+// STARTTLS upgrade calls it to install the *tls.Conn; taking c.locker serializes
+// the swap with Close(), which reads c.conn under the same lock from the
+// Server.Close()/Shutdown() goroutine, so the two do not race on the field. The
+// TLS handshake itself runs before this, outside the lock, so no blocking I/O is
+// held under it.
+func (c *Conn) setConn(conn net.Conn) {
+	c.locker.Lock()
+	defer c.locker.Unlock()
+	c.conn = conn
+}
+
 func (c *Conn) Close() error {
 	c.locker.Lock()
 	defer c.locker.Unlock()
@@ -1111,6 +1123,11 @@ func (c *Conn) auth(mech string) (sasl.Server, error) {
 	return nil, ErrAuthUnknownMechanism
 }
 
+// testHookStartTLSUpgrade, when non-nil, is called after a successful STARTTLS
+// handshake and just before c.conn is swapped for the *tls.Conn. It exists only
+// so tests can widen that window deterministically; it is nil in production.
+var testHookStartTLSUpgrade func()
+
 func (c *Conn) handleStartTLS() {
 	if _, isTLS := c.TLSConnectionState(); isTLS {
 		c.writeResponse(502, EnhancedCode{5, 5, 1}, "Already running in TLS")
@@ -1145,7 +1162,10 @@ func (c *Conn) handleStartTLS() {
 		return
 	}
 
-	c.conn = tlsConn
+	if testHookStartTLSUpgrade != nil {
+		testHookStartTLSUpgrade()
+	}
+	c.setConn(tlsConn)
 	c.init()
 
 	// Reset all state and close the previous Session.
