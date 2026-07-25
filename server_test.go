@@ -1306,6 +1306,45 @@ func TestServer_Chunking_Binarymime(t *testing.T) {
 	}
 }
 
+// TestServer_Chunking_LineLimitAfterNonLastBdat verifies that the command-line
+// length limit stays enforced after a successful non-LAST BDAT chunk. The
+// per-line limit is disabled while a chunk is copied (chunk data may contain
+// arbitrarily long lines), but it must be restored before the next command
+// line is read. Otherwise a peer can stream one unbounded line between chunks
+// and drive the process toward memory exhaustion (see issue #43).
+func TestServer_Chunking_LineLimitAfterNonLastBdat(t *testing.T) {
+	_, s, c, scanner := testServerAuthenticated(t)
+	defer s.Close()
+	defer c.Close()
+
+	io.WriteString(c, "MAIL FROM:<root@nsa.gov>\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid MAIL response:", scanner.Text())
+	}
+
+	io.WriteString(c, "RCPT TO:<root@gchq.gov.uk>\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid RCPT response:", scanner.Text())
+	}
+
+	// A successful non-LAST chunk (exactly 5 octets, no trailing CRLF).
+	io.WriteString(c, "BDAT 5\r\nhello")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid non-LAST BDAT response:", scanner.Text())
+	}
+
+	// The next command line exceeds MaxLineLength. It must be rejected as a
+	// too-long line (500 5.4.0), not read uncapped and processed.
+	io.WriteString(c, strings.Repeat("A", s.MaxLineLength+64)+"\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "500 5.4.0 ") {
+		t.Fatal("Expected too-long-line rejection after non-LAST BDAT, got:", scanner.Text())
+	}
+}
+
 func TestServer_TooLongCommand(t *testing.T) {
 	_, s, c, scanner := testServerAuthenticated(t)
 	defer s.Close()
