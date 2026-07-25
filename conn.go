@@ -456,6 +456,15 @@ func (c *Conn) handleMail(arg string) {
 		c.writeResponse(502, EnhancedCode{5, 5, 1}, "MAIL not allowed during message transfer")
 		return
 	}
+	// RFC 5321 §4.1.1.2/§4.1.4: MAIL begins a mail transaction, and a new one
+	// may not start while another is in progress. A nested MAIL (a prior MAIL
+	// FROM not yet completed by DATA/BDAT nor cleared by RSET) is a bad command
+	// sequence — reject it with 503 and leave the in-progress transaction (its
+	// sender and recipients) intact, rather than silently clobbering it.
+	if c.fromReceived {
+		c.writeResponse(503, EnhancedCode{5, 5, 1}, "Nested MAIL command; use RSET to start a new transaction")
+		return
+	}
 
 	arg, ok := cutPrefixFold(arg, "FROM:")
 	if !ok {
