@@ -431,8 +431,14 @@ func (c *Client) Mail(from string, opts *MailOptions) error {
 	if err != nil {
 		return err
 	}
-	_, _, err = c.cmd(250, "%s", cmd)
-	return err
+	if _, _, err = c.cmd(250, "%s", cmd); err != nil {
+		return err
+	}
+	// A new transaction has begun; drop any recipients left over from a
+	// previous message so recipient bookkeeping is scoped to this message
+	// rather than the connection lifetime (issue #45).
+	c.rcpts = nil
+	return nil
 }
 
 // buildMailCmd validates the sender and options and renders the MAIL FROM
