@@ -403,6 +403,50 @@ HELO localhost
 QUIT
 `
 
+// TestClientEHLOExtensionCaseInsensitive verifies that EHLO extension keywords
+// advertised in lower/mixed case are found by canonical upper-case lookups.
+// EHLO keywords are case-insensitive per RFC 5321 §2.4 and §4.1.1.1.
+func TestClientEHLOExtensionCaseInsensitive(t *testing.T) {
+	server := strings.Join(strings.Split(ehloCaseServer, "\n"), "\r\n")
+
+	var cmdbuf bytes.Buffer
+	bcmdbuf := bufio.NewWriter(&cmdbuf)
+	var fake faker
+	fake.ReadWriter = bufio.NewReadWriter(bufio.NewReader(strings.NewReader(server)), bcmdbuf)
+	c := NewClient(fake)
+	defer c.Close()
+
+	// A canonical upper-case lookup must succeed regardless of the case the
+	// server used to advertise the keyword.
+	if ok, _ := c.Extension("STARTTLS"); !ok {
+		t.Errorf(`Expected STARTTLS to be found when advertised as "starttls"`)
+	}
+	if ok, params := c.Extension("SIZE"); !ok || params != "35651584" {
+		t.Errorf("Expected SIZE 35651584, got ok=%v params=%q", ok, params)
+	}
+	// The keyword is folded, but the parameter value is preserved verbatim.
+	if ok, params := c.Extension("AUTH"); !ok || params != "login plain" {
+		t.Errorf("Expected AUTH params preserved as-is, got ok=%v params=%q", ok, params)
+	}
+	// Upper-case advertisement must keep working.
+	if ok, _ := c.Extension("8BITMIME"); !ok {
+		t.Errorf("Expected 8BITMIME to be found when advertised in upper case")
+	}
+
+	if err := c.Quit(); err != nil {
+		t.Fatalf("QUIT failed: %s", err)
+	}
+}
+
+var ehloCaseServer = `220 hello world
+250-mx.google.com at your service
+250-starttls
+250-Size 35651584
+250-auth login plain
+250 8BITMIME
+221 OK
+`
+
 func TestHello(t *testing.T) {
 
 	if len(helloServer) != len(helloClient) {
