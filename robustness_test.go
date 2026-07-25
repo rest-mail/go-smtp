@@ -174,6 +174,59 @@ func TestDataReadTimeoutClosesConnection(t *testing.T) {
 	}
 }
 
+// TestBdatReadTimeoutClosesConnection verifies that when a read times out while
+// the server is copying a BDAT chunk it responds with a clean, generic 451 4.4.2
+// and closes the connection, mirroring the DATA path. Previously it wrote a 554
+// carrying the raw net-error text ("...i/o timeout") and left the socket open,
+// so the peer's remaining chunk octets were re-parsed as commands (a desync).
+func TestBdatReadTimeoutClosesConnection(t *testing.T) {
+	_, s, c, scanner := testServerGreeted(t, func(s *smtp.Server) {
+		s.ReadTimeout = 200 * time.Millisecond
+	})
+	defer s.Close()
+	defer c.Close()
+
+	io.WriteString(c, "EHLO localhost\r\n")
+	drainEhlo(scanner)
+
+	io.WriteString(c, "MAIL FROM:<root@nsa.gov>\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatalf("MAIL response: %q", scanner.Text())
+	}
+	io.WriteString(c, "RCPT TO:<root@gchq.gov.uk>\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatalf("RCPT response: %q", scanner.Text())
+	}
+
+	// Announce a 100-octet chunk but send only part of it, then stall past
+	// ReadTimeout so the chunk copy read times out mid-chunk.
+	io.WriteString(c, "BDAT 100\r\n")
+	io.WriteString(c, "only a few of the promised octets")
+
+	if !scanner.Scan() {
+		t.Fatalf("expected a response line, got scan error: %v", scanner.Err())
+	}
+	got := scanner.Text()
+	if !strings.HasPrefix(got, "451 4.4.2") {
+		t.Fatalf("expected 451 4.4.2 timeout response, got %q", got)
+	}
+	// The raw transport error must never surface in the client-visible reply.
+	if strings.Contains(strings.ToLower(got), "timeout") && strings.Contains(got, "i/o") {
+		t.Fatalf("raw net-error text leaked into reply: %q", got)
+	}
+
+	// The connection must be closed: a subsequent read returns EOF, not a
+	// timeout (which would indicate the socket was left open and desynced).
+	c.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, err := c.Read(make([]byte, 1)); err == nil {
+		t.Fatal("expected connection to be closed after BDAT timeout, but read succeeded")
+	} else if ne, ok := err.(net.Error); ok && ne.Timeout() {
+		t.Fatalf("connection was left open after BDAT timeout: %v", err)
+	}
+}
+
 // TestDataWrappedSMTPError verifies that a *SMTPError returned wrapped (via %w)
 // from Session.Data keeps its code/enhanced-code/message, rather than being
 // flattened to a generic 554.

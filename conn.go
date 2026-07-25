@@ -1237,6 +1237,18 @@ var errBodyTimeout = &SMTPError{
 	Message:      "Timeout waiting for data",
 }
 
+// errBodyReadFailed is the response sent when a transport read error other than
+// a timeout interrupts a BDAT chunk copy. The announced chunk was not fully
+// consumed, so the command stream is desynced and the connection must be closed
+// after the response rather than reused. The underlying error is logged, never
+// interpolated into the reply, so net-error internals are not disclosed to the
+// client.
+var errBodyReadFailed = &SMTPError{
+	Code:         451,
+	EnhancedCode: EnhancedCode{4, 4, 2},
+	Message:      "Connection error during chunk transfer",
+}
+
 // isBodyReadTimeout reports whether err is a network read timeout surfaced from
 // the backend while it was consuming the message body.
 func isBodyReadTimeout(err error) bool {
@@ -1470,15 +1482,45 @@ func (c *Conn) handleBdat(arg string) {
 	}
 	_, err = io.Copy(pipe, chunk)
 	if err != nil {
-		// Backend might return an error early using CloseWithError without consuming
-		// the whole chunk.
-		io.Copy(io.Discard, chunk)
+		// The copy can fail two ways. The backend may reject the chunk early via
+		// CloseWithError, in which case the write to the pipe fails but the read
+		// side is healthy: draining the rest of the announced chunk from the
+		// client then succeeds and the command stream stays framed for the next
+		// command. Alternatively the read from the client fails (timeout / reset /
+		// short read), in which case the drain fails too and the chunk is left
+		// partially consumed: the unread octets would be misparsed as commands, so
+		// the connection must be closed rather than resumed. A non-nil drainErr is
+		// thus the signal that the stream is desynced.
+		_, drainErr := io.Copy(io.Discard, chunk)
 		c.bodyReadDeadline = 0
 
-		c.writeResponse(dataErrorToStatus(err))
-
-		if err == errPanic || isTerminating(err) {
+		switch {
+		case isBodyReadTimeout(err) || isBodyReadTimeout(drainErr):
+			// A read timeout while pulling the chunk leaves the client mid-chunk.
+			// Mirror the DATA path: reply with a clean, generic status and close.
+			// The raw net error is logged, never sent to the client.
+			c.server.ErrorLog.Printf("BDAT chunk read timed out from %v: %v", c.conn.RemoteAddr(), err)
+			c.writeResponse(errBodyTimeout.Code, errBodyTimeout.EnhancedCode, errBodyTimeout.Message)
 			c.Close()
+		case err == errPanic || isTerminating(err):
+			// A panic or a backend-requested termination: send the mapped status
+			// (already generic) and drop the connection.
+			c.writeResponse(dataErrorToStatus(err))
+			c.Close()
+		case drainErr != nil:
+			// The announced chunk could not be fully read from the client (a
+			// transport error other than a timeout): the command stream is
+			// desynced. Reply with a clean, generic status and close rather than
+			// leaking the raw transport error or misparsing the unread octets as
+			// commands.
+			c.server.ErrorLog.Printf("BDAT chunk read error from %v: %v", c.conn.RemoteAddr(), err)
+			c.writeResponse(errBodyReadFailed.Code, errBodyReadFailed.EnhancedCode, errBodyReadFailed.Message)
+			c.Close()
+		default:
+			// The backend rejected the chunk early but it was fully drained from
+			// the client, so the stream is still framed. Report the backend's
+			// status and continue accepting commands.
+			c.writeResponse(dataErrorToStatus(err))
 		}
 
 		c.reset()
