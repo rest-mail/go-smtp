@@ -39,6 +39,13 @@ The Go standard library provides a SMTP client implementation in `net/smtp`.
 However `net/smtp` is frozen: it's not getting any new features. go-smtp
 provides a server implementation and a number of client improvements.
 
+## Changelog
+
+Recent releases — see [CHANGELOG.md](CHANGELOG.md) for the complete history.
+
+- **v0.28.2** (2026-07-25) — STARTTLS/Close data race, nested-MAIL 503, AUTH/BDAT desync fixes, EHLO case-normalization, MAIL/RCPT param strictness, shutdown 421.
+- **v0.28.1** (2026-07-25) — BDAT inter-chunk line-limit enforcement, over-limit chunk discard framing, LMTP oversized-DATA discard bound, client recipient-list reset per transaction.
+
 ## Licence
 
 MIT

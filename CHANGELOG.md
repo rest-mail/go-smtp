@@ -1,11 +1,14 @@
 # Changelog
 
-All notable changes to this project are documented here. This project follows
-[Semantic Versioning](https://semver.org/).
+All notable changes to this project are documented in this file.
 
-## v0.28.2 (2026-07-25)
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Note: pre-1.0, breaking changes may ship in a minor release.
 
-Bug fixes:
+## [Unreleased]
+
+## [0.28.2] - 2026-07-25
+
+### Fixed
 
 - Envelope address parsing: reject control bytes (below `0x20`, and `0x7F`) in
   the local-part and domain of `MAIL FROM`/`RCPT TO` addresses. A parsed
@@ -64,9 +67,9 @@ Bug fixes:
   would skip STARTTLS, omit `SIZE=`/`BODY=8BITMIME`, or not pipeline. Parameter
   values are preserved verbatim (RFC 5321 §2.4, §4.1.1.1).
 
-## v0.28.1 (2026-07-25)
+## [0.28.1] - 2026-07-25
 
-Bug fixes:
+### Fixed
 
 - CHUNKING (`BDAT`): keep the per-line length limit enforced between chunks.
   The limit was previously restored only after the final chunk or on error, so
