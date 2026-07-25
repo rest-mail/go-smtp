@@ -154,7 +154,10 @@ func (p *Pipeliner) Wait() []error {
 			continue
 		}
 		switch cmd.kind {
-		case pipelineReset:
+		case pipelineReset, pipelineMail:
+			// RSET aborts the current transaction and MAIL begins a new one;
+			// either way any recipients from a previous message must be
+			// dropped so they don't leak into this one (issue #45).
 			p.c.rcpts = nil
 		case pipelineRcpt:
 			p.c.rcpts = append(p.c.rcpts, cmd.rcpt)
