@@ -291,10 +291,14 @@ func (c *Client) ehlo() error {
 		extList = extList[1:]
 		for _, line := range extList {
 			args := strings.SplitN(line, " ", 2)
+			// EHLO keywords are case-insensitive (RFC 5321 §2.4, §4.1.1.1),
+			// so normalize the keyword to upper case to match the canonical
+			// lookups. The parameter value is preserved verbatim.
+			name := strings.ToUpper(args[0])
 			if len(args) > 1 {
-				ext[args[0]] = args[1]
+				ext[name] = args[1]
 			} else {
-				ext[args[0]] = ""
+				ext[name] = ""
 			}
 		}
 	}
