@@ -1146,6 +1146,53 @@ func (c *Conn) handleStartTLS() {
 }
 
 // DATA
+// errBodyTimeout is the response sent when a read times out while the backend
+// is consuming the message body. The client is mid-message, so any further
+// bytes would be re-parsed as commands; the connection must be closed after the
+// response is sent rather than drained and reused.
+var errBodyTimeout = &SMTPError{
+	Code:         451,
+	EnhancedCode: EnhancedCode{4, 4, 2},
+	Message:      "Timeout waiting for data",
+}
+
+// isBodyReadTimeout reports whether err is a network read timeout surfaced from
+// the backend while it was consuming the message body.
+func isBodyReadTimeout(err error) bool {
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
+}
+
+// drainDataReader fast-forwards the DATA reader past whatever the backend left
+// unread, so the connection is framed for the next command and the client gets
+// a clean, permanent rejection instead of an ambiguous connection drop — but it
+// bounds how far it reads.
+//
+// A legitimate oversized message is only a small multiple of the limit, so
+// reading up to another 2*MaxMessageBytes past the point the limit was hit
+// reaches the end-of-data marker for any such message and the connection
+// survives for a retry. A stream that still has not produced the marker after
+// that is never-ending or many times the limit, so the caller must close the
+// connection instead of draining unboundedly. With no limit configured the
+// operator has opted out of bounding message size, so the drain stays
+// unbounded.
+//
+// It returns true when the connection can no longer be safely reused: reaching
+// the marker drains the reader to io.EOF, so copying the full budget without it
+// (io.CopyN returns a nil error) means the marker never came, and any other
+// error means the read failed. In either non-EOF case the caller must close.
+// With no limit configured it always returns false.
+func (c *Conn) drainDataReader(r *dataReader) (mustClose bool) {
+	r.limited = false
+	var drainErr error
+	if c.server.MaxMessageBytes > 0 {
+		_, drainErr = io.CopyN(io.Discard, r, 2*c.server.MaxMessageBytes)
+	} else {
+		_, drainErr = io.Copy(io.Discard, r)
+	}
+	return c.server.MaxMessageBytes > 0 && drainErr != io.EOF
+}
+
 func (c *Conn) handleData(arg string) {
 	if arg != "" {
 		c.writeResponse(501, EnhancedCode{5, 5, 4}, "DATA command should not have any arguments")
@@ -1182,10 +1229,9 @@ func (c *Conn) handleData(arg string) {
 	// A read timeout while consuming the body leaves the connection unusable:
 	// the client is mid-message, so any further bytes would be re-parsed as
 	// commands. Respond and close instead of draining and continuing.
-	var netErr net.Error
-	if errors.As(dataErr, &netErr) && netErr.Timeout() {
+	if isBodyReadTimeout(dataErr) {
 		c.bodyReadDeadline = 0
-		c.writeResponse(451, EnhancedCode{4, 4, 2}, "Timeout waiting for data")
+		c.writeResponse(errBodyTimeout.Code, errBodyTimeout.EnhancedCode, errBodyTimeout.Message)
 		c.Close()
 		return
 	}
@@ -1200,35 +1246,16 @@ func (c *Conn) handleData(arg string) {
 	}
 
 	// The backend is done with the body (it succeeded, rejected the message, or
-	// hit the size limit). Fast-forward to the end-of-data marker so the
-	// connection is framed for the next command and the client gets a clean,
-	// permanent rejection instead of an ambiguous connection drop — but bound
-	// how far we read.
-	//
-	// A legitimate oversized message is only a small multiple of the limit, so
-	// reading up to another 2*MaxMessageBytes past the point the limit was hit
-	// reaches the marker for any such message and the connection survives for a
-	// retry. A stream that still has not produced the marker after that is
-	// never-ending or many times the limit, so we stop and close instead of
-	// draining unboundedly. With no limit configured the operator has opted out
-	// of bounding message size, so the drain stays unbounded.
-	r.limited = false
-	var drainErr error
-	if c.server.MaxMessageBytes > 0 {
-		_, drainErr = io.CopyN(io.Discard, r, 2*c.server.MaxMessageBytes)
-	} else {
-		_, drainErr = io.Copy(io.Discard, r)
-	}
+	// hit the size limit). Fast-forward past the unread remainder within a
+	// bounded budget so the connection is framed for the next command, closing
+	// it if the end-of-data marker never arrives. See drainDataReader.
+	mustClose := c.drainDataReader(r)
 	c.bodyReadDeadline = 0
 
 	code, enhancedCode, msg := dataErrorToStatus(dataErr)
 	c.writeResponse(code, enhancedCode, msg)
 
-	// Reaching the end-of-data marker drains the reader to io.EOF; copying the
-	// full budget without it (io.CopyN returns a nil error) means the marker
-	// never came, and any other error means the read failed. In either non-EOF
-	// case the connection can't be safely reused, so close it.
-	if c.server.MaxMessageBytes > 0 && drainErr != io.EOF {
+	if mustClose {
 		c.Close()
 	}
 }
@@ -1503,12 +1530,24 @@ func (c *Conn) handleDataLMTP() {
 	lmtpSession, ok := c.Session().(LMTPSession)
 	if !ok {
 		// Fallback to using a single status for all recipients.
-		err := c.Session().Data(r)
-		io.Copy(io.Discard, r) // Make sure all the data has been consumed
-		for _, rcpt := range c.recipients {
-			status.SetStatus(rcpt, err)
+		dataErr := c.Session().Data(r)
+		if isBodyReadTimeout(dataErr) {
+			// A mid-body read timeout leaves the client mid-message, so any
+			// further bytes would be re-parsed as commands. Report 451 4.4.2 per
+			// recipient and close instead of draining and continuing.
+			for _, rcpt := range c.recipients {
+				status.SetStatus(rcpt, errBodyTimeout)
+			}
+			done <- false
+		} else {
+			// Bound the discard of the remainder so a never-ending or hugely
+			// oversized message cannot pin the connection.
+			mustClose := c.drainDataReader(r)
+			for _, rcpt := range c.recipients {
+				status.SetStatus(rcpt, dataErr)
+			}
+			done <- !mustClose
 		}
-		done <- true
 	} else {
 		go func() {
 			defer func() {
@@ -1521,9 +1560,19 @@ func (c *Conn) handleDataLMTP() {
 				}
 			}()
 
-			status.fillRemaining(lmtpSession.LMTPData(r, status))
-			io.Copy(io.Discard, r) // Make sure all the data has been consumed
-			done <- true
+			dataErr := lmtpSession.LMTPData(r, status)
+			if isBodyReadTimeout(dataErr) {
+				// A mid-body read timeout leaves the client mid-message, so any
+				// further bytes would be re-parsed as commands. Report 451 4.4.2
+				// per recipient and close instead of draining and continuing.
+				status.fillRemaining(errBodyTimeout)
+				done <- false
+				return
+			}
+			status.fillRemaining(dataErr)
+			// Bound the discard of the remainder so a never-ending or hugely
+			// oversized message cannot pin the connection.
+			done <- !c.drainDataReader(r)
 		}()
 	}
 
@@ -1532,8 +1581,9 @@ func (c *Conn) handleDataLMTP() {
 		c.writeResponse(code, enchCode, "<"+rcpt+"> "+msg)
 	}
 
-	// If done gets false, the panic occured in LMTPData and the connection
-	// should be closed.
+	// done is false when the LMTPData goroutine panicked, a body read timed out,
+	// or the over-limit drain hit its budget without reaching the end-of-data
+	// marker. In all three the connection is desynced and must be closed.
 	ok = <-done
 	c.bodyReadDeadline = 0
 	if !ok {
