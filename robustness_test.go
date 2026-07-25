@@ -432,3 +432,98 @@ func TestMidSessionErrorStillLogged(t *testing.T) {
 		t.Fatal("expected a mid-session connection error to be logged, but log was empty")
 	}
 }
+
+// TestAuthContinuationReadTimeoutClosesConnection verifies that when reading a
+// SASL continuation line fails mid-exchange, the AUTH command terminates and
+// the connection is closed, rather than the read error being swallowed and the
+// main command loop resuming in a desynced state.
+//
+// Regression for the bug where handleAuth returned silently on a continuation
+// read error (a leftover "// TODO: error handling"). After a 334 challenge the
+// client stalls past ReadTimeout; its late base64 SASL response must NOT be
+// reinterpreted as an SMTP command (which produced a spurious 5xx "bad command"
+// reply on the buggy code, an RFC 4954 desync).
+//
+// The timings keep the client's response inside a two-sided window: it arrives
+// after the server's first continuation read has timed out, but before any
+// subsequent read deadline, so on the buggy code it is deterministically
+// re-parsed as a command.
+func TestAuthContinuationReadTimeoutClosesConnection(t *testing.T) {
+	const readTimeout = 250 * time.Millisecond
+
+	_, s, c, scanner, caps := testServerEhlo(t, func(s *smtp.Server) {
+		s.ReadTimeout = readTimeout
+	})
+	defer s.Close()
+	defer c.Close()
+
+	if !caps["AUTH PLAIN"] {
+		t.Fatal("AUTH PLAIN capability missing when auth is enabled")
+	}
+
+	// Begin AUTH PLAIN with no initial response so the server issues a 334
+	// challenge and then reads a continuation line.
+	io.WriteString(c, "AUTH PLAIN\r\n")
+	if !scanner.Scan() {
+		t.Fatalf("expected a 334 challenge, got scan error: %v", scanner.Err())
+	}
+	if got := scanner.Text(); !strings.HasPrefix(got, "334") {
+		t.Fatalf("expected a 334 challenge, got %q", got)
+	}
+
+	// Stall past ReadTimeout so the server's continuation read times out, then
+	// send a base64 SASL response. On the buggy code the swallowed read error
+	// lets this line be parsed as an SMTP command, yielding a spurious 5xx.
+	time.Sleep(readTimeout + 150*time.Millisecond)
+	io.WriteString(c, "AHVzZXJuYW1lAHBhc3N3b3Jk\r\n") // base64 "\0username\0password"
+
+	got := ""
+	if scanner.Scan() {
+		got = scanner.Text()
+	}
+	// A properly terminated AUTH read error replies with a 4xx (or nothing, if
+	// the peer is already gone) and closes; any 5xx here means the base64 line
+	// was misparsed as a command, i.e. the command loop desynced.
+	if strings.HasPrefix(got, "5") {
+		t.Fatalf("AUTH continuation read timeout desynced the command loop: "+
+			"the base64 response was parsed as a command (got %q)", got)
+	}
+	if got != "" && !strings.HasPrefix(got, "421") && !strings.HasPrefix(got, "451") {
+		t.Fatalf("expected a 4xx AUTH-termination response or a closed connection, got %q", got)
+	}
+
+	// The connection must be closed: a further read returns EOF/reset, not a
+	// timeout (which would mean the socket was left open in a desynced state).
+	c.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, err := c.Read(make([]byte, 1)); err == nil {
+		t.Fatal("expected the connection to be closed after the AUTH read timeout, but a read succeeded")
+	} else if ne, ok := err.(net.Error); ok && ne.Timeout() {
+		t.Fatalf("connection was left open after the AUTH read timeout: %v", err)
+	}
+}
+
+// TestAuthClientCancelReturns501 verifies that a "*" cancel line, which is read
+// successfully, stays distinct from a transport read error: it yields 501 and
+// the exchange ends, rather than being conflated with the read-error path.
+func TestAuthClientCancelReturns501(t *testing.T) {
+	_, s, c, scanner, caps := testServerEhlo(t)
+	defer s.Close()
+	defer c.Close()
+
+	if !caps["AUTH PLAIN"] {
+		t.Fatal("AUTH PLAIN capability missing when auth is enabled")
+	}
+
+	io.WriteString(c, "AUTH PLAIN\r\n")
+	if !scanner.Scan() || !strings.HasPrefix(scanner.Text(), "334") {
+		t.Fatalf("expected a 334 challenge, got %q (err %v)", scanner.Text(), scanner.Err())
+	}
+
+	io.WriteString(c, "*\r\n")
+	if !scanner.Scan() {
+		t.Fatalf("expected a 501 after cancel, got scan error: %v", scanner.Err())
+	}
+	if got := scanner.Text(); !strings.HasPrefix(got, "501") {
+		t.Fatalf("expected 501 negotiation cancelled, got %q", got)
+	}
+}
