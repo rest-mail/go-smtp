@@ -1321,7 +1321,18 @@ func (c *Conn) handleBdat(arg string) {
 		}()
 	}
 
+	// Chunk data is opaque and may contain lines longer than the command-line
+	// limit, so the limit is disabled while the chunk is copied. It must be
+	// restored before the next command line is read on every exit path
+	// (successful non-LAST or LAST chunk, an error mid-chunk, or an early
+	// return); otherwise a peer could stream one unbounded line between chunks
+	// (RFC 3030 does not suspend the RFC 5321 §4.5.3.1.6 line limit between
+	// chunks). A deferred restore keeps that guarantee in one place, and runs
+	// only after the error branch has finished draining the rest of the chunk.
 	c.lineLimitReader.LineLimit = 0
+	defer func() {
+		c.lineLimitReader.LineLimit = c.server.MaxLineLength
+	}()
 
 	chunk := io.LimitReader(c.text.R, int64(size))
 	c.bodyReadDeadline = c.server.ReadTimeout
@@ -1346,7 +1357,6 @@ func (c *Conn) handleBdat(arg string) {
 		}
 
 		c.reset()
-		c.lineLimitReader.LineLimit = c.server.MaxLineLength
 		return
 	}
 	c.bodyReadDeadline = 0
@@ -1354,8 +1364,6 @@ func (c *Conn) handleBdat(arg string) {
 	c.bytesReceived += int64(size)
 
 	if last {
-		c.lineLimitReader.LineLimit = c.server.MaxLineLength
-
 		if p := c.bdatWriter(); p != nil {
 			p.Close()
 		}
