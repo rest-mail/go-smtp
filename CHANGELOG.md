@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.28.3] - 2026-07-26
+
+### Fixed
+
+- The per-line length limit is now disabled during the DATA phase (mirroring
+  BDAT), so `MaxLineLength` bounds only command lines — a server can cap pre-auth
+  command input without limiting message body lines.
+
 ## [0.28.2] - 2026-07-25
 
 ### Fixed
