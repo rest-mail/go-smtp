@@ -43,6 +43,7 @@ provides a server implementation and a number of client improvements.
 
 Recent releases — see [CHANGELOG.md](CHANGELOG.md) for the complete history.
 
+- **v0.28.3** (2026-07-26) — `MaxLineLength` now bounds command lines only; the per-line limit is disabled during DATA (mirroring BDAT), so a server can cap pre-auth command input without limiting message body lines.
 - **v0.28.2** (2026-07-25) — STARTTLS/Close data race, nested-MAIL 503, AUTH/BDAT desync fixes, EHLO case-normalization, MAIL/RCPT param strictness, shutdown 421.
 - **v0.28.1** (2026-07-25) — BDAT inter-chunk line-limit enforcement, over-limit chunk discard framing, LMTP oversized-DATA discard bound, client recipient-list reset per transaction.
 

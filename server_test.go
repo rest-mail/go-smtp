@@ -1478,6 +1478,66 @@ func TestServer_TooLongCommand(t *testing.T) {
 	}
 }
 
+// TestServer_MaxLineLengthBoundsCommandsNotData verifies that MaxLineLength
+// caps command lines only: with a small limit set, an over-long COMMAND line is
+// rejected (500 5.4.0), but a DATA body line longer than the limit is still
+// accepted and delivered. The per-line limit is disabled for the duration of
+// the DATA phase (mirroring the BDAT chunk-copy path), so a server can bound
+// pre-auth command input against memory exhaustion without limiting message
+// body lines. On the pre-fix server the DATA line trips ErrTooLongLine and the
+// message is rejected.
+func TestServer_MaxLineLengthBoundsCommandsNotData(t *testing.T) {
+	// Set the small limit before Serve begins so the field write happens-before
+	// the serving goroutine (keeps the race detector quiet).
+	const maxLine = 64
+	be, s, c, scanner, _ := testServerEhlo(t, func(s *smtp.Server) {
+		s.MaxLineLength = maxLine
+	})
+	defer s.Close()
+	defer c.Close()
+
+	// A DATA body line far longer than MaxLineLength must be accepted: the
+	// per-line limit does not apply to message content.
+	longLine := strings.Repeat("x", maxLine*4)
+
+	io.WriteString(c, "MAIL FROM:<root@nsa.gov>\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid MAIL response:", scanner.Text())
+	}
+	io.WriteString(c, "RCPT TO:<root@gchq.gov.uk>\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid RCPT response:", scanner.Text())
+	}
+	io.WriteString(c, "DATA\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "354 ") {
+		t.Fatal("Invalid DATA response:", scanner.Text())
+	}
+	io.WriteString(c, longLine+"\r\n")
+	io.WriteString(c, ".\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatalf("a DATA body line longer than MaxLineLength must be accepted, got: %q", scanner.Text())
+	}
+
+	if len(be.anonmsgs) != 1 {
+		t.Fatalf("expected the long-line message to be delivered, got %d messages", len(be.anonmsgs))
+	}
+	if !strings.Contains(string(be.anonmsgs[0].Data), longLine) {
+		t.Fatal("delivered message is missing the long body line")
+	}
+
+	// The connection stays framed after DATA, and the command-line limit is
+	// restored: an over-long COMMAND line is rejected as too long (500 5.4.0).
+	io.WriteString(c, strings.Repeat("A", maxLine*2)+"\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "500 5.4.0 ") {
+		t.Fatalf("an over-long command line must be rejected, got: %q", scanner.Text())
+	}
+}
+
 func TestServerShutdown(t *testing.T) {
 	_, s, c, _ := testServerGreeted(t)
 

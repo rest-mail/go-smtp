@@ -1353,6 +1353,19 @@ func (c *Conn) handleData(arg string) {
 
 	defer c.reset()
 
+	// The DATA body is opaque and may contain lines longer than the command-line
+	// limit, so the per-line limit is disabled for the duration of the body read
+	// (and its drain), mirroring the BDAT chunk-copy path. This lets MaxLineLength
+	// bound only command lines — a server can cap pre-auth command input against
+	// memory exhaustion without limiting message body lines. The deferred restore
+	// runs before the next command line is read on every exit path, keeping
+	// commands bounded (the dot-reader already enforces end-of-data framing, and
+	// MaxMessageBytes still bounds total body size).
+	c.lineLimitReader.LineLimit = 0
+	defer func() {
+		c.lineLimitReader.LineLimit = c.server.MaxLineLength
+	}()
+
 	if c.server.LMTP {
 		c.handleDataLMTP()
 		return
