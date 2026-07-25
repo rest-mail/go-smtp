@@ -1258,6 +1258,72 @@ func TestServer_Chunking_tooLongMessage(t *testing.T) {
 	}
 }
 
+// TestServer_Chunking_OverLimitDiscardKeepsConnection reproduces issue #44: an
+// over-limit BDAT chunk that contains a line longer than MaxLineLength is
+// rejected 552 and its bytes discarded. The per-line limit must be disabled
+// while the chunk is discarded (chunk data is opaque and may contain arbitrarily
+// long lines); otherwise the discard trips ErrTooLongLine, which surfaces as a
+// spurious "500 5.4.0 Too long line, closing connection" and a connection drop
+// right after the 552. The connection must instead stay framed and usable.
+func TestServer_Chunking_OverLimitDiscardKeepsConnection(t *testing.T) {
+	// Configure limits before Serve begins so the field writes happen-before the
+	// serving goroutine (keeps the race detector quiet).
+	be, s, c, scanner, caps := testServerEhlo(t, func(s *smtp.Server) {
+		s.MaxMessageBytes = 50
+		s.MaxLineLength = 100
+	})
+	defer s.Close()
+	defer c.Close()
+
+	if _, ok := caps["AUTH PLAIN"]; !ok {
+		t.Fatal("AUTH PLAIN capability is missing when auth is enabled")
+	}
+	io.WriteString(c, "AUTH PLAIN AHVzZXJuYW1lAHBhc3N3b3Jk\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "235 ") {
+		t.Fatal("Invalid AUTH response:", scanner.Text())
+	}
+
+	io.WriteString(c, "MAIL FROM:<root@nsa.gov>\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid MAIL response:", scanner.Text())
+	}
+	io.WriteString(c, "RCPT TO:<root@gchq.gov.uk>\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid RCPT response:", scanner.Text())
+	}
+
+	// Announce a chunk that is both over MaxMessageBytes (50) and, once its
+	// single line is sent, longer than MaxLineLength (100). Send only the
+	// command line first so the server rejects it and blocks in the discard,
+	// guaranteeing the 552 is flushed before any chunk byte exists.
+	const chunkSize = 200
+	io.WriteString(c, fmt.Sprintf("BDAT %d LAST\r\n", chunkSize))
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "552 ") {
+		t.Fatalf("expected 552 for the over-limit chunk, got: %q", scanner.Text())
+	}
+
+	// Now stream the over-limit chunk (a single line with no CRLF, longer than
+	// MaxLineLength) and immediately issue a fresh command. On the fixed server
+	// the whole chunk is discarded with the line limit disabled and the
+	// connection stays framed, so the MAIL FROM is accepted. On the buggy server
+	// the discard trips ErrTooLongLine, the server emits a spurious 500 and
+	// closes, so this read gets the 500 instead of a 250.
+	io.WriteString(c, strings.Repeat("x", chunkSize))
+	io.WriteString(c, "MAIL FROM:<c@example.com>\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatalf("connection must stay usable after an over-limit BDAT discard, got: %q", scanner.Text())
+	}
+
+	if len(be.messages) != 0 || len(be.anonmsgs) != 0 {
+		t.Fatal("an over-limit chunk must not be delivered:", be.messages, be.anonmsgs)
+	}
+}
+
 func TestServer_Chunking_Binarymime(t *testing.T) {
 	be, s, c, scanner := testServerAuthenticated(t)
 	defer s.Close()

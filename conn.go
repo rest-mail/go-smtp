@@ -1268,8 +1268,25 @@ func (c *Conn) handleBdat(arg string) {
 	if c.server.MaxMessageBytes != 0 && c.bytesReceived+int64(size) > c.server.MaxMessageBytes {
 		c.writeResponse(552, EnhancedCode{5, 3, 4}, "Max message size exceeded")
 
-		// Discard chunk itself without passing it to backend.
-		io.Copy(io.Discard, io.LimitReader(c.text.R, int64(size)))
+		// Discard the chunk itself without passing it to the backend. Chunk data
+		// is opaque and may contain lines longer than the command-line limit, so
+		// the per-line limit must be disabled while discarding (mirroring the
+		// normal chunk-copy path below); otherwise the discard trips
+		// ErrTooLongLine, whose sticky error then surfaces as a spurious "500 Too
+		// long line, closing connection" on the next command read right after the
+		// 552, reintroducing the ambiguous mid-stream drop fixed for DATA (#44).
+		// Restore the limit afterwards so the next command line stays bounded.
+		c.lineLimitReader.LineLimit = 0
+		_, derr := io.Copy(io.Discard, io.LimitReader(c.text.R, int64(size)))
+		c.lineLimitReader.LineLimit = c.server.MaxLineLength
+
+		// A failed discard means the chunk was not fully consumed, so the command
+		// stream is desynced; close deliberately instead of continuing (matching
+		// the DATA-path over-limit behavior of not reusing an unframed stream).
+		if derr != nil {
+			c.Close()
+			return
+		}
 
 		c.reset()
 		return
