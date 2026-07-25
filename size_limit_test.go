@@ -230,3 +230,104 @@ func TestServerSizeLimit_OverLimitDrainBounded(t *testing.T) {
 		t.Fatalf("expected the connection to be closed after 552, got more data: %q", scanner.Text())
 	}
 }
+
+// beginDataLMTP drives LHLO/MAIL/RCPT/DATA over an LMTP connection and leaves it
+// ready to receive the message body, with a single recipient.
+func beginDataLMTP(t *testing.T, c net.Conn, scanner *bufio.Scanner) {
+	t.Helper()
+
+	sendLHLO(t, scanner, c)
+
+	io.WriteString(c, "MAIL FROM:<root@nsa.gov>\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid MAIL response:", scanner.Text())
+	}
+	io.WriteString(c, "RCPT TO:<root@gchq.gov.uk>\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid RCPT response:", scanner.Text())
+	}
+	io.WriteString(c, "DATA\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "354 ") {
+		t.Fatal("Invalid DATA response:", scanner.Text())
+	}
+}
+
+// assertConnClosed fails the test if the connection is still open. It
+// distinguishes a closed connection (read returns EOF/error promptly) from one
+// left open (the read blocks until the deadline and returns a timeout).
+func assertConnClosed(t *testing.T, c net.Conn, context string) {
+	t.Helper()
+	c.SetReadDeadline(time.Now().Add(3 * time.Second))
+	if _, err := c.Read(make([]byte, 1)); err == nil {
+		t.Fatalf("%s: expected the connection to be closed, but a read succeeded", context)
+	} else if ne, ok := err.(net.Error); ok && ne.Timeout() {
+		t.Fatalf("%s: connection left open (drain unbounded): %v", context, err)
+	}
+}
+
+// #46: an LMTP client (backend implementing LMTPSession) that exceeds
+// MaxMessageBytes and then keeps streaming past the whole drain budget without
+// ever sending the end-of-data marker must not pin the connection. The server
+// must bound the drain, emit the per-recipient 552 and close — mirroring the
+// SMTP DATA path. On the unfixed code the drain is an unbounded io.Copy that
+// never returns, so `done` never fires and the connection is never closed.
+func TestServerSizeLimit_LMTP_OverLimitDrainBounded(t *testing.T) {
+	_, s, c, scanner := testServerGreetedLMTP(t, func(s *smtp.Server) {
+		s.LMTP = true
+		s.MaxMessageBytes = 10
+		be := s.Backend.(*backend)
+		be.implementLMTPData = true
+	})
+	defer s.Close()
+	defer c.Close()
+
+	beginDataLMTP(t, c, scanner)
+
+	// The limit is 10 and the drain budget is 2*10 = 20, so send well past
+	// (delivered limit + drain budget) bytes with no terminating dot: the drain
+	// budget is exhausted before any marker is seen.
+	io.WriteString(c, strings.Repeat("x", 64))
+
+	// Bound the wait: unfixed code drains unboundedly and never replies past the
+	// per-recipient status, so this deadline turns the hang into a failure.
+	c.SetReadDeadline(time.Now().Add(3 * time.Second))
+
+	if !scanner.Scan() {
+		t.Fatalf("expected a 552 response after the drain budget was exhausted, got none (server hung?): %v", scanner.Err())
+	}
+	if !strings.HasPrefix(scanner.Text(), "552 ") {
+		t.Fatalf("expected 552 after over-limit LMTP bounded drain, got: %q", scanner.Text())
+	}
+
+	assertConnClosed(t, c, "after over-limit LMTP drain")
+}
+
+// #46: the same bounded-drain guarantee must hold on the fallback path taken
+// when the backend does NOT implement LMTPSession (a single status is expanded
+// to every recipient).
+func TestServerSizeLimit_LMTP_Fallback_OverLimitDrainBounded(t *testing.T) {
+	_, s, c, scanner := testServerGreetedLMTP(t, func(s *smtp.Server) {
+		s.LMTP = true
+		s.MaxMessageBytes = 10
+	})
+	defer s.Close()
+	defer c.Close()
+
+	beginDataLMTP(t, c, scanner)
+
+	io.WriteString(c, strings.Repeat("x", 64))
+
+	c.SetReadDeadline(time.Now().Add(3 * time.Second))
+
+	if !scanner.Scan() {
+		t.Fatalf("expected a 552 response after the drain budget was exhausted, got none (server hung?): %v", scanner.Err())
+	}
+	if !strings.HasPrefix(scanner.Text(), "552 ") {
+		t.Fatalf("expected 552 after over-limit LMTP fallback bounded drain, got: %q", scanner.Text())
+	}
+
+	assertConnClosed(t, c, "after over-limit LMTP fallback drain")
+}
