@@ -180,6 +180,34 @@ func (p *parser) parsePath() (string, error) {
 	return mbox, nil
 }
 
+// parsePostmasterPath handles the domainless "<Postmaster>" forward-path form
+// defined in RFC 5321 §4.1.1.3. Because it has no "@domain", parseMailbox
+// rejects it; yet §4.5.1 requires every receiver to accept it, so RCPT must
+// special-case it. This form is valid only for the forward-path (RCPT TO), not
+// for the reverse-path (MAIL FROM), so the handling lives here rather than in
+// parsePath/parseReversePath.
+//
+// When p.s begins with a case-insensitive "<Postmaster>" delimited by
+// end-of-input or whitespace (so ESMTP parameters may follow), it consumes the
+// token and returns the local-part as typed (preserving the client's casing)
+// with ok == true. Otherwise it leaves p.s untouched and returns ok == false so
+// the caller can fall back to ordinary path parsing.
+func (p *parser) parsePostmasterPath() (mbox string, ok bool) {
+	const token = "<Postmaster>"
+	rest, matched := cutPrefixFold(p.s, token)
+	if !matched {
+		return "", false
+	}
+	// Guard against swallowing e.g. "<Postmaster>x" (not a valid delimiter) as
+	// the postmaster form; only end-of-input or whitespace may follow.
+	if len(rest) > 0 && rest[0] != ' ' && rest[0] != '\t' {
+		return "", false
+	}
+	mbox = p.s[1 : len(token)-1] // strip the angle brackets, keep original case
+	p.s = rest
+	return mbox, true
+}
+
 func (p *parser) parseMailbox() (string, error) {
 	localPart, err := p.parseLocalPart()
 	if err != nil {
