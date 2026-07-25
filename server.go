@@ -291,11 +291,23 @@ func (s *Server) handleConn(c *Conn) error {
 		if err == nil {
 			gotCmd = true
 
+			// errCount tallies *consecutive* protocol errors. Remember it before
+			// dispatch so a command that completes without adding an error can
+			// clear the tally below.
+			errCountBefore := c.errCount
+
 			cmd, arg, err := parseCmd(line)
 			if err != nil {
 				c.protocolError(501, EnhancedCode{5, 5, 2}, "Bad command")
 			} else {
 				c.handle(cmd, arg)
+			}
+
+			// A command that raised no new protocol error resets the run, so the
+			// connection is dropped only for a sustained burst of errors rather
+			// than the Nth error across an otherwise healthy session.
+			if c.errCount == errCountBefore {
+				c.errCount = 0
 			}
 
 			// Stop once a response could not be written: the peer is gone, so
@@ -304,6 +316,16 @@ func (s *Server) handleConn(c *Conn) error {
 				return c.writeErr
 			}
 		} else {
+			// If the server is shutting down, the read was interrupted by
+			// Server.Close: tell the client the service is closing (RFC 5321
+			// §3.8) instead of dropping the connection silently.
+			select {
+			case <-s.done:
+				c.writeResponse(421, EnhancedCode{4, 7, 0}, "Service not available, closing transmission channel")
+				return nil
+			default:
+			}
+
 			if err == io.EOF || errors.Is(err, net.ErrClosed) {
 				return nil
 			}
@@ -412,8 +434,11 @@ func (s *Server) Close() error {
 		}
 	}
 
+	// Tell each live connection the service is closing. beginServerClose wakes
+	// the connection's read so its own goroutine emits a 421 (RFC 5321 §3.8) and
+	// then closes the socket, rather than the socket being dropped silently.
 	for conn := range s.conns {
-		conn.Close()
+		conn.beginServerClose()
 	}
 	s.locker.Unlock()
 

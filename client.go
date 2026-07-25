@@ -688,6 +688,15 @@ func (cmd *DataCommand) close() error {
 		return cmd.closeErr
 	}
 
+	// The terminating flush writes any buffered body bytes plus the final
+	// ".\r\n". Bound it with a write deadline so a wedged peer that has stopped
+	// reading cannot block the close write indefinitely. It is cleared before
+	// returning so the caller's response read arms its own deadline.
+	if cmd.client.SubmissionTimeout > 0 {
+		_ = cmd.client.conn.SetWriteDeadline(time.Now().Add(cmd.client.SubmissionTimeout))
+		defer func() { _ = cmd.client.conn.SetWriteDeadline(time.Time{}) }()
+	}
+
 	if err := cmd.wc.Close(); err != nil {
 		cmd.closeErr = err
 		return err

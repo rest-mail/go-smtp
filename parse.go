@@ -64,7 +64,14 @@ func parseArgs(s string) (map[string]string, error) {
 		// Split on the first '=' only: a parameter value may itself contain
 		// '=' (e.g. base64-ish or AUTH values).
 		key, value, _ := strings.Cut(arg, "=")
-		argMap[strings.ToUpper(key)] = value
+		key = strings.ToUpper(key)
+		// RFC 5321 §4.1.1.11: an esmtp-keyword must not appear more than once in
+		// a single command. Reject a repeat rather than silently collapsing it in
+		// the map (which would keep only the last value).
+		if _, dup := argMap[key]; dup {
+			return nil, fmt.Errorf("duplicate ESMTP parameter %q", key)
+		}
+		argMap[key] = value
 	}
 	return argMap, nil
 }

@@ -250,6 +250,25 @@ func (c *Conn) Close() error {
 	return c.conn.Close()
 }
 
+// beginServerClose is invoked by Server.Close on every live connection to start
+// a service-closing teardown. It tears down any in-flight message pipe and wakes
+// a blocked read (by expiring the read deadline) so the connection's own command
+// loop returns, notices the server is shutting down, emits a 421 service-closing
+// reply and then closes the socket. The reply is written by the connection
+// goroutine (never here) so it cannot race that goroutine's own writes; this
+// method only sets a read deadline, which is safe to do from another goroutine.
+func (c *Conn) beginServerClose() {
+	c.locker.Lock()
+	defer c.locker.Unlock()
+
+	if c.bdatPipe != nil {
+		c.bdatPipe.CloseWithError(ErrDataReset)
+		c.bdatPipe = nil
+	}
+
+	_ = c.conn.SetReadDeadline(time.Now())
+}
+
 // TLSConnectionState returns the connection's TLS connection state.
 // Zero values are returned if the connection doesn't use TLS.
 func (c *Conn) TLSConnectionState() (state tls.ConnectionState, ok bool) {
@@ -493,6 +512,13 @@ func (c *Conn) handleMail(arg string) {
 	p := parser{s: strings.TrimSpace(arg)}
 	from, err := p.parseReversePath()
 	if err != nil {
+		c.writeResponse(501, EnhancedCode{5, 5, 2}, "Was expecting MAIL arg syntax of FROM:<address>")
+		return
+	}
+	// RFC 5321 §4.1.1.2: whitespace must separate the reverse-path from any
+	// Mail-parameters. Reject e.g. "MAIL FROM:<a@b>SIZE=10" rather than silently
+	// treating the run-on text as an ESMTP parameter.
+	if p.s != "" && p.s[0] != ' ' && p.s[0] != '\t' {
 		c.writeResponse(501, EnhancedCode{5, 5, 2}, "Was expecting MAIL arg syntax of FROM:<address>")
 		return
 	}
@@ -892,6 +918,14 @@ func (c *Conn) handleRcpt(arg string) {
 		return
 	}
 
+	// RFC 5321 §4.1.1.3: whitespace must separate the forward-path from any
+	// Rcpt-parameters. Reject run-on text (e.g. "RCPT TO:<a@b>NOTIFY=NEVER")
+	// rather than silently treating it as an ESMTP parameter.
+	if p.s != "" && p.s[0] != ' ' && p.s[0] != '\t' {
+		c.writeResponse(501, EnhancedCode{5, 5, 2}, "Was expecting RCPT arg syntax of TO:<address>")
+		return
+	}
+
 	args, err := parseArgs(p.s)
 	if err != nil {
 		c.writeResponse(501, EnhancedCode{5, 5, 4}, "Unable to parse RCPT ESMTP parameters")
@@ -1037,9 +1071,18 @@ func (c *Conn) handleAuth(arg string) {
 		c.writeResponse(502, EnhancedCode{5, 5, 4}, "Missing parameter")
 		return
 	}
+	// RFC 4954 §4: the AUTH command carries a mechanism and at most one optional
+	// initial-response. Reject any trailing tokens rather than silently ignoring
+	// them.
+	if len(parts) > 2 {
+		c.writeResponse(501, EnhancedCode{5, 5, 4}, "Too many parameters")
+		return
+	}
 
 	if !c.authAllowed() {
-		c.writeResponse(523, EnhancedCode{5, 7, 10}, "TLS is required")
+		// RFC 3207 §4: refuse AUTH on an unprotected connection with 530 5.7.0
+		// ("Must issue a STARTTLS command first"). 523 is unassigned.
+		c.writeResponse(530, EnhancedCode{5, 7, 0}, "Must issue a STARTTLS command first")
 		return
 	}
 
