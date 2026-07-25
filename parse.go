@@ -108,6 +108,14 @@ type parser struct {
 	s string
 }
 
+// isCTL reports whether ch is an ASCII control byte: the C0 range (< 0x20,
+// which includes NUL, TAB, CR and LF) or DEL (0x7F). RFC 5321 §4.1.2 excludes
+// these from Let-dig and qtextSMTP. Bytes > 0x7F are intentionally not treated
+// as control bytes so that SMTPUTF8 addresses remain permitted.
+func isCTL(ch byte) bool {
+	return ch < 0x20 || ch == 0x7F
+}
+
 func (p *parser) peekByte() (byte, bool) {
 	if len(p.s) == 0 {
 		return 0, false
@@ -196,6 +204,9 @@ func (p *parser) parseMailbox() (string, error) {
 		if ch == ' ' || ch == '\t' || ch == '>' {
 			break
 		}
+		if isCTL(ch) {
+			return "", fmt.Errorf("control byte in domain")
+		}
 		p.readByte()
 		sb.WriteByte(ch)
 	}
@@ -222,6 +233,12 @@ func (p *parser) parseLocalPart() (string, error) {
 			if !ok {
 				return "", fmt.Errorf("malformed quoted-string")
 			}
+			// Reject control bytes in both qtextSMTP and quoted-pairSMTP
+			// (RFC 5321 §4.1.2); ch here is either the literal quoted char
+			// or the byte following a backslash escape.
+			if isCTL(ch) {
+				return "", fmt.Errorf("control byte in quoted-string")
+			}
 			sb.WriteByte(ch)
 		}
 	} else { // dot-string
@@ -235,6 +252,9 @@ func (p *parser) parseLocalPart() (string, error) {
 				return sb.String(), nil
 			case '(', ')', '<', '>', '[', ']', ':', ';', '\\', ',', '"', ' ', '\t':
 				return "", fmt.Errorf("malformed dot-string")
+			}
+			if isCTL(ch) {
+				return "", fmt.Errorf("control byte in dot-string")
 			}
 			p.readByte()
 			sb.WriteByte(ch)
