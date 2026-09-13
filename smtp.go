@@ -71,6 +71,18 @@ type MailOptions struct {
 	//
 	// Defined in RFC 4954.
 	Auth *string
+
+	// Value of the BY= argument, or nil if unset.
+	//
+	// Defined in RFC 2852, which places it on MAIL: the deadline describes the
+	// message, not an individual recipient.
+	DeliverBy *DeliverByOptions
+
+	// Value of the MT-PRIORITY= argument, or nil if unset. Ranges from -9 to 9.
+	//
+	// Defined in RFC 6710, which places it on MAIL: the priority describes the
+	// message, not an individual recipient.
+	MTPriority *int
 }
 
 type DSNNotify string
@@ -124,10 +136,4 @@ type RcptOptions struct {
 	// Time value of the RRVS= argument
 	// or the zero time if unset.
 	RequireRecipientValidSince time.Time
-
-	// Value of BY= argument or nil if unset.
-	DeliverBy *DeliverByOptions
-
-	// Value of MT-PRIORITY= or nil if unset.
-	MTPriority *int
 }

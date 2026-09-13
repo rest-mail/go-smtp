@@ -87,6 +87,10 @@ func parseHelloArgument(arg string) (string, error) {
 	return domain, nil
 }
 
+// maxDeliverBySeconds is the largest by-time RFC 2852 section 4 can express:
+// its grammar allows at most nine digits.
+const maxDeliverBySeconds = 999999999
+
 // Parses the BY argument defined in RFC2852 section 4.
 // Returns pointer to options or nil if invalid.
 func parseDeliverByArgument(arg string) *DeliverByOptions {
@@ -101,6 +105,13 @@ func parseDeliverByArgument(arg string) *DeliverByOptions {
 	modeValue := DeliverByMode(modeStr)
 	secondsValue, err := strconv.Atoi(secondsStr)
 	if err != nil || (modeValue == DeliverByReturn && secondsValue < 1) {
+		return nil
+	}
+	// A by-time outside the nine digits the grammar allows is malformed, not
+	// merely large. Rejecting it here keeps an absurd deadline (and, on a
+	// 64-bit platform, one that overflows the resulting Duration) out of the
+	// backend.
+	if secondsValue > maxDeliverBySeconds || secondsValue < -maxDeliverBySeconds {
 		return nil
 	}
 	return &DeliverByOptions{

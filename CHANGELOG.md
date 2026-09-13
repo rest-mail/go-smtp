@@ -6,6 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking:** `MT-PRIORITY` (RFC 6710) and `BY` (RFC 2852, the DELIVERBY
+  extension) are now MAIL parameters, which is where both RFCs define them —
+  each describes the message, not an individual recipient. `DeliverBy` and
+  `MTPriority` have moved from `RcptOptions` to `MailOptions`, the server reads
+  both from `MAIL` and no longer accepts them on `RCPT`, and `Client.Mail` sends
+  them instead of `Client.Rcpt`. Previously neither extension was usable in
+  either direction despite being advertised: a conforming client's
+  `MAIL FROM:<a@example.org> BY=120;R` was answered `500 5.5.4 Unknown MAIL FROM
+  argument`, and this client's RCPT parameters were refused by a conforming
+  server.
+- `Client.Mail` now fails when `DeliverBy` or `MTPriority` is set and the server
+  has not advertised the extension, rather than dropping the parameter. A caller
+  that asked for a delivery deadline and silently did not get one has no way to
+  find out. (`AUTH` is unchanged: RFC 4954 §5 permits discarding it.)
+
+### Fixed
+
+- The `BY` parser rejects a by-time wider than the nine digits RFC 2852 §4
+  allows, instead of passing an arbitrarily large deadline to the backend.
+
 ## [0.28.3] - 2026-07-26
 
 ### Fixed

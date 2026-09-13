@@ -499,6 +499,40 @@ func (c *Client) buildMailCmd(from string, opts *MailOptions) (string, error) {
 		}
 		// We can safely discard parameter if server does not support AUTH.
 	}
+	// BY and MT-PRIORITY are MAIL parameters (RFC 2852 §4, RFC 6710 §3): both
+	// describe the message rather than a recipient. Unlike AUTH, neither can be
+	// discarded when the server has not advertised it — a caller that asked for
+	// a delivery deadline and silently did not get one has no way to find out.
+	if opts != nil && opts.DeliverBy != nil {
+		if _, ok := c.ext["DELIVERBY"]; !ok {
+			return "", errors.New("smtp: server does not support DELIVERBY")
+		}
+		if opts.DeliverBy.Mode != DeliverByNotify && opts.DeliverBy.Mode != DeliverByReturn {
+			return "", errors.New("smtp: unknown DELIVERBY mode")
+		}
+		// RFC 2852 §4 counts the deadline in whole seconds, so a sub-second
+		// remainder is truncated rather than rounded up into a later deadline.
+		by := int64(opts.DeliverBy.Time / time.Second)
+		if opts.DeliverBy.Mode == DeliverByReturn && by < 1 {
+			return "", errors.New("smtp: DELIVERBY time must be greater than zero in return mode")
+		}
+		if by > maxDeliverBySeconds || by < -maxDeliverBySeconds {
+			return "", errors.New("smtp: DELIVERBY time is out of range")
+		}
+		fmt.Fprintf(&sb, " BY=%d;%s", by, opts.DeliverBy.Mode)
+		if opts.DeliverBy.Trace {
+			sb.WriteString("T")
+		}
+	}
+	if opts != nil && opts.MTPriority != nil {
+		if _, ok := c.ext["MT-PRIORITY"]; !ok {
+			return "", errors.New("smtp: server does not support MT-PRIORITY")
+		}
+		if *opts.MTPriority < -9 || *opts.MTPriority > 9 {
+			return "", errors.New("smtp: MT-PRIORITY must be between -9 and 9")
+		}
+		fmt.Fprintf(&sb, " MT-PRIORITY=%d", *opts.MTPriority)
+	}
 	return sb.String(), nil
 }
 
@@ -569,22 +603,6 @@ func (c *Client) buildRcptCmd(to string, opts *RcptOptions) (string, error) {
 	}
 	if _, ok := c.ext["RRVS"]; ok && opts != nil && !opts.RequireRecipientValidSince.IsZero() {
 		sb.WriteString(fmt.Sprintf(" RRVS=%s", opts.RequireRecipientValidSince.Format(time.RFC3339)))
-	}
-	if _, ok := c.ext["DELIVERBY"]; ok && opts != nil && opts.DeliverBy != nil {
-		if opts.DeliverBy.Mode == DeliverByReturn && opts.DeliverBy.Time < 1 {
-			return "", errors.New("smtp: DELIVERBY mode must be greater than zero with return mode")
-		}
-		arg := fmt.Sprintf(" BY=%d;%s", int(opts.DeliverBy.Time.Seconds()), opts.DeliverBy.Mode)
-		if opts.DeliverBy.Trace {
-			arg += "T"
-		}
-		sb.WriteString(arg)
-	}
-	if _, ok := c.ext["MT-PRIORITY"]; ok && opts != nil && opts.MTPriority != nil {
-		if *opts.MTPriority < -9 || *opts.MTPriority > 9 {
-			return "", errors.New("smtp: MT-PRIORITY must be between -9 and 9")
-		}
-		sb.WriteString(fmt.Sprintf(" MT-PRIORITY=%d", *opts.MTPriority))
 	}
 	return sb.String(), nil
 }

@@ -1844,15 +1844,15 @@ func TestServerDELIVERBY(t *testing.T) {
 		t.Fatal("Missing capability: DELIVERBY")
 	}
 
-	io.WriteString(c, "MAIL FROM:<root@nsa.gov>\r\n")
-	scanner.Scan()
-
+	// RFC 2852 §4 defines BY as a MAIL FROM parameter: the deadline describes
+	// the message, not an individual recipient. A malformed value is refused
+	// before the transaction opens, so each attempt below starts a fresh one.
 	malformedMsgs := []string{
-		"RCPT TO:<root@gchq.gov.uk> BY=",
-		"RCPT TO:<root@gchq.gov.uk> BY=1234",
-		"RCPT TO:<root@gchq.gov.uk> BY=123;RT;",
-		"RCPT TO:<root@gchq.gov.uk> BY=0;R",
-		"RCPT TO:<root@gchq.gov.uk> BY=49;RT",
+		"MAIL FROM:<root@nsa.gov> BY=",
+		"MAIL FROM:<root@nsa.gov> BY=1234",
+		"MAIL FROM:<root@nsa.gov> BY=123;RT;",
+		"MAIL FROM:<root@nsa.gov> BY=0;R",
+		"MAIL FROM:<root@nsa.gov> BY=49;RT",
 	}
 
 	for _, msg := range malformedMsgs {
@@ -1863,11 +1863,18 @@ func TestServerDELIVERBY(t *testing.T) {
 		}
 	}
 
-	io.WriteString(c, "RCPT TO:<root@gchq.gov.uk> BY=100;NT\r\n")
+	io.WriteString(c, "MAIL FROM:<root@nsa.gov> BY=100;NT\r\n")
 	scanner.Scan()
 
 	if !strings.HasPrefix(scanner.Text(), "250 ") {
 		t.Fatal("Invalid BY parameter value:", scanner.Text())
+	}
+
+	io.WriteString(c, "RCPT TO:<root@gchq.gov.uk>\r\n")
+	scanner.Scan()
+
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid RCPT response:", scanner.Text())
 	}
 
 	// complete the transaction
@@ -1877,12 +1884,12 @@ func TestServerDELIVERBY(t *testing.T) {
 	io.WriteString(c, ".\r\n")
 	scanner.Scan()
 
-	opts := be.anonmsgs[0].RcptOpts
-	if opts == nil || len(opts) != 1 {
-		t.Fatal("Invalid number of recipients:", opts)
+	opts := be.anonmsgs[0].Opts
+	if opts == nil {
+		t.Fatal("No MAIL options were captured")
 	}
 
-	deliverByOpts := opts[0].DeliverBy
+	deliverByOpts := opts.DeliverBy
 
 	if deliverByOpts == nil {
 		t.Fatal("Deliver by options is nil:", opts)
@@ -1913,14 +1920,13 @@ func TestServerMTPRIORITY(t *testing.T) {
 		t.Fatal("Missing capability: MT-PRIORITY")
 	}
 
-	io.WriteString(c, "MAIL FROM:<root@nsa.gov>\r\n")
-	scanner.Scan()
-
+	// RFC 6710 §3 defines MT-PRIORITY as a MAIL FROM parameter: the priority
+	// describes the message, not an individual recipient.
 	malformedMsgs := []string{
-		"RCPT TO:<root@gchq.gov.uk> MT-PRIORITY=",
-		"RCPT TO:<root@gchq.gov.uk> MT-PRIORITY=foo",
-		"RCPT TO:<root@gchq.gov.uk> MT-PRIORITY=-10",
-		"RCPT TO:<root@gchq.gov.uk> MT-PRIORITY=10",
+		"MAIL FROM:<root@nsa.gov> MT-PRIORITY=",
+		"MAIL FROM:<root@nsa.gov> MT-PRIORITY=foo",
+		"MAIL FROM:<root@nsa.gov> MT-PRIORITY=-10",
+		"MAIL FROM:<root@nsa.gov> MT-PRIORITY=10",
 	}
 
 	for _, msg := range malformedMsgs {
@@ -1933,11 +1939,18 @@ func TestServerMTPRIORITY(t *testing.T) {
 
 	expectedPriority := -2
 
-	io.WriteString(c, fmt.Sprintf("RCPT TO:<root@gchq.gov.uk> MT-PRIORITY=%d\r\n", expectedPriority))
+	io.WriteString(c, fmt.Sprintf("MAIL FROM:<root@nsa.gov> MT-PRIORITY=%d\r\n", expectedPriority))
 	scanner.Scan()
 
 	if !strings.HasPrefix(scanner.Text(), "250 ") {
 		t.Fatal("Invalid MT-PRIORITY parameter value:", scanner.Text())
+	}
+
+	io.WriteString(c, "RCPT TO:<root@gchq.gov.uk>\r\n")
+	scanner.Scan()
+
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid RCPT response:", scanner.Text())
 	}
 
 	// complete the transaction
@@ -1947,12 +1960,12 @@ func TestServerMTPRIORITY(t *testing.T) {
 	io.WriteString(c, ".\r\n")
 	scanner.Scan()
 
-	opts := be.anonmsgs[0].RcptOpts
-	if opts == nil || len(opts) != 1 {
-		t.Fatal("Invalid number of recipients:", opts)
+	opts := be.anonmsgs[0].Opts
+	if opts == nil {
+		t.Fatal("No MAIL options were captured")
 	}
 
-	priority := opts[0].MTPriority
+	priority := opts.MTPriority
 
 	if priority == nil {
 		t.Fatal("MtPriority is nil:", opts)
@@ -1960,5 +1973,37 @@ func TestServerMTPRIORITY(t *testing.T) {
 
 	if *priority != expectedPriority {
 		t.Fatal("Incorrect MtPriority parameter value:", fmt.Sprintf("expected %d, got %d", expectedPriority, *priority))
+	}
+}
+
+// Both parameters must now be refused where they used to be accepted. A client
+// sending either on RCPT is sending it somewhere neither RFC defines, and
+// quietly accepting it there would hide the mistake — and, for a multi-recipient
+// message, leave it ambiguous which recipient's value described the message.
+func TestServerDeliverByAndMTPriorityRejectedOnRcpt(t *testing.T) {
+	_, s, c, scanner, _ := testServerEhlo(t,
+		func(s *smtp.Server) {
+			s.EnableDELIVERBY = true
+			s.EnableMTPRIORITY = true
+		})
+	defer s.Close()
+	defer c.Close()
+
+	io.WriteString(c, "MAIL FROM:<root@nsa.gov>\r\n")
+	scanner.Scan()
+
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid MAIL response:", scanner.Text())
+	}
+
+	for _, msg := range []string{
+		"RCPT TO:<root@gchq.gov.uk> BY=100;NT",
+		"RCPT TO:<root@gchq.gov.uk> MT-PRIORITY=6",
+	} {
+		io.WriteString(c, msg+"\r\n")
+		scanner.Scan()
+		if !strings.HasPrefix(scanner.Text(), "500 5.5.4") {
+			t.Fatal("Unexpected res on a MAIL parameter sent to RCPT:", scanner.Text())
+		}
 	}
 }
