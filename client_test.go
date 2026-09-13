@@ -1249,11 +1249,12 @@ func TestClientRRVS(t *testing.T) {
 	}
 }
 
-var deliverByServer = `220 hello world
-250 ok
+// didHello is set below, so the greeting and the EHLO exchange have already
+// happened: the next line on the wire is the reply to MAIL.
+var deliverByServer = `250 ok
 `
 
-var deliverByClient = `RCPT TO:<root@nsa.gov> BY=100;RT
+var deliverByClient = `MAIL FROM:<root@nsa.gov> BY=100;RT
 `
 
 func TestClientDELIVERBY(t *testing.T) {
@@ -1272,24 +1273,26 @@ func TestClientDELIVERBY(t *testing.T) {
 	c := NewClient(fake)
 	c.didHello = true
 	c.ext = map[string]string{"DELIVERBY": ""}
-	c.Rcpt("root@nsa.gov", &RcptOptions{
+	// RFC 2852 §4 puts BY on MAIL: a conforming server refuses it on RCPT.
+	if err := c.Mail("root@nsa.gov", &MailOptions{
 		DeliverBy: &DeliverByOptions{
 			Time:  100 * time.Second,
 			Mode:  DeliverByReturn,
 			Trace: true,
 		},
-	})
+	}); err != nil {
+		t.Fatal("Mail:", err)
+	}
 	c.Close()
 	if actualcmds := wrote.String(); client != actualcmds {
 		t.Errorf("wrote %q; want %q", actualcmds, client)
 	}
 }
 
-var mtPriorityServer = `220 hello world
-250 ok
+var mtPriorityServer = `250 ok
 `
 
-var mtPriorityClient = `RCPT TO:<root@nsa.gov> MT-PRIORITY=6
+var mtPriorityClient = `MAIL FROM:<root@nsa.gov> MT-PRIORITY=6
 `
 
 func TestClientMTPRIORITY(t *testing.T) {
@@ -1309,11 +1312,120 @@ func TestClientMTPRIORITY(t *testing.T) {
 	c.didHello = true
 	c.ext = map[string]string{"MT-PRIORITY": ""}
 	priority := 6
-	c.Rcpt("root@nsa.gov", &RcptOptions{
+	// RFC 6710 §3 puts MT-PRIORITY on MAIL: a conforming server refuses it on
+	// RCPT.
+	if err := c.Mail("root@nsa.gov", &MailOptions{
 		MTPriority: &priority,
-	})
+	}); err != nil {
+		t.Fatal("Mail:", err)
+	}
 	c.Close()
 	if actualcmds := wrote.String(); client != actualcmds {
 		t.Errorf("wrote %q; want %q", actualcmds, client)
+	}
+}
+
+// newMailParamClient returns a client that believes it has greeted a server
+// advertising exts, writing whatever it sends into wrote.
+func newMailParamClient(exts ...string) (c *Client, wrote *bytes.Buffer) {
+	wrote = &bytes.Buffer{}
+	var fake faker
+	fake.ReadWriter = struct {
+		io.Reader
+		io.Writer
+	}{
+		strings.NewReader("250 ok\r\n"),
+		wrote,
+	}
+	c = NewClient(fake)
+	c.didHello = true
+	c.ext = make(map[string]string, len(exts))
+	for _, ext := range exts {
+		c.ext[ext] = ""
+	}
+	return c, wrote
+}
+
+// Neither parameter may be sent to a server that has not advertised the
+// extension (RFC 2852 §4, RFC 6710 §3). Dropping one silently would leave the
+// caller believing a deadline or a priority had been asked for when none was,
+// with nothing in the transcript to say otherwise — so Mail refuses instead.
+func TestClientMailParamsUnadvertised(t *testing.T) {
+	priority := 6
+	for _, tc := range []struct {
+		name string
+		opts *MailOptions
+	}{
+		{"DELIVERBY", &MailOptions{DeliverBy: &DeliverByOptions{
+			Time: 100 * time.Second,
+			Mode: DeliverByNotify,
+		}}},
+		{"MT-PRIORITY", &MailOptions{MTPriority: &priority}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, wrote := newMailParamClient()
+
+			if err := c.Mail("root@nsa.gov", tc.opts); err == nil {
+				t.Fatal("Mail accepted a parameter the server never advertised")
+			}
+			if wrote.Len() != 0 {
+				t.Errorf("wrote %q; want nothing sent", wrote.String())
+			}
+		})
+	}
+}
+
+// A value the extension cannot express is refused before it reaches the wire,
+// rather than sent for the server to reject mid-transaction.
+func TestClientMailParamsOutOfRange(t *testing.T) {
+	tooLow, tooHigh := -10, 10
+	for _, tc := range []struct {
+		name string
+		ext  string
+		opts *MailOptions
+	}{
+		{"MT-PRIORITY below the range", "MT-PRIORITY", &MailOptions{MTPriority: &tooLow}},
+		{"MT-PRIORITY above the range", "MT-PRIORITY", &MailOptions{MTPriority: &tooHigh}},
+		{"a zero deadline in return mode", "DELIVERBY", &MailOptions{DeliverBy: &DeliverByOptions{
+			Mode: DeliverByReturn,
+		}}},
+		{"a deadline wider than nine digits", "DELIVERBY", &MailOptions{DeliverBy: &DeliverByOptions{
+			Time: (maxDeliverBySeconds + 1) * time.Second,
+			Mode: DeliverByNotify,
+		}}},
+		{"an unknown deliver-by mode", "DELIVERBY", &MailOptions{DeliverBy: &DeliverByOptions{
+			Time: 100 * time.Second,
+			Mode: DeliverByMode("X"),
+		}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, wrote := newMailParamClient(tc.ext)
+
+			if err := c.Mail("root@nsa.gov", tc.opts); err == nil {
+				t.Fatal("Mail accepted a value the extension cannot express")
+			}
+			if wrote.Len() != 0 {
+				t.Errorf("wrote %q; want nothing sent", wrote.String())
+			}
+		})
+	}
+}
+
+// A sub-second remainder is truncated, not rounded up: RFC 2852 §4 counts the
+// deadline in whole seconds, and rounding up would ask for a later one than the
+// caller set.
+func TestClientDeliverByTruncatesToSeconds(t *testing.T) {
+	c, wrote := newMailParamClient("DELIVERBY")
+
+	if err := c.Mail("root@nsa.gov", &MailOptions{
+		DeliverBy: &DeliverByOptions{
+			Time: 100*time.Second + 999*time.Millisecond,
+			Mode: DeliverByNotify,
+		},
+	}); err != nil {
+		t.Fatal("Mail:", err)
+	}
+	if want := "MAIL FROM:<root@nsa.gov> BY=100;N\r\n"; wrote.String() != want {
+		t.Errorf("wrote %q; want %q", wrote.String(), want)
 	}
 }
