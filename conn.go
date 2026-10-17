@@ -1,6 +1,7 @@
 package smtp
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/base64"
@@ -64,6 +65,10 @@ type Conn struct {
 	dataResult    chan error
 	bytesReceived int64 // counts total size of chunks when BDAT is used
 
+	// closing is set once the connection's own goroutine has closed it, so the
+	// command loop stops instead of handling input still buffered after it.
+	closing bool
+
 	fromReceived bool
 	recipients   []string
 	didAuth      bool
@@ -121,7 +126,7 @@ func (c *Conn) handle(cmd string, arg string) {
 	defer func() {
 		if err := recover(); err != nil {
 			c.writeResponse(421, EnhancedCode{4, 0, 0}, "Internal server error")
-			c.Close()
+			c.closeAfterReplies()
 
 			stack := debug.Stack()
 			c.server.ErrorLog.Printf("panic serving %v: %v\n%s", c.conn.RemoteAddr(), err, stack)
@@ -167,7 +172,7 @@ func (c *Conn) handle(cmd string, arg string) {
 		c.handleData(arg)
 	case "QUIT":
 		c.writeResponse(221, EnhancedCode{2, 0, 0}, "Bye")
-		c.Close()
+		c.closeAfterReplies()
 	case "AUTH":
 		c.handleAuth(arg)
 	case "STARTTLS":
@@ -248,6 +253,15 @@ func (c *Conn) Close() error {
 	}
 
 	return c.conn.Close()
+}
+
+// closeAfterReplies sends the buffered replies, then closes the connection.
+// Only the connection's own goroutine may call it: it writes to the reply
+// buffer, which Close (callable from anywhere) must not touch.
+func (c *Conn) closeAfterReplies() {
+	c.flush()
+	c.closing = true
+	c.Close()
 }
 
 // beginServerClose is invoked by Server.Close on every live connection to start
@@ -370,7 +384,7 @@ func (c *Conn) protocolError(code int, ec EnhancedCode, msg string) {
 	c.errCount++
 	if c.errCount > errThreshold {
 		c.writeResponse(500, EnhancedCode{5, 5, 1}, "Too many errors. Quiting now")
-		c.Close()
+		c.closeAfterReplies()
 	}
 }
 
@@ -398,7 +412,7 @@ func (c *Conn) handleGreet(enhanced bool, arg string) {
 			c.helo = ""
 			c.writeError(451, EnhancedCode{4, 0, 0}, err)
 			if isTerminating(err) {
-				c.Close()
+				c.closeAfterReplies()
 			}
 			return
 		}
@@ -666,13 +680,13 @@ func (c *Conn) handleMail(arg string) {
 			c.writeResponse(se.Code, se.EnhancedCode, se.Message)
 			c.fromReceived = true
 			if isTerminating(err) {
-				c.Close()
+				c.closeAfterReplies()
 			}
 			return
 		}
 		c.writeError(451, EnhancedCode{4, 0, 0}, err)
 		if isTerminating(err) {
-			c.Close()
+			c.closeAfterReplies()
 		}
 		return
 	}
@@ -1022,13 +1036,13 @@ func (c *Conn) handleRcpt(arg string) {
 			c.recipients = append(c.recipients, recipient)
 			c.writeResponse(se.Code, se.EnhancedCode, se.Message)
 			if isTerminating(err) {
-				c.Close()
+				c.closeAfterReplies()
 			}
 			return
 		}
 		c.writeError(451, EnhancedCode{4, 0, 0}, err)
 		if isTerminating(err) {
-			c.Close()
+			c.closeAfterReplies()
 		}
 		return
 	}
@@ -1107,7 +1121,7 @@ func (c *Conn) handleAuth(arg string) {
 	if err != nil {
 		c.writeError(454, EnhancedCode{4, 7, 0}, err)
 		if isTerminating(err) {
-			c.Close()
+			c.closeAfterReplies()
 		}
 		return
 	}
@@ -1118,7 +1132,7 @@ func (c *Conn) handleAuth(arg string) {
 		if err != nil {
 			c.writeError(454, EnhancedCode{4, 7, 0}, err)
 			if isTerminating(err) {
-				c.Close()
+				c.closeAfterReplies()
 			}
 			return
 		}
@@ -1131,7 +1145,7 @@ func (c *Conn) handleAuth(arg string) {
 			// A well-behaved mechanism finishes in a few steps; refuse to keep
 			// looping and close, rather than trusting the mechanism to stop.
 			c.writeResponse(454, EnhancedCode{4, 7, 0}, "Too many authentication steps")
-			c.Close()
+			c.closeAfterReplies()
 			return
 		}
 
@@ -1140,6 +1154,8 @@ func (c *Conn) handleAuth(arg string) {
 			encoded = base64.StdEncoding.EncodeToString(challenge)
 		}
 		c.writeResponse(334, NoEnhancedCode, encoded)
+		// The client sends its response only after it sees the challenge.
+		c.flush()
 
 		encoded, err = c.readLine()
 		if err != nil {
@@ -1191,7 +1207,7 @@ func (c *Conn) handleAuthReadError(err error) {
 			c.writeResponse(421, EnhancedCode{4, 4, 0}, "Connection error, sorry")
 		}
 	}
-	c.Close()
+	c.closeAfterReplies()
 }
 
 func decodeSASLResponse(s string) ([]byte, error) {
@@ -1232,6 +1248,9 @@ func (c *Conn) handleStartTLS() {
 	}
 
 	c.writeResponse(220, EnhancedCode{2, 0, 0}, "Ready to start TLS")
+	// The client starts the handshake only after it sees the 220, and the
+	// handshake reads the socket directly, bypassing readLine's flush.
+	c.flush()
 
 	// Upgrade to TLS
 	tlsConn := tls.Server(c.conn, c.server.TLSConfig)
@@ -1250,7 +1269,7 @@ func (c *Conn) handleStartTLS() {
 		c.writeResponse(550, EnhancedCode{5, 0, 0}, "Handshake error")
 		// The connection is in an indeterminate, half-upgraded state; do not
 		// keep serving commands on it.
-		c.Close()
+		c.closeAfterReplies()
 		return
 	}
 
@@ -1354,6 +1373,8 @@ func (c *Conn) handleData(arg string) {
 
 	// We have recipients, go to accept data
 	c.writeResponse(354, NoEnhancedCode, "Go ahead. End your data with <CR><LF>.<CR><LF>")
+	// The client sends the body only after it sees the 354.
+	c.flush()
 
 	defer c.reset()
 
@@ -1385,7 +1406,7 @@ func (c *Conn) handleData(arg string) {
 	if isBodyReadTimeout(dataErr) {
 		c.bodyReadDeadline = 0
 		c.writeResponse(errBodyTimeout.Code, errBodyTimeout.EnhancedCode, errBodyTimeout.Message)
-		c.Close()
+		c.closeAfterReplies()
 		return
 	}
 
@@ -1394,7 +1415,7 @@ func (c *Conn) handleData(arg string) {
 	if isTerminating(dataErr) {
 		c.bodyReadDeadline = 0
 		c.writeResponse(dataErrorToStatus(dataErr))
-		c.Close()
+		c.closeAfterReplies()
 		return
 	}
 
@@ -1409,7 +1430,7 @@ func (c *Conn) handleData(arg string) {
 	c.writeResponse(code, enhancedCode, msg)
 
 	if mustClose {
-		c.Close()
+		c.closeAfterReplies()
 	}
 }
 
@@ -1447,6 +1468,8 @@ func (c *Conn) handleBdat(arg string) {
 
 	if c.server.MaxMessageBytes != 0 && c.bytesReceived+int64(size) > c.server.MaxMessageBytes {
 		c.writeResponse(552, EnhancedCode{5, 3, 4}, "Max message size exceeded")
+		// Never wait on the client for chunk data while holding replies back.
+		c.flush()
 
 		// Discard the chunk itself without passing it to the backend. Chunk data
 		// is opaque and may contain lines longer than the command-line limit, so
@@ -1464,7 +1487,7 @@ func (c *Conn) handleBdat(arg string) {
 		// stream is desynced; close deliberately instead of continuing (matching
 		// the DATA-path over-limit behavior of not reusing an unframed stream).
 		if derr != nil {
-			c.Close()
+			c.closeAfterReplies()
 			return
 		}
 
@@ -1526,6 +1549,9 @@ func (c *Conn) handleBdat(arg string) {
 	// (RFC 3030 does not suspend the RFC 5321 §4.5.3.1.6 line limit between
 	// chunks). A deferred restore keeps that guarantee in one place, and runs
 	// only after the error branch has finished draining the rest of the chunk.
+	// Never wait on the client for chunk data while holding replies back.
+	c.flush()
+
 	c.lineLimitReader.LineLimit = 0
 	defer func() {
 		c.lineLimitReader.LineLimit = c.server.MaxLineLength
@@ -1561,12 +1587,12 @@ func (c *Conn) handleBdat(arg string) {
 			// The raw net error is logged, never sent to the client.
 			c.server.ErrorLog.Printf("BDAT chunk read timed out from %v: %v", c.conn.RemoteAddr(), err)
 			c.writeResponse(errBodyTimeout.Code, errBodyTimeout.EnhancedCode, errBodyTimeout.Message)
-			c.Close()
+			c.closeAfterReplies()
 		case err == errPanic || isTerminating(err):
 			// A panic or a backend-requested termination: send the mapped status
 			// (already generic) and drop the connection.
 			c.writeResponse(dataErrorToStatus(err))
-			c.Close()
+			c.closeAfterReplies()
 		case drainErr != nil:
 			// The announced chunk could not be fully read from the client (a
 			// transport error other than a timeout): the command stream is
@@ -1575,7 +1601,7 @@ func (c *Conn) handleBdat(arg string) {
 			// commands.
 			c.server.ErrorLog.Printf("BDAT chunk read error from %v: %v", c.conn.RemoteAddr(), err)
 			c.writeResponse(errBodyReadFailed.Code, errBodyReadFailed.EnhancedCode, errBodyReadFailed.Message)
-			c.Close()
+			c.closeAfterReplies()
 		default:
 			// The backend rejected the chunk early but it was fully drained from
 			// the client, so the stream is still framed. Report the backend's
@@ -1610,7 +1636,7 @@ func (c *Conn) handleBdat(arg string) {
 		// Termination is honored for single-response (non-LMTP) BDAT; per-recipient
 		// LMTP responses are not subject to it.
 		if err == errPanic || (!c.server.LMTP && isTerminating(err)) {
-			c.Close()
+			c.closeAfterReplies()
 			return
 		}
 
@@ -1762,6 +1788,9 @@ func (c *Conn) handleDataLMTP() {
 	for i, rcpt := range c.recipients {
 		code, enchCode, msg := dataErrorToStatus(<-status.status[i])
 		c.writeResponse(code, enchCode, "<"+rcpt+"> "+msg)
+		// Each status arrives when the backend decides it; send it then rather
+		// than holding it behind a slower recipient.
+		c.flush()
 	}
 
 	// done is false when the LMTPData goroutine panicked, a body read timed out,
@@ -1770,7 +1799,7 @@ func (c *Conn) handleDataLMTP() {
 	ok = <-done
 	c.bodyReadDeadline = 0
 	if !ok {
-		c.Close()
+		c.closeAfterReplies()
 	}
 }
 
@@ -1788,7 +1817,7 @@ func dataErrorToStatus(err error) (code int, enchCode EnhancedCode, msg string) 
 
 func (c *Conn) Reject() {
 	c.writeResponse(421, EnhancedCode{4, 4, 5}, "Too busy. Try again later.")
-	c.Close()
+	c.closeAfterReplies()
 }
 
 func (c *Conn) greet() {
@@ -1799,6 +1828,11 @@ func (c *Conn) greet() {
 	c.writeResponse(220, NoEnhancedCode, fmt.Sprintf("%v %s Service Ready", c.server.Domain, protocol))
 }
 
+// writeResponse buffers a reply without sending it. Buffered replies go out
+// when readLine is about to wait for the client, so the replies to a pipelined
+// batch of commands (RFC 2920) share one write. Any reply the client must see
+// before it sends more, or before the connection closes, needs an explicit
+// flush.
 func (c *Conn) writeResponse(code int, enhCode EnhancedCode, text ...string) {
 	if c.server.WriteTimeout != 0 {
 		c.conn.SetWriteDeadline(time.Now().Add(c.server.WriteTimeout))
@@ -1821,20 +1855,46 @@ func (c *Conn) writeResponse(code int, enhCode EnhancedCode, text ...string) {
 
 	lastLineIndex := len(text) - 1
 	for i := 0; i < lastLineIndex; i++ {
-		if err := c.text.PrintfLine("%d-%v", code, text[i]); err != nil {
+		if _, err := fmt.Fprintf(c.text.W, "%d-%v\r\n", code, text[i]); err != nil {
 			c.setWriteError(err)
 			return
 		}
 	}
 	var err error
 	if enhCode == NoEnhancedCode {
-		err = c.text.PrintfLine("%d %v", code, text[lastLineIndex])
+		_, err = fmt.Fprintf(c.text.W, "%d %v\r\n", code, text[lastLineIndex])
 	} else {
-		err = c.text.PrintfLine("%d %v.%v.%v %v", code, enhCode[0], enhCode[1], enhCode[2], text[lastLineIndex])
+		_, err = fmt.Fprintf(c.text.W, "%d %v.%v.%v %v\r\n", code, enhCode[0], enhCode[1], enhCode[2], text[lastLineIndex])
 	}
 	if err != nil {
 		c.setWriteError(err)
 	}
+}
+
+// flush sends the buffered replies to the client.
+func (c *Conn) flush() {
+	if c.text.W.Buffered() == 0 {
+		return
+	}
+	if c.server.WriteTimeout != 0 {
+		c.conn.SetWriteDeadline(time.Now().Add(c.server.WriteTimeout))
+	}
+	if err := c.text.W.Flush(); err != nil {
+		c.setWriteError(err)
+	}
+}
+
+// commandBuffered reports whether the client's next command line has already
+// arrived, i.e. the client is pipelining and is not waiting for the replies
+// buffered so far. A partial line does not count: the rest of it may never come
+// while the client waits for those replies.
+func (c *Conn) commandBuffered() bool {
+	n := c.text.R.Buffered()
+	if n == 0 {
+		return false
+	}
+	b, _ := c.text.R.Peek(n)
+	return bytes.IndexByte(b, '\n') >= 0
 }
 
 // setWriteError records the first response-write error seen on the connection.
@@ -1874,6 +1934,15 @@ func (dr *deadlineReader) Read(b []byte) (int, error) {
 
 // Reads a line of input
 func (c *Conn) readLine() (string, error) {
+	// Hold the replies back while the next pipelined command is already here;
+	// send them before waiting on the client for more.
+	if !c.commandBuffered() {
+		c.flush()
+		if c.writeErr != nil {
+			return "", c.writeErr
+		}
+	}
+
 	if c.server.ReadTimeout != 0 {
 		if err := c.conn.SetReadDeadline(time.Now().Add(c.server.ReadTimeout)); err != nil {
 			return "", err

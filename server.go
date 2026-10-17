@@ -260,6 +260,8 @@ func (s *Server) handleConn(c *Conn) error {
 	}
 
 	defer func() {
+		// Send the final replies (421, 500, ...) before closing.
+		c.flush()
 		c.Close()
 
 		s.locker.Lock()
@@ -314,6 +316,11 @@ func (s *Server) handleConn(c *Conn) error {
 			// continuing to read and process commands is pointless.
 			if c.writeErr != nil {
 				return c.writeErr
+			}
+			// A command handler closed the connection (QUIT, too many errors, a
+			// failed STARTTLS, ...): commands pipelined after it are not served.
+			if c.closing {
+				return nil
 			}
 		} else {
 			// If the server is shutting down, the read was interrupted by
