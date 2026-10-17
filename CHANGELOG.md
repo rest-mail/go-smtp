@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- A large pipelined group no longer deadlocks the client (#78). `Pipeliner`
+  only read replies in `Wait`, so once a group outgrew the buffers the server
+  stopped reading (its replies went unread) while the client was still blocked
+  writing commands. As RFC 2920 §3.1 requires of a client that does not read
+  while it sends, a group is now sent in parts of at most 4 KiB of commands:
+  before writing past that, `Mail`, `Rcpt` and `Reset` read the replies already
+  owed. `Wait` still returns every result in queue order, and the recipient set
+  is built in the same order. After an I/O error (a failed write, or a failed or
+  timed-out read) the remaining results are that error and later commands on
+  the `Pipeliner` fail with it instead of being sent out of step.
+
 ## [0.29.0] - 2026-09-13
 
 ### Changed
