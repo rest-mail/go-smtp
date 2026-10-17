@@ -22,7 +22,11 @@ import (
 // Rcpt — each writes its command immediately but does not read the response.
 // Call Wait to read all queued responses, in order, ending the group; the
 // Client is then back in synchronous mode, so a message body is sent with the
-// usual Client.Data:
+// usual Client.Data. A group larger than the flow-control window (see
+// pipelineWindow) is sent in window-sized parts: before writing past the window,
+// the queueing method reads the responses already owed, so the server's replies
+// cannot fill the buffers and deadlock both ends. Every result is still reported
+// by Wait, in queue order.
 //
 //	p, err := c.Pipeline()
 //	if err != nil {
@@ -40,9 +44,22 @@ import (
 // underlying Client may be called between the first queued command and Wait, or
 // responses will be read out of order.
 type Pipeliner struct {
-	c    *Client
-	cmds []pipelinedCmd
+	c       *Client
+	cmds    []pipelinedCmd // sent commands whose responses are not read yet
+	errs    []error        // results already read for this group, in queue order
+	pending int            // bytes of cmds' command lines, CRLF included
+	err     error          // I/O error that put the connection out of step
 }
+
+// pipelineWindow is the most command bytes a Pipeliner leaves unanswered.
+//
+// The Pipeliner does not read responses while it writes, so RFC 2920 section 3.1
+// requires it to make each group fit within the TCP window, "usually, but not
+// always, 4K octets". Otherwise a big group (issue #78) deadlocks: the server
+// stops reading because its replies have filled the buffers, and the client
+// stops reading because it is still blocked writing commands. Keeping at most
+// this many bytes outstanding means a write never waits on a reply.
+const pipelineWindow = 4096
 
 type pipelineKind int
 
@@ -86,8 +103,8 @@ func (p *Pipeliner) Reset() error {
 
 // Mail queues a MAIL FROM command. Option handling matches Client.Mail. The
 // error is non-nil only if the command could not be composed or sent (e.g.
-// local validation failed or the write failed); the server's response is read
-// later by Wait.
+// local validation failed, the write failed, or the connection failed earlier
+// in the group); the server's response is read later by Wait.
 func (p *Pipeliner) Mail(from string, opts *MailOptions) error {
 	cmd, err := p.c.buildMailCmd(from, opts)
 	if err != nil {
@@ -111,45 +128,64 @@ func (p *Pipeliner) Rcpt(to string, opts *RcptOptions) error {
 // enqueue writes a command line without reading its response and records it for
 // Wait. The command line is always sent verbatim (as a "%s" argument) so any
 // '%' in an address is not treated as a format directive.
+//
+// If the line would take the unanswered commands past pipelineWindow, the
+// responses owed so far are read first. After an I/O error (a failed write, or
+// a failed or timed-out read) the connection is out of step, so enqueue sends
+// nothing more and returns that error.
 func (p *Pipeliner) enqueue(cmd pipelinedCmd, line string) error {
+	if p.err != nil {
+		return p.err
+	}
+	n := len(line) + len("\r\n")
+	if p.pending > 0 && p.pending+n > pipelineWindow {
+		p.readResponses()
+		if p.err != nil {
+			return p.err
+		}
+	}
+
 	p.c.conn.SetWriteDeadline(time.Now().Add(p.c.CommandTimeout))
 	defer p.c.conn.SetWriteDeadline(time.Time{})
 
 	id, err := p.c.text.Cmd("%s", line)
 	if err != nil {
+		p.err = err
 		return err
 	}
 	cmd.id = id
 	p.cmds = append(p.cmds, cmd)
+	p.pending += n
 	return nil
 }
 
-// Wait reads the server responses to all queued commands, in order, and returns
-// one error per command index-aligned with the order the commands were queued
-// (nil means that command succeeded; a rejection is an *SMTPError). It ends the
-// pipelined group: the Client returns to synchronous operation and the
-// Pipeliner is drained, so it can be reused for another group.
-//
-// Wait applies the state changes of the successful commands as it reads them: a
-// successful RSET clears the recipient set, and a successful RCPT adds its
-// recipient to the set used by the subsequent Data (or LMTP) call.
-//
-// Wait returns nil when no commands are queued.
-func (p *Pipeliner) Wait() []error {
-	if len(p.cmds) == 0 {
-		return nil
-	}
+// readResponses reads the response to every sent command, in order, appending
+// each result to p.errs and applying each success's state change. A response
+// the server rejected is an *SMTPError and the next one is still read; any other
+// read error means the reply stream can no longer be matched to commands, so it
+// becomes the result of every command still unanswered and is kept in p.err.
+// Responses are read even after a failed write: the commands sent before it
+// were whole, and their replies come first.
+func (p *Pipeliner) readResponses() {
+	p.c.conn.SetReadDeadline(time.Now().Add(p.c.CommandTimeout))
+	defer p.c.conn.SetReadDeadline(time.Time{})
 
-	p.c.conn.SetDeadline(time.Now().Add(p.c.CommandTimeout))
-	defer p.c.conn.SetDeadline(time.Time{})
-
-	errs := make([]error, len(p.cmds))
-	for i, cmd := range p.cmds {
+	var readErr error
+	for _, cmd := range p.cmds {
+		// Every id must pass through the response sequence, even unread, or
+		// the Client's next command would wait for its turn forever.
 		p.c.text.StartResponse(cmd.id)
-		_, _, err := p.c.readResponse(cmd.expectCode)
+		err := readErr
+		if err == nil {
+			_, _, err = p.c.readResponse(cmd.expectCode)
+			var smtpErr *SMTPError
+			if err != nil && !errors.As(err, &smtpErr) {
+				readErr = err
+			}
+		}
 		p.c.text.EndResponse(cmd.id)
 
-		errs[i] = err
+		p.errs = append(p.errs, err)
 		if err != nil {
 			continue
 		}
@@ -163,6 +199,37 @@ func (p *Pipeliner) Wait() []error {
 			p.c.rcpts = append(p.c.rcpts, cmd.rcpt)
 		}
 	}
+	if p.err == nil {
+		p.err = readErr
+	}
 	p.cmds = nil
+	p.pending = 0
+}
+
+// Wait reads the server responses to all queued commands, in order, and returns
+// one error per command index-aligned with the order the commands were queued
+// (nil means that command succeeded; a rejection is an *SMTPError). It ends the
+// pipelined group: the Client returns to synchronous operation and the
+// Pipeliner is drained, so it can be reused for another group.
+//
+// The state changes of the successful commands are applied in queue order as
+// their responses are read (by Wait, or earlier by a queueing method once the
+// group passes the flow-control window): a successful RSET or MAIL clears the
+// recipient set, and a successful RCPT adds its recipient to the set used by
+// the subsequent Data (or LMTP) call.
+//
+// The result of a command whose response could not be read (the connection
+// failed, closed or timed out) is that I/O error. The connection is then out of
+// step: every later command queued on this Pipeliner fails with the same
+// error, and the Client should be closed.
+//
+// Wait returns nil when no commands are queued.
+func (p *Pipeliner) Wait() []error {
+	if len(p.cmds) == 0 && len(p.errs) == 0 {
+		return nil
+	}
+	p.readResponses()
+	errs := p.errs
+	p.errs = nil
 	return errs
 }
