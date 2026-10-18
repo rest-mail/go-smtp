@@ -707,20 +707,27 @@ func fromHexDigit(b byte) (byte, bool) {
 	return 0, false
 }
 
+// isXchar reports whether ch is an xchar (RFC 3461 section 4, RFC 4954 section
+// 8): printable non-space US-ASCII except '+' and '='.
+func isXchar(ch byte) bool {
+	return ch >= '!' && ch <= '~' && ch != '+' && ch != '='
+}
+
 // decodeXtext decodes the xtext form defined in RFC 3461 section 4 / RFC 4954
 // section 8, where each octet outside the safe range is encoded as "+HH" with
 // two hex digits. It operates on octets, so all byte values (including
-// 0x80-0xFF) round-trip.
+// 0x80-0xFF) round-trip. Hex digits are accepted in either case (RFC 4954
+// section 8), but any other octet must be an xchar: a literal space, control,
+// '=' or non-ASCII byte is not xtext.
 func decodeXtext(val string) (string, error) {
-	if !strings.Contains(val, "+") {
-		return val, nil
-	}
-
 	var out strings.Builder
 	out.Grow(len(val))
 	for i := 0; i < len(val); i++ {
 		ch := val[i]
 		if ch != '+' {
+			if !isXchar(ch) {
+				return "", errors.New("smtp: invalid xtext character")
+			}
 			out.WriteByte(ch)
 			continue
 		}
@@ -865,8 +872,7 @@ func encodeXtext(raw string) string {
 	// as "+HH" with two upper-case hex digits.
 	for i := 0; i < len(raw); i++ {
 		ch := raw[i]
-		if ch >= '!' && ch <= '~' && ch != '+' && ch != '=' {
-			// printable non-space US-ASCII except '+' and '='
+		if isXchar(ch) {
 			out.WriteByte(ch)
 		} else {
 			out.WriteByte('+')
