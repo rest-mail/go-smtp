@@ -590,10 +590,14 @@ func (c *Client) buildRcptCmd(to string, opts *RcptOptions) (string, error) {
 				}
 				enc = encodeXtext(opts.OriginalRecipient)
 			case DSNAddressTypeUTF8:
+				var err error
 				if _, ok := c.ext["SMTPUTF8"]; ok {
-					enc = encodeUTF8AddrUnitext(opts.OriginalRecipient)
+					enc, err = encodeUTF8AddrUnitext(opts.OriginalRecipient)
 				} else {
-					enc = encodeUTF8AddrXtext(opts.OriginalRecipient)
+					enc, err = encodeUTF8AddrXtext(opts.OriginalRecipient)
+				}
+				if err != nil {
+					return "", err
 				}
 			default:
 				return "", errors.New("smtp: Unknown address type")
