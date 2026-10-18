@@ -6,6 +6,7 @@ import (
 	"time"
 )
 
+// checklist: SMTP-SYN-01 SMTP-SYN-02
 func TestParser(t *testing.T) {
 	validReversePaths := []struct {
 		raw, path, after string
@@ -56,6 +57,8 @@ func TestParser(t *testing.T) {
 // quoted-string, including quoted-pairs). RFC 5321 §4.1.2 excludes control
 // characters from Let-dig and qtextSMTP; accepting them enables the tainted
 // address to be echoed into status lines (command/response injection).
+//
+// checklist: SMTP-SYN-02
 func TestParserRejectsControlBytes(t *testing.T) {
 	rejected := []struct {
 		name, raw string
@@ -97,6 +100,8 @@ func TestParserRejectsControlBytes(t *testing.T) {
 // returned with its original casing, the token is consumed leaving any trailing
 // ESMTP parameters in p.s, and non-delimited or non-matching input is left
 // untouched with ok == false so the caller falls back to normal path parsing.
+//
+// checklist: SMTP-SYN-03
 func TestParsePostmasterPath(t *testing.T) {
 	matched := []struct {
 		raw, mbox, after string
@@ -139,6 +144,7 @@ func TestParsePostmasterPath(t *testing.T) {
 	}
 }
 
+// checklist: SMTP-SYN-06
 func TestParseArgsEqualsInValue(t *testing.T) {
 	args, err := parseArgs(" X=a=b SIMPLE=1 FLAG")
 	if err != nil {
@@ -155,6 +161,7 @@ func TestParseArgsEqualsInValue(t *testing.T) {
 	}
 }
 
+// checklist: SMTP-EXT-07
 func TestParseCmdSTARTTLSExact(t *testing.T) {
 	if cmd, _, err := parseCmd("STARTTLS\r\n"); err != nil || cmd != "STARTTLS" {
 		t.Fatalf("parseCmd(STARTTLS) = (%q, err=%v); want (STARTTLS, nil)", cmd, err)
@@ -167,6 +174,8 @@ func TestParseCmdSTARTTLSExact(t *testing.T) {
 
 // SMTP verbs are ASCII and case-insensitive (RFC 5321 section 2.4).
 // Unicode case folding must not turn a different wire verb into STARTTLS.
+//
+// checklist: SMTP-SYN-05
 func TestParseCmdASCII(t *testing.T) {
 	for _, line := range []string{
 		"ſTARTTLS", "STARTTLſ", "ſtarttls ignored", "ſET x", "KUIT", "ＭAIL FROM:<a@example.org>",
@@ -193,6 +202,7 @@ func TestParseCmdASCII(t *testing.T) {
 	}
 }
 
+// checklist: SMTP-SYN-06
 func TestParseArgsBoundaries(t *testing.T) {
 	for _, input := range []string{" SIZE=1 size=2", " SMTPUTF8 smtputf8", " AUTH=a=b AuTh=c==", " X= x"} {
 		if args, err := parseArgs(input); err == nil || args != nil {
@@ -208,6 +218,8 @@ func TestParseArgsBoundaries(t *testing.T) {
 
 // RFC 2852 section 4: optional sign, one to nine digits, N/R mode,
 // optional T trace, and strictly positive time in return mode.
+//
+// checklist: SMTP-EXT-11
 func TestParseDeliverByBoundaries(t *testing.T) {
 	for _, tc := range []struct {
 		input   string

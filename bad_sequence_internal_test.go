@@ -11,6 +11,8 @@ import (
 
 // Each subtest exercises a distinct refusal on the wire, including both missing
 // prerequisites for DATA/BDAT and commands interleaved with non-LAST chunks.
+//
+// checklist: SMTP-ORD-05
 func TestServerBadSequence(t *testing.T) {
 	const mail = "MAIL FROM:<a@example.org>"
 	const rcpt = "RCPT TO:<b@example.org>"
@@ -76,6 +78,7 @@ func TestServerBadSequence(t *testing.T) {
 	}
 }
 
+// checklist: SMTP-ORD-05
 func TestServerSTARTTLSAlreadyTLSBadSequence(t *testing.T) {
 	cert, err := tls.X509KeyPair(localhostCert, localhostKey)
 	if err != nil {
@@ -104,6 +107,7 @@ func TestServerSTARTTLSAlreadyTLSBadSequence(t *testing.T) {
 	}
 }
 
+// checklist: SMTP-ORD-05
 func TestClientBadSequenceError(t *testing.T) {
 	for _, code := range []string{"502", "503"} {
 		for _, command := range []string{"MAIL", "RCPT", "DATA"} {

@@ -13,6 +13,8 @@ import (
 // its sender and any recipients accepted so far are preserved, and the message
 // ultimately delivered carries the ORIGINAL sender — the nested MAIL must not
 // clobber it or leak its recipients into a new transaction.
+//
+// checklist: SMTP-ORD-04
 func TestServerNestedMailRejected(t *testing.T) {
 	be, s, c, scanner := testServerAuthenticated(t)
 	defer s.Close()
@@ -70,6 +72,8 @@ func TestServerNestedMailRejected(t *testing.T) {
 // TestServerResetThenMail verifies that after an explicit RSET the transaction
 // is cleared, so a subsequent MAIL FROM is accepted and starts a fresh
 // transaction with the new sender.
+//
+// checklist: SMTP-ORD-04
 func TestServerResetThenMail(t *testing.T) {
 	be, s, c, scanner := testServerAuthenticated(t)
 	defer s.Close()

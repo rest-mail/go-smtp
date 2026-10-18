@@ -256,6 +256,7 @@ var utf8AddrEncodeSeeds = []string{
 	string(utf8.RuneError),
 }
 
+// checklist: SMTP-EXT-06
 func FuzzDecodeUTF8AddrXtext(f *testing.F) {
 	for _, seed := range utf8AddrDecodeSeeds {
 		f.Add(seed)
@@ -293,6 +294,7 @@ func FuzzDecodeUTF8AddrXtext(f *testing.F) {
 	})
 }
 
+// checklist: SMTP-EXT-06
 func FuzzEncodeUTF8AddrXtext(f *testing.F) {
 	for _, seed := range utf8AddrEncodeSeeds {
 		f.Add(seed)
@@ -319,6 +321,7 @@ func FuzzEncodeUTF8AddrXtext(f *testing.F) {
 	})
 }
 
+// checklist: SMTP-EXT-06
 func FuzzEncodeUTF8AddrUnitext(f *testing.F) {
 	for _, seed := range utf8AddrEncodeSeeds {
 		f.Add(seed)
@@ -343,6 +346,8 @@ func FuzzEncodeUTF8AddrUnitext(f *testing.F) {
 // Each mutant is a plausible weakening of the decoder or an encoder; the
 // oracle must catch every one of them on the seed corpus alone. The first
 // encoder mutants are the encoders as they were before RFC 6533 checking.
+//
+// checklist: SMTP-EXT-06
 func TestUTF8AddrOracleCatchesMutants(t *testing.T) {
 	legacyEncode := func(raw string, unitext bool) (string, error) {
 		var out strings.Builder
@@ -441,6 +446,8 @@ func TestUTF8AddrOracleCatchesMutants(t *testing.T) {
 }
 
 // Minimized cases from the oracle, each a defect before RFC 6533 checking.
+//
+// checklist: SMTP-EXT-06
 func TestUTF8AddrRFC6533Regressions(t *testing.T) {
 	for _, val := range []string{"\xc0\xaf", "\xed\xa0\x80", "\xf4\x90\x80\x80", "\x80", "a\xc3"} {
 		if got, err := decodeUTF8AddrXtext(val); err == nil {
@@ -475,6 +482,8 @@ func TestUTF8AddrRFC6533Regressions(t *testing.T) {
 
 // The client puts the fixed encodings on the wire and refuses an
 // original recipient that has no RFC 6533 encoding.
+//
+// checklist: SMTP-EXT-06
 func TestClientORCPTUTF8Encoding(t *testing.T) {
 	c := &Client{ext: map[string]string{"DSN": ""}}
 	opts := &RcptOptions{OriginalRecipientType: DSNAddressTypeUTF8, OriginalRecipient: `"a\b"@example.com`}

@@ -290,6 +290,8 @@ func acceptedOf(rcpts []string) []string {
 // command at once. A client that only reads replies in Wait blocks writing
 // once the server, blocked on replies nobody reads, stops reading commands;
 // here that shows as a Rcpt failing with its write timeout.
+//
+// checklist: SMTP-EXT-01
 func TestPipeline_LargeGroupDoesNotDeadlock(t *testing.T) {
 	c := smtp.NewClient(startEager(t, false, 0, false))
 	c.CommandTimeout = 2 * time.Second
@@ -330,6 +332,8 @@ func TestPipeline_LargeGroupDoesNotDeadlock(t *testing.T) {
 // accepted recipient after DATA, so a rejected or stale recipient left in the
 // set would show up in (or hang) CloseWithLMTPResponse. The second group reuses
 // the Pipeliner after RSET and must not inherit the first group's recipients.
+//
+// checklist: SMTP-EXT-01
 func TestPipeline_LMTPSeesOnlyAcceptedRecipients(t *testing.T) {
 	c := smtp.NewClientLMTP(startEager(t, true, 0, false))
 	c.CommandTimeout = 2 * time.Second
@@ -395,6 +399,8 @@ func TestPipeline_LMTPSeesOnlyAcceptedRecipients(t *testing.T) {
 // within one CommandTimeout, refuse every later command without writing it,
 // and leave Wait one result per queued command: the answered ones, then the
 // timeout.
+//
+// checklist: SMTP-EXT-01
 func TestPipeline_StalledServerTimesOut(t *testing.T) {
 	c := smtp.NewClient(startEager(t, false, 5, false))
 	c.CommandTimeout = 300 * time.Millisecond
@@ -455,6 +461,8 @@ func TestPipeline_StalledServerTimesOut(t *testing.T) {
 // those answers in place, every later queued command fails with the
 // connection's error rather than a server reply, and no command is queued after
 // the failure.
+//
+// checklist: SMTP-EXT-01
 func TestPipeline_ServerHangupMidGroup(t *testing.T) {
 	c := smtp.NewClient(startEager(t, false, 50, true))
 	c.CommandTimeout = 2 * time.Second

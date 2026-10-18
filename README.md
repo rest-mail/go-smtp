@@ -33,6 +33,37 @@ An ESMTP client and server library written in Go.
 * Command batching with `Client.Pipeline()` — pipelines `RSET`/`MAIL`/`RCPT` per [RFC 2920] to cut round-trips on high-throughput senders
 * `Client.CheckConn()` — detect a server-closed idle/pooled connection without sending a command (STARTTLS-safe)
 
+## The RFC checklist
+
+[CHECKLIST.md](CHECKLIST.md) lists the requirements of RFC 5321 (the SMTP
+server and client core) item by item, with the extensions as one row each, and
+a small program, [`internal/checklist`](internal/checklist/main.go), checks it
+against the tests in CI. It is the same program as
+[go-spf](https://github.com/rest-mail/go-spf)'s and the other `go-*`
+libraries', without package `slices`, since this module still declares go 1.13.
+
+The checklist is a Markdown file holding one or more tables whose header is
+exactly:
+
+```markdown
+| ID | Section | Level | Requirement | Tests |
+|----|---------|-------|-------------|-------|
+| SMTP-RSET-01 | 4.1.1.5 | MUST | RSET clears the sender, the recipients and the data. | `TestRFC5321_RsetAndSecondEhloClearTransaction` |
+| SMTP-LIM-06 | 4.5.3.1.5 | MUST | A reply line is at most 512 octets, CRLF included. | n/a: a gap, not asserted yet. |
+```
+
+Each test names the items it covers in its doc comment:
+
+```go
+// checklist: SMTP-RSET-01 SMTP-RSET-02
+func TestRFC5321_RsetAndSecondEhloClearTransaction(t *testing.T) {
+```
+
+`go run ./internal/checklist [-file CHECKLIST.md] [package dir ...]` fails when
+an ID is used twice, an item names no test and is not `n/a`, an item and a test
+disagree about each other, or a `Test` or `Fuzz` function names no item.
+Coverage is in [COVERAGE.md](COVERAGE.md).
+
 ## Relationship with net/smtp
 
 The Go standard library provides a SMTP client implementation in `net/smtp`.

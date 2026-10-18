@@ -325,6 +325,7 @@ func testServerEhlo(t *testing.T, fn ...serverConfigureFunc) (be *backend, s *sm
 	return
 }
 
+// checklist: SMTP-SRV-01
 func TestServerAcceptErrorHandling(t *testing.T) {
 	errorLog := bytes.NewBuffer(nil)
 	be := new(backend)
@@ -357,6 +358,7 @@ func TestServerAcceptErrorHandling(t *testing.T) {
 	}
 }
 
+// checklist: SMTP-CMD-02 SMTP-CMD-09 SMTP-REP-01
 func TestServer_helo(t *testing.T) {
 	_, s, c, scanner := testServerGreeted(t)
 	defer s.Close()
@@ -369,6 +371,7 @@ func TestServer_helo(t *testing.T) {
 	}
 }
 
+// checklist: SMTP-CMD-01
 func TestServerExtraCaps(t *testing.T) {
 	_, s, c, scanner, caps := testServerEhlo(t,
 		func(s *smtp.Server) {
@@ -407,6 +410,7 @@ func testServerAuthenticated(t *testing.T) (be *backend, s *smtp.Server, c net.C
 	return
 }
 
+// checklist: SMTP-EXT-08
 func TestServerAuthTwice(t *testing.T) {
 	_, _, c, scanner, caps := testServerEhlo(t)
 
@@ -439,6 +443,7 @@ func TestServerAuthTwice(t *testing.T) {
 	}
 }
 
+// checklist: SMTP-EXT-08
 func TestServerCancelSASL(t *testing.T) {
 	_, _, c, scanner, caps := testServerEhlo(t)
 
@@ -459,6 +464,7 @@ func TestServerCancelSASL(t *testing.T) {
 	}
 }
 
+// checklist: SMTP-SYN-02
 func TestServerEmptyFrom1(t *testing.T) {
 	_, s, c, scanner := testServerAuthenticated(t)
 	defer s.Close()
@@ -471,6 +477,7 @@ func TestServerEmptyFrom1(t *testing.T) {
 	}
 }
 
+// checklist: SMTP-SYN-01 SMTP-CMD-03
 func TestServerEmptyFrom2(t *testing.T) {
 	_, s, c, scanner := testServerAuthenticated(t)
 	defer s.Close()
@@ -483,6 +490,7 @@ func TestServerEmptyFrom2(t *testing.T) {
 	}
 }
 
+// checklist: SMTP-REP-02 SMTP-SRV-02
 func TestServerPanicRecover(t *testing.T) {
 	_, s, c, scanner := testServerAuthenticated(t)
 	defer s.Close()
@@ -499,6 +507,7 @@ func TestServerPanicRecover(t *testing.T) {
 	}
 }
 
+// checklist: SMTP-EXT-06
 func TestServerSMTPUTF8(t *testing.T) {
 	_, s, c, scanner := testServerAuthenticated(t)
 	s.EnableSMTPUTF8 = true
@@ -512,6 +521,7 @@ func TestServerSMTPUTF8(t *testing.T) {
 	}
 }
 
+// checklist: SMTP-EXT-06
 func TestServerSMTPUTF8_Disabled(t *testing.T) {
 	_, s, c, scanner := testServerAuthenticated(t)
 	defer s.Close()
@@ -524,6 +534,7 @@ func TestServerSMTPUTF8_Disabled(t *testing.T) {
 	}
 }
 
+// checklist: SMTP-EXT-02
 func TestServer8BITMIME(t *testing.T) {
 	_, s, c, scanner := testServerAuthenticated(t)
 	defer s.Close()
@@ -536,6 +547,7 @@ func TestServer8BITMIME(t *testing.T) {
 	}
 }
 
+// checklist: SMTP-EXT-02
 func TestServer_BODYInvalidValue(t *testing.T) {
 	_, s, c, scanner := testServerAuthenticated(t)
 	defer s.Close()
@@ -548,6 +560,7 @@ func TestServer_BODYInvalidValue(t *testing.T) {
 	}
 }
 
+// checklist: SMTP-SYN-12
 func TestServerUnknownArg(t *testing.T) {
 	_, s, c, scanner := testServerAuthenticated(t)
 	defer s.Close()
@@ -560,6 +573,7 @@ func TestServerUnknownArg(t *testing.T) {
 	}
 }
 
+// checklist: SMTP-EXT-03
 func TestServerBadSize(t *testing.T) {
 	_, s, c, scanner := testServerAuthenticated(t)
 	defer s.Close()
@@ -572,6 +586,7 @@ func TestServerBadSize(t *testing.T) {
 	}
 }
 
+// checklist: SMTP-EXT-03
 func TestServerTooBig(t *testing.T) {
 	_, s, c, scanner := testServerAuthenticated(t)
 	defer s.Close()
@@ -586,6 +601,7 @@ func TestServerTooBig(t *testing.T) {
 	}
 }
 
+// checklist: SMTP-SYN-04
 func TestServerEmptyTo(t *testing.T) {
 	_, s, c, scanner := testServerAuthenticated(t)
 	defer s.Close()
@@ -609,6 +625,8 @@ func TestServerEmptyTo(t *testing.T) {
 // accept it. The bare form must be accepted (case-insensitively) and surfaced
 // to the backend, and the domain-qualified "<Postmaster@domain>" form must keep
 // working through normal address parsing.
+//
+// checklist: SMTP-SYN-03
 func TestServerPostmasterRcpt(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -659,6 +677,7 @@ func TestServerPostmasterRcpt(t *testing.T) {
 	}
 }
 
+// checklist: SMTP-CMD-03 SMTP-CMD-09 SMTP-DATA-01 SMTP-DATA-02 SMTP-REP-01
 func TestServer(t *testing.T) {
 	be, s, c, scanner := testServerAuthenticated(t)
 	defer s.Close()
@@ -708,6 +727,7 @@ func TestServer(t *testing.T) {
 	}
 }
 
+// checklist: SMTP-SYN-11 SMTP-DATA-01 SMTP-DATA-03 SMTP-DATA-05
 func TestServer_LFDotLF(t *testing.T) {
 	be, s, c, scanner := testServerAuthenticated(t)
 	defer s.Close()
@@ -752,6 +772,7 @@ func TestServer_LFDotLF(t *testing.T) {
 	}
 }
 
+// checklist: SMTP-DATA-01 SMTP-DATA-05
 func TestServer_EmptyMessage(t *testing.T) {
 	be, s, c, scanner := testServerAuthenticated(t)
 	defer s.Close()
@@ -791,6 +812,7 @@ func TestServer_EmptyMessage(t *testing.T) {
 	}
 }
 
+// checklist: SMTP-EXT-08
 func TestServer_authDisabled(t *testing.T) {
 	_, s, c, scanner, caps := testServerEhlo(t, authDisabled)
 	defer s.Close()
@@ -807,6 +829,7 @@ func TestServer_authDisabled(t *testing.T) {
 	}
 }
 
+// checklist: SMTP-CMD-04 SMTP-CMD-05 SMTP-CMD-06 SMTP-CMD-07 SMTP-CMD-09 SMTP-RSET-01
 func TestServer_otherCommands(t *testing.T) {
 	_, s, c, scanner := testServerAuthenticated(t)
 	defer s.Close()
@@ -842,6 +865,7 @@ func TestServer_otherCommands(t *testing.T) {
 	}
 }
 
+// checklist: SMTP-CMD-08 SMTP-SRV-03
 func TestServer_tooManyInvalidCommands(t *testing.T) {
 	_, s, c, scanner := testServerAuthenticated(t)
 	defer s.Close()
@@ -861,6 +885,7 @@ func TestServer_tooManyInvalidCommands(t *testing.T) {
 	}
 }
 
+// checklist: SMTP-DATA-04
 func TestServer_tooLongMessage(t *testing.T) {
 	be, s, c, scanner := testServerAuthenticated(t)
 	defer s.Close()
@@ -889,6 +914,8 @@ func TestServer_tooLongMessage(t *testing.T) {
 }
 
 // See https://www.postfix.org/smtp-smuggling.html
+//
+// checklist: SMTP-SYN-11
 func TestServer_smtpSmuggling(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -949,6 +976,7 @@ func TestServer_smtpSmuggling(t *testing.T) {
 	}
 }
 
+// checklist: SMTP-LIM-02
 func TestServer_tooLongLine(t *testing.T) {
 	_, s, c, scanner := testServerAuthenticated(t)
 	defer s.Close()
@@ -960,6 +988,7 @@ func TestServer_tooLongLine(t *testing.T) {
 	}
 }
 
+// checklist: SMTP-EXT-08
 func TestServer_anonymousUserError(t *testing.T) {
 	be, s, c, scanner, _ := testServerEhlo(t)
 	defer s.Close()
@@ -974,6 +1003,7 @@ func TestServer_anonymousUserError(t *testing.T) {
 	}
 }
 
+// checklist: SMTP-EXT-08
 func TestServer_anonymousUserOK(t *testing.T) {
 	be, s, c, scanner, _ := testServerEhlo(t)
 	defer s.Close()
@@ -998,6 +1028,7 @@ func TestServer_anonymousUserOK(t *testing.T) {
 	}
 }
 
+// checklist: SMTP-EXT-08
 func TestServer_authParam(t *testing.T) {
 	be, s, c, scanner, _ := testServerEhlo(t)
 	defer s.Close()
@@ -1048,6 +1079,7 @@ func TestServer_authParam(t *testing.T) {
 	}
 }
 
+// checklist: SMTP-EXT-05
 func TestServer_Chunking(t *testing.T) {
 	be, s, c, scanner := testServerAuthenticated(t)
 	defer s.Close()
@@ -1095,6 +1127,7 @@ func TestServer_Chunking(t *testing.T) {
 	}
 }
 
+// checklist: SMTP-EXT-05 SMTP-EXT-09
 func TestServer_Chunking_LMTP(t *testing.T) {
 	be, s, c, scanner := testServerAuthenticated(t)
 	s.LMTP = true
@@ -1149,6 +1182,7 @@ func TestServer_Chunking_LMTP(t *testing.T) {
 	}
 }
 
+// checklist: SMTP-EXT-05
 func TestServer_Chunking_Reset(t *testing.T) {
 	be, s, c, scanner := testServerAuthenticated(t)
 	defer s.Close()
@@ -1186,6 +1220,7 @@ func TestServer_Chunking_Reset(t *testing.T) {
 	}
 }
 
+// checklist: SMTP-EXT-05
 func TestServer_Chunking_ClosedInTheMiddle(t *testing.T) {
 	be, s, c, scanner := testServerAuthenticated(t)
 	defer s.Close()
@@ -1215,6 +1250,7 @@ func TestServer_Chunking_ClosedInTheMiddle(t *testing.T) {
 	}
 }
 
+// checklist: SMTP-EXT-05
 func TestServer_Chunking_EarlyError(t *testing.T) {
 	be, s, c, scanner := testServerAuthenticated(t)
 	defer s.Close()
@@ -1246,6 +1282,7 @@ func TestServer_Chunking_EarlyError(t *testing.T) {
 	}
 }
 
+// checklist: SMTP-EXT-05
 func TestServer_Chunking_EarlyErrorDuringChunk(t *testing.T) {
 	be, s, c, scanner := testServerAuthenticated(t)
 	defer s.Close()
@@ -1286,6 +1323,7 @@ func TestServer_Chunking_EarlyErrorDuringChunk(t *testing.T) {
 	}
 }
 
+// checklist: SMTP-EXT-05
 func TestServer_Chunking_tooLongMessage(t *testing.T) {
 	be, s, c, scanner := testServerAuthenticated(t)
 	defer s.Close()
@@ -1320,6 +1358,8 @@ func TestServer_Chunking_tooLongMessage(t *testing.T) {
 // long lines); otherwise the discard trips ErrTooLongLine, which surfaces as a
 // spurious "500 5.4.0 Too long line, closing connection" and a connection drop
 // right after the 552. The connection must instead stay framed and usable.
+//
+// checklist: SMTP-EXT-05
 func TestServer_Chunking_OverLimitDiscardKeepsConnection(t *testing.T) {
 	// Configure limits before Serve begins so the field writes happen-before the
 	// serving goroutine (keeps the race detector quiet).
@@ -1379,6 +1419,7 @@ func TestServer_Chunking_OverLimitDiscardKeepsConnection(t *testing.T) {
 	}
 }
 
+// checklist: SMTP-EXT-05
 func TestServer_Chunking_Binarymime(t *testing.T) {
 	be, s, c, scanner := testServerAuthenticated(t)
 	defer s.Close()
@@ -1433,6 +1474,8 @@ func TestServer_Chunking_Binarymime(t *testing.T) {
 // arbitrarily long lines), but it must be restored before the next command
 // line is read. Otherwise a peer can stream one unbounded line between chunks
 // and drive the process toward memory exhaustion (see issue #43).
+//
+// checklist: SMTP-EXT-05
 func TestServer_Chunking_LineLimitAfterNonLastBdat(t *testing.T) {
 	_, s, c, scanner := testServerAuthenticated(t)
 	defer s.Close()
@@ -1466,6 +1509,7 @@ func TestServer_Chunking_LineLimitAfterNonLastBdat(t *testing.T) {
 	}
 }
 
+// checklist: SMTP-LIM-02
 func TestServer_TooLongCommand(t *testing.T) {
 	_, s, c, scanner := testServerAuthenticated(t)
 	defer s.Close()
@@ -1486,6 +1530,8 @@ func TestServer_TooLongCommand(t *testing.T) {
 // pre-auth command input against memory exhaustion without limiting message
 // body lines. On the pre-fix server the DATA line trips ErrTooLongLine and the
 // message is rejected.
+//
+// checklist: SMTP-DATA-06
 func TestServer_MaxLineLengthBoundsCommandsNotData(t *testing.T) {
 	// Set the small limit before Serve begins so the field write happens-before
 	// the serving goroutine (keeps the race detector quiet).
@@ -1538,6 +1584,7 @@ func TestServer_MaxLineLengthBoundsCommandsNotData(t *testing.T) {
 	}
 }
 
+// checklist: SMTP-SRV-01
 func TestServerShutdown(t *testing.T) {
 	_, s, c, _ := testServerGreeted(t)
 
@@ -1574,6 +1621,7 @@ const (
 	dsnEmailUTF8   = "e=mc2@ドメイン名例.jp"
 )
 
+// checklist: SMTP-EXT-04
 func TestServerDSN(t *testing.T) {
 	be, s, c, scanner, caps := testServerEhlo(t,
 		func(s *smtp.Server) {
@@ -1662,6 +1710,8 @@ func TestServerDSN(t *testing.T) {
 // An ORCPT=UTF-8 address is refused unless it is RFC 6533 unitext: literal
 // non-ASCII must be well-formed UTF-8 (RFC 3629), while HEXPOINT digits are
 // case-insensitive like all ABNF (RFC 5234 section 2.3).
+//
+// checklist: SMTP-EXT-06
 func TestServerDSNUTF8AddressORCPT(t *testing.T) {
 	be, s, c, scanner, _ := testServerEhlo(t,
 		func(s *smtp.Server) {
@@ -1708,6 +1758,7 @@ func TestServerDSNUTF8AddressORCPT(t *testing.T) {
 	}
 }
 
+// checklist: SMTP-EXT-06
 func TestServerDSNwithSMTPUTF8(t *testing.T) {
 	be, s, c, scanner, caps := testServerEhlo(t,
 		func(s *smtp.Server) {
@@ -1818,6 +1869,8 @@ func TestServerDSNwithSMTPUTF8(t *testing.T) {
 
 // An xtext value carries '=' and every octet outside xchar as a hexchar (RFC
 // 3461 section 4, RFC 4954 section 8), so a literal one is malformed.
+//
+// checklist: SMTP-EXT-04
 func TestServer_xtextLiteralNonXchar(t *testing.T) {
 	_, s, c, scanner, _ := testServerEhlo(t,
 		func(s *smtp.Server) {
@@ -1843,6 +1896,7 @@ func TestServer_xtextLiteralNonXchar(t *testing.T) {
 	}
 }
 
+// checklist: SMTP-EXT-10
 func TestServerRRVS(t *testing.T) {
 	be, s, c, scanner, caps := testServerEhlo(t,
 		func(s *smtp.Server) {
@@ -1907,6 +1961,7 @@ func TestServerRRVS(t *testing.T) {
 	}
 }
 
+// checklist: SMTP-EXT-11
 func TestServerDELIVERBY(t *testing.T) {
 	be, s, c, scanner, caps := testServerEhlo(t,
 		func(s *smtp.Server) {
@@ -1984,6 +2039,7 @@ func TestServerDELIVERBY(t *testing.T) {
 	}
 }
 
+// checklist: SMTP-EXT-12
 func TestServerMTPRIORITY(t *testing.T) {
 	be, s, c, scanner, caps := testServerEhlo(t,
 		func(s *smtp.Server) {
@@ -2056,6 +2112,8 @@ func TestServerMTPRIORITY(t *testing.T) {
 // sending either on RCPT is sending it somewhere neither RFC defines, and
 // quietly accepting it there would hide the mistake — and, for a multi-recipient
 // message, leave it ambiguous which recipient's value described the message.
+//
+// checklist: SMTP-EXT-11
 func TestServerDeliverByAndMTPriorityRejectedOnRcpt(t *testing.T) {
 	_, s, c, scanner, _ := testServerEhlo(t,
 		func(s *smtp.Server) {

@@ -78,6 +78,8 @@ func drainEHLO(t *testing.T, c net.Conn, br *bufio.Reader) {
 // runs straight on from the reverse-path with no separating whitespace
 // ("MAIL FROM:<a@b>SIZE=10") must be rejected (RFC 5321 §4.1.1.2), not silently
 // accepted as a SIZE parameter.
+//
+// checklist: SMTP-SYN-07
 func TestMailParamRequiresSpace(t *testing.T) {
 	_, c, br := newConformanceServer(t, nil)
 	drainEHLO(t, c, br)
@@ -91,6 +93,8 @@ func TestMailParamRequiresSpace(t *testing.T) {
 // TestMailParamNoDuplicates covers issue #53 item 1: a repeated ESMTP parameter
 // ("SIZE=10 SIZE=20") must be rejected (RFC 5321 §4.1.1.11) rather than silently
 // collapsing to the last value.
+//
+// checklist: SMTP-SYN-08
 func TestMailParamNoDuplicates(t *testing.T) {
 	_, c, br := newConformanceServer(t, nil)
 	drainEHLO(t, c, br)
@@ -104,6 +108,8 @@ func TestMailParamNoDuplicates(t *testing.T) {
 // TestAuthRejectsExtraTokens covers issue #53 item 2: AUTH carries a mechanism
 // and at most one initial-response (RFC 4954 §4); trailing tokens must be a 501,
 // not silently ignored.
+//
+// checklist: SMTP-EXT-08
 func TestAuthRejectsExtraTokens(t *testing.T) {
 	_, c, br := newConformanceServer(t, func(s *Server) { s.AllowInsecureAuth = true })
 	drainEHLO(t, c, br)
@@ -117,6 +123,8 @@ func TestAuthRejectsExtraTokens(t *testing.T) {
 // TestAuthTLSRequiredCode covers issue #53 item 2: refusing AUTH on an
 // unprotected connection must use 530 5.7.0 (RFC 3207 §4), not the unassigned
 // 523.
+//
+// checklist: SMTP-EXT-07
 func TestAuthTLSRequiredCode(t *testing.T) {
 	_, c, br := newConformanceServer(t, nil) // AllowInsecureAuth stays false
 	drainEHLO(t, c, br)
@@ -131,6 +139,8 @@ func TestAuthTLSRequiredCode(t *testing.T) {
 // TestErrCountCountsConsecutive covers issue #53 item 5: the protocol-error
 // tally is consecutive, so bad commands interleaved with successful ones do not
 // accumulate to the disconnect threshold.
+//
+// checklist: SMTP-SRV-03
 func TestErrCountCountsConsecutive(t *testing.T) {
 	_, c, br := newConformanceServer(t, nil)
 	drainEHLO(t, c, br)
@@ -158,6 +168,8 @@ func TestErrCountCountsConsecutive(t *testing.T) {
 // TestServerCloseSends421 covers issue #53 item 4: Server.Close must deliver a
 // 421 service-closing reply (RFC 5321 §3.8) to a live idle connection before the
 // socket is dropped.
+//
+// checklist: SMTP-REP-02
 func TestServerCloseSends421(t *testing.T) {
 	s, c, br := newConformanceServer(t, nil)
 	drainEHLO(t, c, br)
@@ -185,6 +197,8 @@ func TestServerCloseSends421(t *testing.T) {
 // TestDataCloseHonoursWriteDeadline covers issue #53 item 6: the DATA
 // terminating flush must be bounded by a write deadline so a wedged peer that
 // stops reading cannot block the close write forever.
+//
+// checklist: SMTP-SRV-02
 func TestDataCloseHonoursWriteDeadline(t *testing.T) {
 	cconn, sconn := net.Pipe()
 	defer func() { _ = cconn.Close() }()

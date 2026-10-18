@@ -63,6 +63,7 @@ func allOctets() string {
 	return string(b)
 }
 
+// checklist: SMTP-EXT-04
 func FuzzDecodeXtext(f *testing.F) {
 	for _, seed := range []string{
 		"", "a", "e+3Dmc2", "hey+3Da@example.com", "+2B", "+2b", "+00+ff+FF+80",
@@ -108,6 +109,7 @@ func FuzzDecodeXtext(f *testing.F) {
 	})
 }
 
+// checklist: SMTP-EXT-04
 func FuzzEncodeXtext(f *testing.F) {
 	for _, seed := range []string{
 		"", "a", "e=mc2", "hey=a@example.com", "+", "=", "+=", " ", "\x00", "\x7f",

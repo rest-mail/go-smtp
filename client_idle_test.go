@@ -18,6 +18,8 @@ func newIdleClient(conn net.Conn) *Client {
 
 // A healthy idle plaintext connection: no data pending, the probe times out and
 // reports the connection usable.
+//
+// checklist: SMTP-CLI-08
 func TestCheckConn_HealthyPlaintext(t *testing.T) {
 	cconn, sconn := net.Pipe()
 	defer cconn.Close()
@@ -30,6 +32,8 @@ func TestCheckConn_HealthyPlaintext(t *testing.T) {
 }
 
 // The server closed the connection while it was idle: the probe must detect it.
+//
+// checklist: SMTP-CLI-08
 func TestCheckConn_ServerClosedPlaintext(t *testing.T) {
 	cconn, sconn := net.Pipe()
 	defer cconn.Close()
@@ -44,6 +48,8 @@ func TestCheckConn_ServerClosedPlaintext(t *testing.T) {
 }
 
 // Unsolicited data on an idle connection means it is not cleanly reusable.
+//
+// checklist: SMTP-CLI-08
 func TestCheckConn_UnsolicitedData(t *testing.T) {
 	cconn, sconn := net.Pipe()
 	defer cconn.Close()
@@ -58,6 +64,8 @@ func TestCheckConn_UnsolicitedData(t *testing.T) {
 }
 
 // Bytes already buffered from a prior read are treated as a non-idle connection.
+//
+// checklist: SMTP-CLI-08
 func TestCheckConn_BufferedData(t *testing.T) {
 	cconn, sconn := net.Pipe()
 	defer cconn.Close()
@@ -79,6 +87,8 @@ func TestCheckConn_BufferedData(t *testing.T) {
 // STARTTLS-safety: the probe reads through the *tls.Conn. A timed-out healthy
 // probe must leave the TLS stream intact (a following command still reads
 // correctly), and a server close must still be detected.
+//
+// checklist: SMTP-CLI-08
 func TestCheckConn_TLS(t *testing.T) {
 	ln := newLocalListener(t)
 	defer ln.Close()

@@ -32,6 +32,8 @@ func (b connCapBackend) NewSession(c *Conn) (Session, error) {
 // goroutine and the Conn.Close() goroutine are released together, so the write
 // and the read overlap tightly. The scenario is repeated so a scheduling that
 // happens to order them on one round is caught on another.
+//
+// checklist: SMTP-EXT-07
 func TestStartTLSCloseRace(t *testing.T) {
 	cert, err := tls.X509KeyPair(localhostCert, localhostKey)
 	if err != nil {

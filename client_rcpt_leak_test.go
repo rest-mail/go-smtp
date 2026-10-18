@@ -36,6 +36,8 @@ func scriptedClient(serverScript string) *Client {
 // MAIL transaction has to clear the client's recipient bookkeeping, otherwise a
 // reused connection carries stale recipients forward (unbounded growth for
 // SMTP, response misattribution for LMTP).
+//
+// checklist: SMTP-CLI-06
 func TestClientMailClearsRcpts(t *testing.T) {
 	script := "250 Sender OK\r\n" + // MAIL (transaction 1)
 		"250 Receiver OK\r\n" + // RCPT a
@@ -69,6 +71,8 @@ func TestClientMailClearsRcpts(t *testing.T) {
 // CloseWithLMTPResponse reads exactly len(c.rcpts) per-recipient replies, a
 // leaked recipient list makes the second message consume the wrong replies and
 // then read past the end of the server's output.
+//
+// checklist: SMTP-EXT-09
 func TestLMTPRcptLeakAcrossTransactions(t *testing.T) {
 	script := "250 Sender OK\r\n" + // MAIL 1
 		"250 Receiver OK\r\n" + // RCPT 1a
@@ -135,6 +139,8 @@ func TestLMTPRcptLeakAcrossTransactions(t *testing.T) {
 // TestPipelinerMailClearsRcpts is the pipelined counterpart of issue #45: a
 // pipelined MAIL that succeeds in Pipeliner.Wait must clear any recipients left
 // over from a prior transaction, just as the synchronous Client.Mail does.
+//
+// checklist: SMTP-CLI-06
 func TestPipelinerMailClearsRcpts(t *testing.T) {
 	script := "250 Sender OK\r\n" + // MAIL old (synchronous)
 		"250 Receiver OK\r\n" + // RCPT stray (synchronous)

@@ -39,6 +39,8 @@ func (s *raceSession) Logout() error { return nil }
 // Run with -race: on the unfixed code the connection goroutine's unsynchronised
 // read of c.bdatPipe (in handleBdat) races the Close goroutine's write, and the
 // race detector fails the test.
+//
+// checklist: SMTP-EXT-05
 func TestBDATShutdownRace(t *testing.T) {
 	be := &raceBackend{dataEntered: make(chan struct{}), release: make(chan struct{})}
 

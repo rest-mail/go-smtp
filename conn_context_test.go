@@ -29,6 +29,8 @@ func (ctxSession) Logout() error                        { return nil }
 
 // TestConnContextCancelledOnShutdown verifies Conn.Context() is a live context
 // that is cancelled when the server is closed, so a backend can observe shutdown.
+//
+// checklist: SMTP-SRV-01
 func TestConnContextCancelledOnShutdown(t *testing.T) {
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

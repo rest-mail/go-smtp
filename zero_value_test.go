@@ -14,6 +14,8 @@ import (
 // NewServer: Serve accepts a connection (which would otherwise panic writing to
 // the nil conns map or logging via a nil ErrorLog), a default line length is
 // applied, and Close does not panic closing the nil done channel.
+//
+// checklist: SMTP-SRV-02
 func TestZeroValueServer(t *testing.T) {
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

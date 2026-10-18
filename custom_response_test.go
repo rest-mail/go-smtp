@@ -23,6 +23,8 @@ func readClosed(t *testing.T, c net.Conn, scanner *bufio.Scanner) bool {
 // A backend that accepts the sender but returns a custom 2xx line from Mail must
 // have the status line delivered AND the transaction advanced, so a following
 // RCPT succeeds.
+//
+// checklist: SMTP-REP-03
 func TestCustomResponse_Mail(t *testing.T) {
 	_, s, c, scanner := dataLimitServer(t, func(be *backend, s *smtp.Server) {
 		be.userErr = smtp.Errorf(250, smtp.EnhancedCode{2, 1, 0}, "sender OK, throttled")
@@ -45,6 +47,8 @@ func TestCustomResponse_Mail(t *testing.T) {
 
 // A custom 2xx line from Rcpt must be delivered AND the recipient recorded, so
 // DATA proceeds.
+//
+// checklist: SMTP-REP-03
 func TestCustomResponse_Rcpt(t *testing.T) {
 	_, s, c, scanner := dataLimitServer(t, func(be *backend, s *smtp.Server) {
 		be.rcptErr = smtp.Errorf(251, smtp.EnhancedCode{2, 1, 5}, "will forward")
@@ -73,6 +77,8 @@ func TestCustomResponse_Rcpt(t *testing.T) {
 
 // A custom 2xx line from Data replaces the default "250 ... OK: queued" and
 // leaves the connection reusable.
+//
+// checklist: SMTP-REP-03
 func TestCustomResponse_Data(t *testing.T) {
 	_, s, c, scanner := dataLimitServer(t, func(be *backend, s *smtp.Server) {
 		be.dataErr = smtp.Errorf(250, smtp.EnhancedCode{2, 0, 0}, "OK: queued as XYZ987")
@@ -97,6 +103,8 @@ func TestCustomResponse_Data(t *testing.T) {
 
 // CloseConnection wrapping a rejection: the server sends the rejection line and
 // then closes the connection.
+//
+// checklist: SMTP-SRV-01
 func TestCloseConnection_Mail(t *testing.T) {
 	_, s, c, scanner := dataLimitServer(t, func(be *backend, s *smtp.Server) {
 		be.userErr = smtp.CloseConnection(smtp.Errorf(554, smtp.EnhancedCode{5, 7, 1}, "banned sender"))
@@ -115,6 +123,8 @@ func TestCloseConnection_Mail(t *testing.T) {
 }
 
 // CloseConnection wrapping a rejection from Rcpt closes the connection.
+//
+// checklist: SMTP-SRV-01
 func TestCloseConnection_Rcpt(t *testing.T) {
 	_, s, c, scanner := dataLimitServer(t, func(be *backend, s *smtp.Server) {
 		be.rcptErr = smtp.CloseConnection(smtp.Errorf(550, smtp.EnhancedCode{5, 7, 1}, "too many bad rcpts"))
@@ -135,6 +145,8 @@ func TestCloseConnection_Rcpt(t *testing.T) {
 }
 
 // CloseConnection wrapping a rejection from Data sends the line then closes.
+//
+// checklist: SMTP-SRV-01
 func TestCloseConnection_Data(t *testing.T) {
 	_, s, c, scanner := dataLimitServer(t, func(be *backend, s *smtp.Server) {
 		be.dataErr = smtp.CloseConnection(smtp.Errorf(554, smtp.EnhancedCode{5, 7, 1}, "spam"))
@@ -155,6 +167,8 @@ func TestCloseConnection_Data(t *testing.T) {
 
 // CloseConnection wrapping a 2xx line: a graceful goodbye — the success line is
 // sent, then the connection closes.
+//
+// checklist: SMTP-SRV-01
 func TestCloseConnection_GracefulSuccess(t *testing.T) {
 	_, s, c, scanner := dataLimitServer(t, func(be *backend, s *smtp.Server) {
 		be.userErr = smtp.CloseConnection(smtp.Errorf(250, smtp.EnhancedCode{2, 1, 0}, "so long"))
@@ -173,6 +187,8 @@ func TestCloseConnection_GracefulSuccess(t *testing.T) {
 }
 
 // CloseConnection(nil) is a no-op and must not terminate the connection.
+//
+// checklist: SMTP-SRV-01
 func TestCloseConnection_NilNoop(t *testing.T) {
 	if smtp.CloseConnection(nil) != nil {
 		t.Fatal("CloseConnection(nil) must return nil")

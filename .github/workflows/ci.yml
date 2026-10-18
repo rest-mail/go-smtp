@@ -23,8 +23,23 @@ jobs:
         run: go vet ./...
       - name: build
         run: go build ./...
-      - name: test (race)
-        run: go test -race -count=1 ./...
+      # The shared RFC proof (go-spf's rfc-verification.yml, used by the other
+      # go-* libraries) fails below 95% statement coverage. go-smtp is at 86%
+      # and the RFC 5321 slice does not close that gap, so the gate here is a
+      # floor at the current figure, raised as coverage grows; COVERAGE.md says
+      # what is uncovered. cmd/smtp-debug-server is a demo program and is left
+      # out of the figure.
+      - name: test (race) with coverage
+        run: go test -race -count=1 -covermode=atomic -coverprofile=coverage.out . ./internal/...
+      - name: coverage floor
+        env:
+          FLOOR: '85.0'
+        run: |
+          total=$(go tool cover -func=coverage.out | awk '/^total:/ { sub(/%/, "", $3); print $3 }')
+          echo "Statement coverage: ${total}% (floor ${FLOOR}%)"
+          awk -v t="$total" -v f="$FLOOR" 'BEGIN { exit !(t + 0 >= f + 0) }'
+      - name: RFC 5321 checklist
+        run: go run ./internal/checklist -file CHECKLIST.md .
       - name: fuzz parsers (10 seconds each)
         env:
           GOMAXPROCS: '1'
