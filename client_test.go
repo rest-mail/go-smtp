@@ -23,6 +23,8 @@ import (
 
 // Don't send a trailing space on AUTH command when there's no initial response:
 // https://github.com/golang/go/issues/17794
+//
+// checklist: SMTP-EXT-08
 func TestClientAuthTrimSpace(t *testing.T) {
 	server := "220 hello world\r\n" +
 		"200 some more"
@@ -69,6 +71,7 @@ func (f faker) SetDeadline(time.Time) error      { return nil }
 func (f faker) SetReadDeadline(time.Time) error  { return nil }
 func (f faker) SetWriteDeadline(time.Time) error { return nil }
 
+// checklist: SMTP-CLI-01
 func TestBasic(t *testing.T) {
 	server := strings.Join(strings.Split(basicServer, "\n"), "\r\n")
 	client := strings.Join(strings.Split(basicClient, "\n"), "\r\n")
@@ -167,6 +170,7 @@ Goodbye.`
 	}
 }
 
+// checklist: SMTP-CLI-03
 func TestBasic_SMTPError(t *testing.T) {
 	faultyServer := `220 mx.google.com at your service
 250-mx.google.com at your service
@@ -242,6 +246,7 @@ func TestBasic_SMTPError(t *testing.T) {
 	}
 }
 
+// checklist: SMTP-CLI-05
 func TestClient_TooLongLine(t *testing.T) {
 	faultyServer := []string{
 		"220 mx.google.com at your service\r\n",
@@ -323,6 +328,7 @@ Goodbye.
 QUIT
 `
 
+// checklist: SMTP-CLI-01
 func TestNewClient(t *testing.T) {
 	server := strings.Join(strings.Split(newClientServer, "\n"), "\r\n")
 	client := strings.Join(strings.Split(newClientClient, "\n"), "\r\n")
@@ -365,6 +371,7 @@ var newClientClient = `EHLO localhost
 QUIT
 `
 
+// checklist: SMTP-CLI-01
 func TestNewClient2(t *testing.T) {
 	server := strings.Join(strings.Split(newClient2Server, "\n"), "\r\n")
 	client := strings.Join(strings.Split(newClient2Client, "\n"), "\r\n")
@@ -406,6 +413,8 @@ QUIT
 // TestClientEHLOExtensionCaseInsensitive verifies that EHLO extension keywords
 // advertised in lower/mixed case are found by canonical upper-case lookups.
 // EHLO keywords are case-insensitive per RFC 5321 §2.4 and §4.1.1.1.
+//
+// checklist: SMTP-CLI-02
 func TestClientEHLOExtensionCaseInsensitive(t *testing.T) {
 	server := strings.Join(strings.Split(ehloCaseServer, "\n"), "\r\n")
 
@@ -447,6 +456,7 @@ var ehloCaseServer = `220 hello world
 221 OK
 `
 
+// checklist: SMTP-CLI-01
 func TestHello(t *testing.T) {
 
 	if len(helloServer) != len(helloClient) {
@@ -560,6 +570,7 @@ var shuttingDownServerHello = `220 hello world
 421 Service not available, closing transmission channel
 `
 
+// checklist: SMTP-CLI-03
 func TestHello_421Response(t *testing.T) {
 	server := strings.Join(strings.Split(shuttingDownServerHello, "\n"), "\r\n")
 	client := "EHLO customhost\r\n"
@@ -613,6 +624,7 @@ SendMail is working for me.
 QUIT
 `
 
+// checklist: SMTP-EXT-06
 func TestSendMail_SMTPUTF8_Autodetect(t *testing.T) {
 	buildServer := func(nRcpt int) string {
 		s := "220 hello world\r\n" +
@@ -688,6 +700,7 @@ func TestSendMail_SMTPUTF8_Autodetect(t *testing.T) {
 	}
 }
 
+// checklist: SMTP-EXT-06
 func TestSendMail_SMTPUTF8_NotAdvertised(t *testing.T) {
 	const server = "220 hello world\r\n" +
 		"250-mx.example.com at your service\r\n" +
@@ -721,6 +734,7 @@ func TestSendMail_SMTPUTF8_NotAdvertised(t *testing.T) {
 	}
 }
 
+// checklist: SMTP-EXT-06
 func TestIsASCII(t *testing.T) {
 	cases := []struct {
 		s    string
@@ -738,6 +752,7 @@ func TestIsASCII(t *testing.T) {
 	}
 }
 
+// checklist: SMTP-EXT-08
 func TestAuthFailed(t *testing.T) {
 	server := strings.Join(strings.Split(authFailedServer, "\n"), "\r\n")
 	client := strings.Join(strings.Split(authFailedClient, "\n"), "\r\n")
@@ -777,6 +792,7 @@ AUTH PLAIN AHVzZXIAcGFzcw==
 *
 `
 
+// checklist: SMTP-EXT-07
 func TestTLSClient(t *testing.T) {
 	ln := newLocalListener(t)
 	defer ln.Close()
@@ -797,6 +813,7 @@ func TestTLSClient(t *testing.T) {
 	}
 }
 
+// checklist: SMTP-EXT-07
 func TestTLSConnState(t *testing.T) {
 	ln := newLocalListener(t)
 	defer ln.Close()
@@ -968,6 +985,7 @@ jiC0k/9L5dHUsF0XZothAkEA23ddgRs+Id/HxtojqqUT27B8MT/IGNrYsp4DvS/c
 qgkeluku4GjxRlDMBuXk94xOBEinUs+p/hwP1Alll80Tpg==
 -----END RSA PRIVATE KEY-----`)
 
+// checklist: SMTP-EXT-09
 func TestLMTP(t *testing.T) {
 	server := strings.Join(strings.Split(lmtpServer, "\n"), "\r\n")
 	client := strings.Join(strings.Split(lmtpClient, "\n"), "\r\n")
@@ -1044,6 +1062,7 @@ Goodbye.
 QUIT
 `
 
+// checklist: SMTP-EXT-09
 func TestLMTPData(t *testing.T) {
 	var lmtpServerPartial = `220 localhost Simple Mail Transfer Service Ready
 250-localhost at your service
@@ -1125,6 +1144,7 @@ var xtextClient = `MAIL FROM:<e=mc2@example.com> AUTH=e+3Dmc2@example.com
 RCPT TO:<e=mc2@example.com> ORCPT=UTF-8;e\x{3D}mc2@example.com
 `
 
+// checklist: SMTP-EXT-04
 func TestClientXtext(t *testing.T) {
 	server := "220 hello world\r\n" +
 		"250 ok\r\n" +
@@ -1173,6 +1193,7 @@ RCPT TO:<e=mc2@example.com> NOTIFY=FAILURE,DELAY ORCPT=UTF-8;e\x{3D}mc2@\x{30C9}
 RCPT TO:<e=mc2@ドメイン名例.jp> ORCPT=UTF-8;e\x{3D}mc2@ドメイン名例.jp
 `
 
+// checklist: SMTP-EXT-04
 func TestClientDSN(t *testing.T) {
 	server := strings.Join(strings.Split(dsnServer, "\n"), "\r\n")
 	client := strings.Join(strings.Split(dsnClient, "\n"), "\r\n")
@@ -1223,6 +1244,7 @@ var rrvsClient = `RCPT TO:<root@nsa.gov> RRVS=2014-04-03T23:01:00Z
 RCPT TO:<root@gchq.gov.uk>
 `
 
+// checklist: SMTP-EXT-10
 func TestClientRRVS(t *testing.T) {
 	server := strings.Join(strings.Split(rrvsServer, "\n"), "\r\n")
 	client := strings.Join(strings.Split(rrvsClient, "\n"), "\r\n")
@@ -1257,6 +1279,7 @@ var deliverByServer = `250 ok
 var deliverByClient = `MAIL FROM:<root@nsa.gov> BY=100;RT
 `
 
+// checklist: SMTP-EXT-11
 func TestClientDELIVERBY(t *testing.T) {
 	server := strings.Join(strings.Split(deliverByServer, "\n"), "\r\n")
 	client := strings.Join(strings.Split(deliverByClient, "\n"), "\r\n")
@@ -1295,6 +1318,7 @@ var mtPriorityServer = `250 ok
 var mtPriorityClient = `MAIL FROM:<root@nsa.gov> MT-PRIORITY=6
 `
 
+// checklist: SMTP-EXT-12
 func TestClientMTPRIORITY(t *testing.T) {
 	server := strings.Join(strings.Split(mtPriorityServer, "\n"), "\r\n")
 	client := strings.Join(strings.Split(mtPriorityClient, "\n"), "\r\n")
@@ -1350,6 +1374,8 @@ func newMailParamClient(exts ...string) (c *Client, wrote *bytes.Buffer) {
 // extension (RFC 2852 §4, RFC 6710 §3). Dropping one silently would leave the
 // caller believing a deadline or a priority had been asked for when none was,
 // with nothing in the transcript to say otherwise — so Mail refuses instead.
+//
+// checklist: SMTP-CLI-07
 func TestClientMailParamsUnadvertised(t *testing.T) {
 	priority := 6
 	for _, tc := range []struct {
@@ -1377,6 +1403,8 @@ func TestClientMailParamsUnadvertised(t *testing.T) {
 
 // A value the extension cannot express is refused before it reaches the wire,
 // rather than sent for the server to reject mid-transaction.
+//
+// checklist: SMTP-CLI-07
 func TestClientMailParamsOutOfRange(t *testing.T) {
 	tooLow, tooHigh := -10, 10
 	for _, tc := range []struct {
@@ -1414,6 +1442,8 @@ func TestClientMailParamsOutOfRange(t *testing.T) {
 // A sub-second remainder is truncated, not rounded up: RFC 2852 §4 counts the
 // deadline in whole seconds, and rounding up would ask for a later one than the
 // caller set.
+//
+// checklist: SMTP-EXT-11
 func TestClientDeliverByTruncatesToSeconds(t *testing.T) {
 	c, wrote := newMailParamClient("DELIVERBY")
 

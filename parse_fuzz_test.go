@@ -11,6 +11,7 @@ import (
 // Bound work and allocations even when the fuzzer generates oversized inputs.
 const maxParserFuzzInput = 4096
 
+// checklist: SMTP-SYN-05
 func FuzzParseCmd(f *testing.F) {
 	for _, seed := range []string{
 		"", "\r\n", "A", "NOOP", "noop\r\n", "HELOx", "EHLO café.example\r\n",
@@ -66,6 +67,7 @@ func FuzzParseCmd(f *testing.F) {
 	})
 }
 
+// checklist: SMTP-SYN-06
 func FuzzParseArgs(f *testing.F) {
 	for _, seed := range []string{
 		"", " ", " BODY=8BITMIME SIZE=1024 SMTPUTF8", " SIZE=1 size=2",
@@ -119,6 +121,7 @@ func FuzzParseArgs(f *testing.F) {
 	})
 }
 
+// checklist: SMTP-EXT-11
 func FuzzParseDeliverByArgument(f *testing.F) {
 	for _, seed := range []string{
 		"", "1", ";N", "+;N", "0;N", "-0;NT", "1;R", "+1;RT", "-1;N", "0;R", "-1;R",
@@ -303,6 +306,7 @@ func validPathParts(input string) (local, domain, quoted string) {
 	return "u" + l.String(), "d" + d.String() + ".example", q.String()
 }
 
+// checklist: SMTP-SYN-01 SMTP-SYN-02
 func FuzzParseReversePath(f *testing.F) {
 	for _, seed := range pathSeeds {
 		f.Add(seed)
@@ -354,6 +358,7 @@ func FuzzParseReversePath(f *testing.F) {
 	})
 }
 
+// checklist: SMTP-SYN-02 SMTP-SYN-03 SMTP-SYN-04
 func FuzzParseForwardPath(f *testing.F) {
 	for _, seed := range pathSeeds {
 		f.Add(seed)

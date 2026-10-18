@@ -34,6 +34,8 @@ func drainEhlo(scanner interface {
 // not race on the internal done channel (previously two callers could both
 // close it, panicking with "close of closed channel"). Exactly one caller
 // should perform the shutdown; every other caller must observe ErrServerClosed.
+//
+// checklist: SMTP-SRV-01
 func TestServerCloseConcurrent(t *testing.T) {
 	const iterations = 200
 	const closers = 8
@@ -74,6 +76,8 @@ func TestServerCloseConcurrent(t *testing.T) {
 // absolute deadline measured from the DATA command. A body that is dripped over
 // a period longer than ReadTimeout, but with each inter-write gap comfortably
 // under it, must be accepted.
+//
+// checklist: SMTP-LIM-05
 func TestDataBodyReadDeadlineRefresh(t *testing.T) {
 	_, s, c, scanner := testServerGreeted(t, func(s *smtp.Server) {
 		s.ReadTimeout = 250 * time.Millisecond
@@ -128,6 +132,8 @@ func TestDataBodyReadDeadlineRefresh(t *testing.T) {
 // the server is consuming the DATA body it responds 451 4.4.2 and closes the
 // connection, rather than returning a generic 554 and leaving the socket open
 // (which would cause any further client bytes to be re-parsed as commands).
+//
+// checklist: SMTP-LIM-05
 func TestDataReadTimeoutClosesConnection(t *testing.T) {
 	_, s, c, scanner := testServerGreeted(t, func(s *smtp.Server) {
 		s.ReadTimeout = 200 * time.Millisecond
@@ -179,6 +185,8 @@ func TestDataReadTimeoutClosesConnection(t *testing.T) {
 // and closes the connection, mirroring the DATA path. Previously it wrote a 554
 // carrying the raw net-error text ("...i/o timeout") and left the socket open,
 // so the peer's remaining chunk octets were re-parsed as commands (a desync).
+//
+// checklist: SMTP-EXT-05
 func TestBdatReadTimeoutClosesConnection(t *testing.T) {
 	_, s, c, scanner := testServerGreeted(t, func(s *smtp.Server) {
 		s.ReadTimeout = 200 * time.Millisecond
@@ -230,6 +238,8 @@ func TestBdatReadTimeoutClosesConnection(t *testing.T) {
 // TestDataWrappedSMTPError verifies that a *SMTPError returned wrapped (via %w)
 // from Session.Data keeps its code/enhanced-code/message, rather than being
 // flattened to a generic 554.
+//
+// checklist: SMTP-REP-03
 func TestDataWrappedSMTPError(t *testing.T) {
 	be, s, c, scanner := testServerGreeted(t)
 	defer s.Close()
@@ -267,6 +277,8 @@ func TestDataWrappedSMTPError(t *testing.T) {
 
 // TestMailWrappedSMTPError verifies the same errors.As handling for the
 // writeError path (Session.Mail returning a wrapped *SMTPError).
+//
+// checklist: SMTP-REP-03
 func TestMailWrappedSMTPError(t *testing.T) {
 	be, s, c, scanner := testServerGreeted(t)
 	defer s.Close()
@@ -370,6 +382,8 @@ func (l *singleConnListener) Addr() net.Addr { return dummyAddr{} }
 // TestWriteErrorBreaksLoop verifies that once a response write fails, the
 // connection command loop stops instead of spinning forever processing
 // commands whose responses can never reach the (gone) peer.
+//
+// checklist: SMTP-SRV-02
 func TestWriteErrorBreaksLoop(t *testing.T) {
 	fc := &flakyConn{failAfter: 100, closed: make(chan struct{})}
 	l := &singleConnListener{conn: fc, done: make(chan struct{})}
@@ -451,6 +465,8 @@ func serveOneAndDrain(t *testing.T, sc *stepConn, s *smtp.Server) {
 // TestHealthcheckNoCommandNotLogged verifies that a connection reset before any
 // command is issued (a bare TCP health check) does not produce an error-log
 // entry.
+//
+// checklist: SMTP-SRV-04
 func TestHealthcheckNoCommandNotLogged(t *testing.T) {
 	var logBuf bytes.Buffer
 	sc := &stepConn{steps: []step{{nil, econnreset()}}, closed: make(chan struct{})}
@@ -468,6 +484,8 @@ func TestHealthcheckNoCommandNotLogged(t *testing.T) {
 
 // TestMidSessionErrorStillLogged verifies the silencing is scoped: a connection
 // reset after a command has been processed is still logged.
+//
+// checklist: SMTP-SRV-04
 func TestMidSessionErrorStillLogged(t *testing.T) {
 	var logBuf bytes.Buffer
 	sc := &stepConn{
@@ -501,6 +519,8 @@ func TestMidSessionErrorStillLogged(t *testing.T) {
 // after the server's first continuation read has timed out, but before any
 // subsequent read deadline, so on the buggy code it is deterministically
 // re-parsed as a command.
+//
+// checklist: SMTP-EXT-08
 func TestAuthContinuationReadTimeoutClosesConnection(t *testing.T) {
 	const readTimeout = 250 * time.Millisecond
 
@@ -558,6 +578,8 @@ func TestAuthContinuationReadTimeoutClosesConnection(t *testing.T) {
 // TestAuthClientCancelReturns501 verifies that a "*" cancel line, which is read
 // successfully, stays distinct from a transport read error: it yields 501 and
 // the exchange ends, rather than being conflated with the read-error path.
+//
+// checklist: SMTP-EXT-08
 func TestAuthClientCancelReturns501(t *testing.T) {
 	_, s, c, scanner, caps := testServerEhlo(t)
 	defer s.Close()

@@ -139,6 +139,7 @@ func writeFlushBatch(t *testing.T, c net.Conn, batch string) {
 	}
 }
 
+// checklist: SMTP-EXT-01
 func TestPipelinedRepliesShareOneWrite(t *testing.T) {
 	wc, c, br, _ := newFlushTestConn(t, func(s *Server) { s.MaxRecipients = 2 })
 
@@ -171,6 +172,7 @@ func TestPipelinedRepliesShareOneWrite(t *testing.T) {
 	}
 }
 
+// checklist: SMTP-EXT-01
 func TestSingleCommandReplyIsPrompt(t *testing.T) {
 	wc, c, br, _ := newFlushTestConn(t, nil)
 
@@ -185,6 +187,7 @@ func TestSingleCommandReplyIsPrompt(t *testing.T) {
 	}
 }
 
+// checklist: SMTP-EXT-01
 func TestPartialPipelinedLineDoesNotHoldReplies(t *testing.T) {
 	_, c, br, _ := newFlushTestConn(t, nil)
 
@@ -200,6 +203,7 @@ func TestPartialPipelinedLineDoesNotHoldReplies(t *testing.T) {
 	}
 }
 
+// checklist: SMTP-DATA-01
 func TestDataReplySentBeforeBody(t *testing.T) {
 	wc, c, br, _ := newFlushTestConn(t, nil)
 
@@ -225,6 +229,7 @@ func TestDataReplySentBeforeBody(t *testing.T) {
 	}
 }
 
+// checklist: SMTP-EXT-08
 func TestAuthChallengeSentBeforeReadingResponse(t *testing.T) {
 	_, c, br, _ := newFlushTestConn(t, nil)
 
@@ -244,6 +249,7 @@ func TestAuthChallengeSentBeforeReadingResponse(t *testing.T) {
 	}
 }
 
+// checklist: SMTP-EXT-07
 func TestStartTLSReplySentBeforeHandshake(t *testing.T) {
 	cert, err := tls.X509KeyPair(localhostCert, localhostKey)
 	if err != nil {
@@ -272,6 +278,7 @@ func TestStartTLSReplySentBeforeHandshake(t *testing.T) {
 	}
 }
 
+// checklist: SMTP-CMD-06
 func TestQuitReplySentBeforeClose(t *testing.T) {
 	_, c, br, done := newFlushTestConn(t, nil)
 
@@ -294,6 +301,7 @@ func TestQuitReplySentBeforeClose(t *testing.T) {
 	}
 }
 
+// checklist: SMTP-SRV-02
 func TestReplyWriteErrorEndsConnection(t *testing.T) {
 	errInjected := errors.New("injected write failure")
 	wc, c, br, done := newFlushTestConn(t, nil)

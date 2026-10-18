@@ -51,6 +51,8 @@ func hasXCLIENT(caps []string) bool {
 
 // TestServerXClientTrusted verifies that for a trusted peer XCLIENT is
 // advertised, honored, and the asserted identity reaches the backend.
+//
+// checklist: SMTP-EXT-13
 func TestServerXClientTrusted(t *testing.T) {
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -104,6 +106,8 @@ func TestServerXClientTrusted(t *testing.T) {
 
 // TestServerXClientUntrusted verifies that for an untrusted peer XCLIENT is
 // neither advertised nor honored.
+//
+// checklist: SMTP-EXT-13
 func TestServerXClientUntrusted(t *testing.T) {
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

@@ -8,6 +8,7 @@ import (
 	smtp "github.com/rest-mail/go-smtp"
 )
 
+// checklist: SMTP-REP-03
 func TestErrorf(t *testing.T) {
 	err := smtp.Errorf(550, smtp.EnhancedCode{5, 7, 1}, "rejected: %s", "spam")
 	if err.Code != 550 {
@@ -28,6 +29,8 @@ func TestErrorf(t *testing.T) {
 // returning an *SMTPError (built with Errorf) sets the exact status line, rather
 // than being wrapped as the generic "554 ... transaction failed: <raw>" leak
 // that a plain error produces.
+//
+// checklist: SMTP-REP-03
 func TestBackendErrorf_StatusNotLeaked(t *testing.T) {
 	_, s, c, scanner := dataLimitServer(t, func(be *backend, s *smtp.Server) {
 		be.dataErr = smtp.Errorf(550, smtp.EnhancedCode{5, 7, 1}, "policy: %s", "blocked")

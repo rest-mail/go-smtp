@@ -23,6 +23,8 @@ var _ smtp.FeatureBackend = (*featureBackend)(nil)
 
 // TestServerFeatureBackend verifies a Backend implementing FeatureBackend has
 // its dynamically-computed capabilities advertised in the EHLO response.
+//
+// checklist: SMTP-CMD-01
 func TestServerFeatureBackend(t *testing.T) {
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- `CHECKLIST.md`: the requirements of RFC 5321 (server and client core), each
+  mapped to the tests that cover it, with one row per supported extension, and
+  `internal/checklist` to check it in CI. Every `Test` and `Fuzz` function now
+  names the items it covers. `COVERAGE.md` records the coverage.
+- Tests for RFC 5321 requirements that had none: command order, RSET and a second
+  EHLO, case-insensitive verbs, the recipient limit and 100 recipients, dot
+  unstuffing on the server and dot stuffing on the client, the 512-octet command
+  line and the minimum address sizes.
+
 ### Fixed
 
 - Out-of-sequence commands now return `503 5.5.1` rather than `502`

@@ -54,6 +54,7 @@ func sendLHLO(t *testing.T, scanner *bufio.Scanner, c io.Writer) {
 	}
 }
 
+// checklist: SMTP-EXT-09
 func TestServer_LMTP(t *testing.T) {
 	be, s, c, scanner := testServerGreetedLMTP(t, func(s *smtp.Server) {
 		s.LMTP = true
@@ -86,6 +87,7 @@ func TestServer_LMTP(t *testing.T) {
 	}
 }
 
+// checklist: SMTP-EXT-09
 func TestServer_LMTP_Early(t *testing.T) {
 	// This test confirms responses are sent as early as possible
 	// e.g. right after SetStatus is called.
@@ -131,6 +133,7 @@ func TestServer_LMTP_Early(t *testing.T) {
 	}
 }
 
+// checklist: SMTP-EXT-09
 func TestServer_LMTP_Expand(t *testing.T) {
 	// This checks whether handleDataLMTP
 	// correctly expands results if backend doesn't
@@ -158,6 +161,7 @@ func TestServer_LMTP_Expand(t *testing.T) {
 	}
 }
 
+// checklist: SMTP-EXT-09
 func TestServer_LMTP_DuplicatedRcpt(t *testing.T) {
 	be, s, c, scanner := testServerGreetedLMTP(t, func(s *smtp.Server) {
 		s.LMTP = true

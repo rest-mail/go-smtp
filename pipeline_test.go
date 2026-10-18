@@ -30,6 +30,8 @@ func mustReadLine(t *testing.T, r *bufio.Reader) string {
 // command) would block forever here, since it would wait for MAIL's reply while
 // the server is still waiting to read RCPT. The pipelined client sends the whole
 // group, then reads the replies.
+//
+// checklist: SMTP-EXT-01
 func TestPipeline_NoRoundTripDeadlock(t *testing.T) {
 	cconn, sconn := net.Pipe()
 	defer cconn.Close()
@@ -100,6 +102,8 @@ func TestPipeline_NoRoundTripDeadlock(t *testing.T) {
 // TestPipeline_Integration drives a pipelined MAIL + two RCPT against a real
 // server, then sends the message and confirms it was delivered to both
 // recipients — exercising the recipient tracking that Wait performs.
+//
+// checklist: SMTP-EXT-01
 func TestPipeline_Integration(t *testing.T) {
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -162,6 +166,8 @@ func TestPipeline_Integration(t *testing.T) {
 
 // TestPipeline_Reset pipelines RSET + MAIL + RCPT and confirms the RSET clears
 // any prior recipient state so the new transaction's recipient is the only one.
+//
+// checklist: SMTP-CLI-06
 func TestPipeline_Reset(t *testing.T) {
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -228,6 +234,8 @@ func TestPipeline_Reset(t *testing.T) {
 
 // TestPipeline_NotSupported: Pipeline returns an error when the server does not
 // advertise PIPELINING, so callers can fall back to the synchronous API.
+//
+// checklist: SMTP-EXT-01
 func TestPipeline_NotSupported(t *testing.T) {
 	cconn, sconn := net.Pipe()
 	defer cconn.Close()

@@ -12,6 +12,8 @@ import (
 
 // TestServerConnState verifies the Server.ConnState hook fires StateNew when a
 // connection is accepted and StateClosed when it is torn down.
+//
+// checklist: SMTP-SRV-04
 func TestServerConnState(t *testing.T) {
 	var mu sync.Mutex
 	var states []smtp.ConnState

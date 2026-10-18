@@ -82,6 +82,8 @@ func beginData(t *testing.T, c net.Conn, scanner *bufio.Scanner) {
 // F12: MaxMessageBytes is an inclusive ceiling. A message whose delivered size
 // is exactly MaxMessageBytes is the largest legal message and must be accepted
 // and delivered intact.
+//
+// checklist: SMTP-EXT-03
 func TestServerSizeLimit_ExactlyMaxAccepted(t *testing.T) {
 	body := "From: a@example.com\r\n\r\nhello world\r\n"
 
@@ -109,6 +111,8 @@ func TestServerSizeLimit_ExactlyMaxAccepted(t *testing.T) {
 
 // F12: one byte over the ceiling must be rejected 552 and not delivered. Guards
 // that the inclusive-ceiling fix doesn't shift the boundary the wrong way.
+//
+// checklist: SMTP-DATA-04 SMTP-EXT-03
 func TestServerSizeLimit_OverMaxRejected(t *testing.T) {
 	body := "From: a@example.com\r\n\r\nhello world\r\n"
 
@@ -134,6 +138,8 @@ func TestServerSizeLimit_OverMaxRejected(t *testing.T) {
 // F4: a message rejected by the backend while WITHIN the size limit must still
 // be drained to the end-of-data marker and the connection left usable for a
 // following transaction (the polite, RFC-correct behavior — must not regress).
+//
+// checklist: SMTP-EXT-03
 func TestServerSizeLimit_RejectWithinLimitKeepsConnection(t *testing.T) {
 	_, s, c, scanner := dataLimitServer(t, func(be *backend, s *smtp.Server) {
 		s.MaxMessageBytes = 1000
@@ -167,6 +173,8 @@ func TestServerSizeLimit_RejectWithinLimitKeepsConnection(t *testing.T) {
 // it (here ~2x) is drained to the end-of-data marker within budget, so the
 // client gets a clean permanent 552 and the connection stays usable for a retry
 // — matching standard MTA behavior instead of an ambiguous connection drop.
+//
+// checklist: SMTP-EXT-03
 func TestServerSizeLimit_OversizedKeepsConnection(t *testing.T) {
 	be, s, c, scanner := dataLimitServer(t, func(be *backend, s *smtp.Server) {
 		s.MaxMessageBytes = 64
@@ -200,6 +208,8 @@ func TestServerSizeLimit_OversizedKeepsConnection(t *testing.T) {
 // whole drain budget without ever sending the end-of-data marker is abusing the
 // connection. The server must bound the drain, respond 552 and close — not read
 // unboundedly (which, on the unfixed code, hangs forever).
+//
+// checklist: SMTP-EXT-03
 func TestServerSizeLimit_OverLimitDrainBounded(t *testing.T) {
 	_, s, c, scanner := dataLimitServer(t, func(be *backend, s *smtp.Server) {
 		s.MaxMessageBytes = 10
@@ -274,6 +284,8 @@ func assertConnClosed(t *testing.T, c net.Conn, context string) {
 // must bound the drain, emit the per-recipient 552 and close — mirroring the
 // SMTP DATA path. On the unfixed code the drain is an unbounded io.Copy that
 // never returns, so `done` never fires and the connection is never closed.
+//
+// checklist: SMTP-EXT-03
 func TestServerSizeLimit_LMTP_OverLimitDrainBounded(t *testing.T) {
 	_, s, c, scanner := testServerGreetedLMTP(t, func(s *smtp.Server) {
 		s.LMTP = true
@@ -308,6 +320,8 @@ func TestServerSizeLimit_LMTP_OverLimitDrainBounded(t *testing.T) {
 // #46: the same bounded-drain guarantee must hold on the fallback path taken
 // when the backend does NOT implement LMTPSession (a single status is expanded
 // to every recipient).
+//
+// checklist: SMTP-EXT-03
 func TestServerSizeLimit_LMTP_Fallback_OverLimitDrainBounded(t *testing.T) {
 	_, s, c, scanner := testServerGreetedLMTP(t, func(s *smtp.Server) {
 		s.LMTP = true

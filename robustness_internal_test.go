@@ -28,6 +28,8 @@ func (nopSession) Data(io.Reader) error            { return nil }
 // on a half-upgraded connection. ReadTimeout is intentionally left at 0 so that
 // no idle timeout can mask the behaviour: only the close-on-failure fix can end
 // the connection.
+//
+// checklist: SMTP-EXT-07
 func TestStartTLSClosesOnHandshakeFailure(t *testing.T) {
 	cert, err := tls.X509KeyPair(localhostCert, localhostKey)
 	if err != nil {
@@ -96,6 +98,8 @@ func TestStartTLSClosesOnHandshakeFailure(t *testing.T) {
 // TestXtextRoundTrip verifies that encodeXtext/decodeXtext round-trip every
 // octet value, including 0x80-0xFF which the previous decoder (ParseInt with
 // bitSize 8) could not represent.
+//
+// checklist: SMTP-EXT-04
 func TestXtextRoundTrip(t *testing.T) {
 	for i := 0; i < 256; i++ {
 		raw := string([]byte{byte(i)})
