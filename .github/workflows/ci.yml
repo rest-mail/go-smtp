@@ -35,6 +35,7 @@ jobs:
         env:
           FLOOR: '85.0'
         run: |
+          go tool cover -func=coverage.out
           total=$(go tool cover -func=coverage.out | awk '/^total:/ { sub(/%/, "", $3); print $3 }')
           echo "Statement coverage: ${total}% (floor ${FLOOR}%)"
           awk -v t="$total" -v f="$FLOOR" 'BEGIN { exit !(t + 0 >= f + 0) }'
