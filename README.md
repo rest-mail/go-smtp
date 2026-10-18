@@ -49,7 +49,7 @@ exactly:
 | ID | Section | Level | Requirement | Tests |
 |----|---------|-------|-------------|-------|
 | SMTP-RSET-01 | 4.1.1.5 | MUST | RSET clears the sender, the recipients and the data. | `TestRFC5321_RsetAndSecondEhloClearTransaction` |
-| SMTP-ORD-05 | 4.1.4 | SHOULD | A command out of sequence is answered 503. | n/a: known deviation. |
+| SMTP-LIM-06 | 4.5.3.1.5 | MUST | A reply line is at most 512 octets, CRLF included. | n/a: a gap, not asserted yet. |
 ```
 
 Each test names the items it covers in its doc comment:

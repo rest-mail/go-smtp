@@ -15,8 +15,8 @@ name it.
 The local and CI figures differ by about a point. Both runs leave the same
 blocks uncovered; only the statement count of some blocks differs (a
 composite literal counts as 3 statements locally and 1 in CI). CI uses the
-current stable Go (1.27.2 when this was measured) and gets 87.2%; the same tests
-on Go 1.27.1 on the Pi report 89.1% (the package alone 88.4%, no race detector
+current stable Go (1.27.2 when this was measured) and gets 87.2% (measured before the 503 tests of #87 landed, so the next run reads higher); the same tests
+on Go 1.27.1 on the Pi report 89.8% (the package alone 89.2%, no race detector
 there). The floor leaves room for that difference.
 
 The other `go-*` libraries fail CI below 95%, through go-spf's shared
@@ -47,5 +47,5 @@ clause by clause, are where most of them get tests.
   4954, 3030, 2033 and XCLIENT rows), and the client's `Auth`, `Verify`,
   `Extension`, `Noop`, `Quit` and `Reset` failure paths.
 - **RFC 5321 core:** every requirement in CHECKLIST.md marked tested has a test;
-  the two that do not (SMTP-ORD-05, SMTP-LIM-06) are listed there with the
+  the one that does not (SMTP-LIM-06) is listed there with the
   reason.

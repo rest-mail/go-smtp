@@ -19,8 +19,7 @@ func expectReply(t *testing.T, w io.Writer, next func() string, cmd, want string
 }
 
 // RFC 5321 §4.1.4 and §4.1.1: MAIL, RCPT and DATA are refused out of order, and
-// a refused command leaves the session usable. The reply is 502 where the RFC
-// asks for 503; CHECKLIST.md records that as SMTP-ORD-05.
+// a refused command leaves the session usable.
 //
 // checklist: SMTP-ORD-01 SMTP-ORD-02 SMTP-ORD-03
 func TestRFC5321_CommandOrder(t *testing.T) {

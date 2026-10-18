@@ -14,8 +14,8 @@ Not covered yet: each extension (PIPELINING, 8BITMIME, SIZE, DSN, CHUNKING,
 SMTPUTF8, STARTTLS, AUTH, LMTP, RRVS, DELIVERBY, MT-PRIORITY, XCLIENT) is one
 row in the last section, mapping its existing tests, and has not been checked
 clause by clause; later slots do that. RFC 6409 (submission) is not in this
-slot. The deviation from §4.1.4's 503 is recorded as SMTP-ORD-05, and the reply
-line length of §4.5.3.1.5 as SMTP-LIM-06.
+slot. The reply
+line length of §4.5.3.1.5 is recorded as SMTP-LIM-06.
 
 
 ## Syntax and lexical rules (§2.3, §2.4, §4.1.2)
@@ -43,7 +43,7 @@ line length of §4.5.3.1.5 as SMTP-LIM-06.
 | SMTP-ORD-02 | 4.1.4 | Normative | No mail transaction starts before the client has introduced itself with HELO or EHLO. | `TestRFC5321_CommandOrder` |
 | SMTP-ORD-03 | 3.3, 4.1.1.4 | MUST | DATA is refused when the transaction has no recipient. | `TestRFC5321_CommandOrder` |
 | SMTP-ORD-04 | 4.1.1.2, 4.1.4 | MUST | A second MAIL inside a transaction is a 503 and leaves the transaction (sender and recipients) intact; after RSET a new MAIL is accepted. | `TestServerNestedMailRejected`, `TestServerResetThenMail` |
-| SMTP-ORD-05 | 4.1.4 | SHOULD | A command out of sequence is answered 503. | n/a: known deviation, not fixed in this slot: MAIL before HELO, RCPT before MAIL and DATA without a recipient get 502 5.5.1 (only the nested MAIL gets 503); changing a code clients may match on is a behaviour change. |
+| SMTP-ORD-05 | 4.1.4 | SHOULD | A command out of sequence is answered 503 5.5.1: MAIL or AUTH before HELO/EHLO, RCPT before MAIL, DATA or BDAT without a recipient, a transaction command between BDAT chunks, DATA after BODY=BINARYMIME, and STARTTLS on a TLS connection. | `TestServerBadSequence`, `TestServerSTARTTLSAlreadyTLSBadSequence`, `TestClientBadSequenceError` |
 
 ## Commands (§4.1.1, §4.5.1)
 
