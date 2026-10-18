@@ -8,6 +8,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- A `utf-8` `ORCPT` address now follows RFC 6533 §3. The server refuses
+  malformed UTF-8 (overlong forms, encoded surrogates, octets past U+10FFFF,
+  stray or truncated sequences), which QUCHAR does not allow (RFC 3629 §4), and
+  accepts lower-case `\x{e9}`, since ABNF hex digits are case-insensitive
+  (RFC 5234 §2.3). The client no longer sends a literal `\`, which is not a
+  QCHAR, or a one-digit `\x{1}`; it writes `\x{5C}` and `\x{01}`. `Rcpt` now
+  returns an error for an original recipient that is not UTF-8, or that holds
+  NUL, %x0A-0F or %x1A-1F, which HEXPOINT cannot express. Found by the new
+  `FuzzDecodeUTF8AddrXtext`, `FuzzEncodeUTF8AddrXtext` and
+  `FuzzEncodeUTF8AddrUnitext` targets, which check all three functions against
+  an independent copy of the grammar and CI runs for 10 seconds each.
 - The server no longer accepts a literal `=`, space, control or non-ASCII byte
   in an xtext parameter (`AUTH`, `ENVID`, and an `rfc822` `ORCPT`). RFC 3461
   §4 and RFC 4954 §8 allow only xchars (printable US-ASCII other than `+` and

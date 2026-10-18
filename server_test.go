@@ -1659,6 +1659,55 @@ func TestServerDSN(t *testing.T) {
 	}
 }
 
+// An ORCPT=UTF-8 address is refused unless it is RFC 6533 unitext: literal
+// non-ASCII must be well-formed UTF-8 (RFC 3629), while HEXPOINT digits are
+// case-insensitive like all ABNF (RFC 5234 section 2.3).
+func TestServerDSNUTF8AddressORCPT(t *testing.T) {
+	be, s, c, scanner, _ := testServerEhlo(t,
+		func(s *smtp.Server) {
+			s.EnableDSN = true
+			s.EnableSMTPUTF8 = true
+		})
+	defer s.Close()
+	defer c.Close()
+
+	io.WriteString(c, "MAIL FROM:<root@nsa.gov> SMTPUTF8\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid MAIL response:", scanner.Text())
+	}
+
+	// An overlong '/' and an encoded surrogate.
+	for _, orcpt := range []string{"a\xc0\xafb@example.com", "a\xed\xa0\x80b@example.com"} {
+		io.WriteString(c, "RCPT TO:<root@gchq.gov.uk> ORCPT=UTF-8;"+orcpt+"\r\n")
+		scanner.Scan()
+		if !strings.HasPrefix(scanner.Text(), "501 5.5.4 ") {
+			t.Fatalf("RCPT with ORCPT %q: got %q, want a 501", orcpt, scanner.Text())
+		}
+	}
+
+	io.WriteString(c, "RCPT TO:<root@gchq.gov.uk> ORCPT=utf-8;r\\x{e9}sum\\x{e9}@example.com\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid RCPT response:", scanner.Text())
+	}
+
+	io.WriteString(c, "DATA\r\n")
+	scanner.Scan()
+	io.WriteString(c, "Hey <3\r\n")
+	io.WriteString(c, ".\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid DATA response:", scanner.Text())
+	}
+	if len(be.anonmsgs) != 1 || len(be.anonmsgs[0].RcptOpts) != 1 {
+		t.Fatal("Invalid messages:", be.anonmsgs)
+	}
+	if val := be.anonmsgs[0].RcptOpts[0].OriginalRecipient; val != "résumé@example.com" {
+		t.Fatal("Invalid ORCPT address:", val)
+	}
+}
+
 func TestServerDSNwithSMTPUTF8(t *testing.T) {
 	be, s, c, scanner, caps := testServerEhlo(t,
 		func(s *smtp.Server) {

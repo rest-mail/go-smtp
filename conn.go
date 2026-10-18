@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/emersion/go-sasl"
 )
@@ -752,10 +753,19 @@ func decodeXtext(val string) (string, error) {
 // present.  It also matches disallowed characters in QCHAR and QUCHAR defined
 // in above.
 // So it allows us to detect malformed values and report them appropriately.
-var eUOrDCharRe = regexp.MustCompile(`\\x[{][0-9A-F]+[}]|[[:cntrl:] \\+=]`)
+// HEXDIG is case-insensitive, like every ABNF quoted string (RFC 5234 section
+// 2.3), so "\x{e9}" is as valid as "\x{E9}".
+var eUOrDCharRe = regexp.MustCompile(`\\x[{][0-9A-Fa-f]+[}]|[[:cntrl:] \\+=]`)
 
 // Decodes the utf-8-addr-xtext or the utf-8-addr-unitext form.
 func decodeUTF8AddrXtext(val string) (string, error) {
+	// A literal non-ASCII QUCHAR is UTF8-2, UTF8-3 or UTF8-4 (RFC 3629
+	// section 4): never an overlong form, a surrogate, a code point above
+	// U+10FFFF or a stray octet.
+	if !utf8.ValidString(val) {
+		return "", errors.New("smtp: invalid UTF-8 in utf-8 address")
+	}
+
 	var replaceErr error
 	decoded := eUOrDCharRe.ReplaceAllStringFunc(val, func(match string) string {
 		if len(match) == 1 {
@@ -883,50 +893,65 @@ func encodeXtext(raw string) string {
 	return out.String()
 }
 
+// isQchar reports whether ch is a QCHAR (RFC 6533 section 3): printable
+// non-space US-ASCII except '\', '+' and '='.
+func isQchar(ch rune) bool {
+	return ch < utf8.RuneSelf && isXchar(byte(ch)) && ch != '\\'
+}
+
+// writeEmbeddedUnicodeChar writes ch as an RFC 6533 EmbeddedUnicodeChar,
+// "\x{HEXPOINT}" with upper-case digits. An ASCII HEXPOINT is always two
+// digits, and HEXPOINT has no form at all for NUL, %x0A-0F or %x1A-1F, so
+// those are refused.
+func writeEmbeddedUnicodeChar(out *strings.Builder, ch rune) error {
+	if ch < utf8.RuneSelf && (ch == 0 || ch&0x0F >= 0x0A && ch <= 0x1F) {
+		return fmt.Errorf("smtp: %U cannot be encoded in a utf-8 address", ch)
+	}
+	fmt.Fprintf(out, "\\x{%02X}", ch)
+	return nil
+}
+
 // Encodes raw string to the utf-8-addr-xtext form in RFC 6533.
-func encodeUTF8AddrXtext(raw string) string {
+func encodeUTF8AddrXtext(raw string) (string, error) {
+	if !utf8.ValidString(raw) {
+		return "", errors.New("smtp: invalid UTF-8 in utf-8 address")
+	}
+
 	var out strings.Builder
 	out.Grow(len(raw))
 
 	for _, ch := range raw {
-		switch {
-		case ch >= '!' && ch <= '~' && ch != '+' && ch != '=':
-			// printable non-space US-ASCII except '+' and '='
+		if isQchar(ch) {
 			out.WriteRune(ch)
-		default:
-			out.WriteRune('\\')
-			out.WriteRune('x')
-			out.WriteRune('{')
-			out.WriteString(strings.ToUpper(strconv.FormatInt(int64(ch), 16)))
-			out.WriteRune('}')
+		} else if err := writeEmbeddedUnicodeChar(&out, ch); err != nil {
+			return "", err
 		}
 	}
-	return out.String()
+	return out.String(), nil
 }
 
 // Encodes raw string to the utf-8-addr-unitext form in RFC 6533.
-func encodeUTF8AddrUnitext(raw string) string {
+func encodeUTF8AddrUnitext(raw string) (string, error) {
+	if !utf8.ValidString(raw) {
+		return "", errors.New("smtp: invalid UTF-8 in utf-8 address")
+	}
+
 	var out strings.Builder
 	out.Grow(len(raw))
 
 	for _, ch := range raw {
 		switch {
-		case ch >= '!' && ch <= '~' && ch != '+' && ch != '=':
-			// printable non-space US-ASCII except '+' and '='
+		case isQchar(ch), ch >= utf8.RuneSelf:
+			// QCHAR, or UTF-8 non-ASCII
 			out.WriteRune(ch)
-		case ch <= '\x7F':
-			// other ASCII: CTLs, space and specials
-			out.WriteRune('\\')
-			out.WriteRune('x')
-			out.WriteRune('{')
-			out.WriteString(strings.ToUpper(strconv.FormatInt(int64(ch), 16)))
-			out.WriteRune('}')
 		default:
-			// UTF-8 non-ASCII
-			out.WriteRune(ch)
+			// other ASCII: CTLs, space, '\', '+' and '='
+			if err := writeEmbeddedUnicodeChar(&out, ch); err != nil {
+				return "", err
+			}
 		}
 	}
-	return out.String()
+	return out.String(), nil
 }
 
 func isPrintableASCII(val string) bool {
