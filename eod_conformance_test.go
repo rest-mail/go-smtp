@@ -69,6 +69,7 @@ const smuggledTail = "MAIL FROM:<evil@example.org>\r\n" +
 // inside DATA, followed by a smuggled second transaction and then the real
 // <CRLF>.<CRLF>. The message must either stay one message (the sequence being
 // content) or be refused; the smuggled commands must never run.
+// checklist: SMTP-SYN-11 SMTP-DATA-07
 func TestEODNonStandardSequencesDoNotEndData(t *testing.T) {
 	cases := []struct {
 		name string
@@ -143,6 +144,7 @@ func TestEODNonStandardSequencesDoNotEndData(t *testing.T) {
 // <CRLF> is a stray CR. Otherwise a sender that is exact about <CRLF> hangs
 // waiting for a reply the server never sends, and the two ends disagree about
 // where the message stops.
+// checklist: SMTP-SYN-11 SMTP-DATA-07
 func TestEODCRBeforeCRLFDotEndsData(t *testing.T) {
 	cases := []struct {
 		name, body, want string
@@ -185,6 +187,7 @@ func TestEODCRBeforeCRLFDotEndsData(t *testing.T) {
 // TestEODBDATChunksIgnoreDotSequences: with BDAT the chunk boundary is the
 // declared size alone; dot lines, bare-LF dots and a plain <CRLF>.<CRLF> inside
 // a chunk are content, and a "command" inside a chunk is not executed.
+// checklist: SMTP-SYN-11 SMTP-EXT-05
 func TestEODBDATChunksIgnoreDotSequences(t *testing.T) {
 	chunks := []string{
 		"Subject: bdat\r\n\r\nbefore\r\n.\r\nMAIL FROM:<evil@example.org>\r\n.\r\n",
@@ -253,6 +256,7 @@ func itoa(n int) string {
 // is refused with a 500 and the connection is closed; the command after the
 // bare LF never runs. A bare CR in the middle of a line is not a line ending
 // either, so it never splits one line into two commands.
+// checklist: SMTP-SYN-13
 func TestEODCommandLineBareLF(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -373,6 +377,7 @@ func min(a, b int) int {
 // line starting with ".", or bare LF terminators must reach the wire dot-stuffed
 // and CRLF-normalised, so a receiver reading up to the first <CRLF>.<CRLF>
 // (and nothing else) sees the whole message and no early end.
+// checklist: SMTP-SYN-11 SMTP-CLI-04
 func TestEODClientDotStuffsAndNormalises(t *testing.T) {
 	cases := []struct {
 		name, body, wire string

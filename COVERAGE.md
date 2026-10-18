@@ -16,8 +16,8 @@ The local and CI figures differ by about a point. Both runs leave the same
 blocks uncovered; only the statement count of some blocks differs (a
 composite literal counts as 3 statements locally and 1 in CI). CI uses the
 current stable Go (1.27.2 when this was measured) and gets 87.2% (measured before the 503 tests of #87 landed, so the next run reads higher); the same tests
-on Go 1.27.1 on the Pi report 89.8% (the package alone 89.2%, no race detector
-there). The floor leaves room for that difference.
+on Go 1.27.1 on the Pi report 89.9% (the package alone 89.3%, no race detector
+there; measured locally after #88 landed). The floor leaves room for that difference.
 
 The other `go-*` libraries fail CI below 95%, through go-spf's shared
 `rfc-verification.yml`. go-smtp is not there yet, and this slot (the RFC 5321
