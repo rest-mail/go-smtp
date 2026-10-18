@@ -1,7 +1,9 @@
 package smtp
 
 import (
+	"reflect"
 	"testing"
+	"time"
 )
 
 func TestParser(t *testing.T) {
@@ -154,5 +156,81 @@ func TestParseCmdSTARTTLSExact(t *testing.T) {
 	// STARTTLSx must not be dispatched as STARTTLS; it is an unknown command.
 	if cmd, _, err := parseCmd("STARTTLSx\r\n"); err == nil && cmd == "STARTTLS" {
 		t.Fatalf("parseCmd(STARTTLSx) dispatched as STARTTLS; want it treated as an unknown command")
+	}
+}
+
+// SMTP verbs are ASCII and case-insensitive (RFC 5321 section 2.4).
+// Unicode case folding must not turn a different wire verb into STARTTLS.
+func TestParseCmdASCII(t *testing.T) {
+	for _, line := range []string{
+		"ſTARTTLS", "STARTTLſ", "ſtarttls ignored", "ſET x", "KUIT", "ＭAIL FROM:<a@example.org>",
+	} {
+		t.Run(line, func(t *testing.T) {
+			if cmd, _, err := parseCmd(line); err == nil {
+				t.Fatalf("parseCmd(%q) = %q without error; want non-ASCII verb rejected", line, cmd)
+			}
+		})
+	}
+	for _, tc := range []struct{ line, cmd, arg string }{
+		{"sTaRtTlS\r\n", "STARTTLS", ""},
+		{"starttls ignored", "STARTTLS", ""},
+		{"eHlO café.example\r\n", "EHLO", "café.example"},
+		{"mAiL FROM:<élisa@example.org> SMTPUTF8", "MAIL", "FROM:<élisa@example.org> SMTPUTF8"},
+		{"xClIeNt NAME=café ADDR=127.0.0.1", "XCLIENT", "NAME=café ADDR=127.0.0.1"},
+		{"NOOP \xff=ſ", "NOOP", "\xff=ſ"},
+		{"noop", "NOOP", ""},
+	} {
+		cmd, arg, err := parseCmd(tc.line)
+		if err != nil || cmd != tc.cmd || arg != tc.arg {
+			t.Errorf("parseCmd(%q) = (%q, %q, %v), want (%q, %q, nil)", tc.line, cmd, arg, err, tc.cmd, tc.arg)
+		}
+	}
+}
+
+func TestParseArgsBoundaries(t *testing.T) {
+	for _, input := range []string{" SIZE=1 size=2", " SMTPUTF8 smtputf8", " AUTH=a=b AuTh=c==", " X= x"} {
+		if args, err := parseArgs(input); err == nil || args != nil {
+			t.Errorf("parseArgs(%q) = (%v, %v), want nil map and duplicate error", input, args, err)
+		}
+	}
+	args, err := parseArgs(" auth=élisa=a== EMPTY= FLAG x==")
+	want := map[string]string{"AUTH": "élisa=a==", "EMPTY": "", "FLAG": "", "X": "="}
+	if err != nil || !reflect.DeepEqual(args, want) {
+		t.Fatalf("parseArgs = (%v, %v), want (%v, nil)", args, err, want)
+	}
+}
+
+// RFC 2852 section 4: optional sign, one to nine digits, N/R mode,
+// optional T trace, and strictly positive time in return mode.
+func TestParseDeliverByBoundaries(t *testing.T) {
+	for _, tc := range []struct {
+		input   string
+		seconds int
+		mode    DeliverByMode
+		trace   bool
+	}{
+		{"0;N", 0, DeliverByNotify, false},
+		{"-0;NT", 0, DeliverByNotify, true},
+		{"+1;RT", 1, DeliverByReturn, true},
+		{"000000001;R", 1, DeliverByReturn, false},
+		{"999999999;N", 999999999, DeliverByNotify, false},
+		{"+999999999;RT", 999999999, DeliverByReturn, true},
+		{"-999999999;NT", -999999999, DeliverByNotify, true},
+	} {
+		got := parseDeliverByArgument(tc.input)
+		if got == nil || got.Time != time.Duration(tc.seconds)*time.Second || got.Mode != tc.mode || got.Trace != tc.trace {
+			t.Errorf("parseDeliverByArgument(%q) = %+v, want (%d seconds, %q, trace=%v)", tc.input, got, tc.seconds, tc.mode, tc.trace)
+		}
+	}
+	for _, input := range []string{
+		"", ";N", "+;N", "-;N", "1", "1;", "1;X", "1;NN", "1;NTT", "1;N;T", "1;TN",
+		"0;R", "-0;RT", "-1;R", "1000000000;N", "-1000000000;N",
+		"0000000001;N", "+0000000001;R", "-0000000000;N",
+		"9223372036854775807;N", "-9223372036854775808;N",
+		"1.0;N", " 1;N", "1 ;N", "1;N\r\n", "１;N", "1;Ｎ", "1;NＴ",
+	} {
+		if got := parseDeliverByArgument(input); got != nil {
+			t.Errorf("parseDeliverByArgument(%q) = %+v, want nil", input, got)
+		}
 	}
 }

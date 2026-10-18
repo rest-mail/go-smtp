@@ -25,3 +25,10 @@ jobs:
         run: go build ./...
       - name: test (race)
         run: go test -race -count=1 ./...
+      - name: fuzz parsers (10 seconds each)
+        env:
+          GOMAXPROCS: '1'
+        run: |
+          go test -run='^$' -fuzz='^FuzzParseCmd$' -fuzztime=10s -parallel=1 .
+          go test -run='^$' -fuzz='^FuzzParseArgs$' -fuzztime=10s -parallel=1 .
+          go test -run='^$' -fuzz='^FuzzParseDeliverByArgument$' -fuzztime=10s -parallel=1 .

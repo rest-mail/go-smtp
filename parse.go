@@ -17,6 +17,14 @@ func cutPrefixFold(s, prefix string) (string, bool) {
 
 func parseCmd(line string) (cmd string, arg string, err error) {
 	line = strings.TrimRight(line, "\r\n")
+	// SMTP verbs are ASCII (RFC 5321 section 2.4). Unicode case folding
+	// would otherwise turn e.g. long-s into S in STARTTLS. Arguments may
+	// contain UTF-8, so check only the verb before normalizing its case.
+	for i := 0; i < len(line) && line[i] != ' '; i++ {
+		if line[i] >= 0x80 {
+			return "", "", fmt.Errorf("non-ASCII command verb")
+		}
+	}
 
 	l := len(line)
 	switch {
@@ -96,6 +104,15 @@ const maxDeliverBySeconds = 999999999
 func parseDeliverByArgument(arg string) *DeliverByOptions {
 	secondsStr, modeStr, ok := strings.Cut(arg, ";")
 	if !ok {
+		return nil
+	}
+	// Count wire digits, including leading zeros, rather than just bounding
+	// the numeric value: RFC 2852 section 4 permits ["-" / "+"]1*9DIGIT.
+	digits := secondsStr
+	if strings.HasPrefix(digits, "+") || strings.HasPrefix(digits, "-") {
+		digits = digits[1:]
+	}
+	if len(digits) < 1 || len(digits) > 9 {
 		return nil
 	}
 	modeStr, traceValue := strings.CutSuffix(modeStr, "T")
