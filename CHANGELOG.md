@@ -14,7 +14,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   BODY=BINARYMIME, and STARTTLS on a TLS connection. AUTH and STARTTLS are
   also refused with `503 5.5.1` during a mail transaction. This is a
   client-visible change; existing response text is preserved.
-
+- The server now ends a command line at `<CRLF>` only (RFC 5321 §2.3.8). A
+  line ended by a bare LF was accepted, so `MAIL ...\nRCPT ...\r\n` ran as two
+  commands; it now draws `500 5.5.2` and the connection is closed.
+- The DATA reader no longer mistakes the end of a message for content, or
+  loses a byte, around a stray CR. A CR before the `<CRLF>` of the last line
+  (`x\r\r\n.\r\n`) hid the end-of-data marker, so the server waited for a
+  second one until the read timeout; and a CR straight after a leading dot
+  (`.\rX`) was silently dropped. Neither let a message end early, and bare
+  LF, bare CR, `<LF>.<LF>`, `<CR>.<CR>`, `<LF>.<CR><LF>` and `<CR><LF>.<LF>`
+  were already treated as content, now covered by `eod_conformance_test.go`.
 - A `utf-8` `ORCPT` address now follows RFC 6533 §3. The server refuses
   malformed UTF-8 (overlong forms, encoded surrogates, octets past U+10FFFF,
   stray or truncated sequences), which QUCHAR does not allow (RFC 3629 §4), and

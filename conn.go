@@ -1236,6 +1236,8 @@ func (c *Conn) handleAuthReadError(err error) {
 		// Peer is gone; there is nothing to send.
 	case err == ErrTooLongLine:
 		c.writeResponse(500, EnhancedCode{5, 4, 0}, "Too long line, closing connection")
+	case err == errBareLF:
+		c.writeResponse(500, EnhancedCode{5, 5, 2}, "Bare LF is not a line ending, closing connection")
 	default:
 		if neterr, ok := err.(net.Error); ok && neterr.Timeout() {
 			c.writeResponse(421, EnhancedCode{4, 4, 2}, "Idle timeout, bye bye")
@@ -1990,8 +1992,24 @@ func (c *Conn) readLine() (string, error) {
 		}
 	}
 
-	return c.text.ReadLine()
+	// Only <CRLF> ends a command line (RFC 5321 §2.3.8). textproto's ReadLine
+	// would also accept a bare LF and so run "NOOP\nMAIL ..." as two commands,
+	// which a relay that frames lines differently can exploit; refuse instead.
+	line, err := c.text.R.ReadString('\n')
+	if err != nil && !(err == io.EOF && line != "") {
+		return "", err
+	}
+	if strings.HasSuffix(line, "\n") {
+		if !strings.HasSuffix(line, "\r\n") {
+			return "", errBareLF
+		}
+		line = line[:len(line)-2]
+	}
+	return line, nil
 }
+
+// errBareLF is returned by readLine for a command line ended by a bare LF.
+var errBareLF = errors.New("smtp: bare LF in command stream")
 
 func (c *Conn) reset() {
 	c.locker.Lock()
