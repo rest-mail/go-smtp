@@ -12,12 +12,12 @@ go tool cover -func=coverage.out
 a demo program, is left out of the figure because the package list does not
 name it.
 
-The figure depends on the Go toolchain, because the cover tool splits
-statements into blocks differently from one release to the next. CI uses the
-current stable Go (1.27.2 when this was measured) and gets 87.2%. The same tests
-on Go 1.27.1 report 89.1% (the package alone 88.4%). The race detector does not
-change the number: the uncovered blocks are the same in both runs. The floor
-leaves room for that difference.
+The local and CI figures differ by about a point. Both runs leave the same
+blocks uncovered; only the statement count of some blocks differs (a
+composite literal counts as 3 statements locally and 1 in CI). CI uses the
+current stable Go (1.27.2 when this was measured) and gets 87.2%; the same tests
+on Go 1.27.1 on the Pi report 89.1% (the package alone 88.4%, no race detector
+there). The floor leaves room for that difference.
 
 The other `go-*` libraries fail CI below 95%, through go-spf's shared
 `rfc-verification.yml`. go-smtp is not there yet, and this slot (the RFC 5321
