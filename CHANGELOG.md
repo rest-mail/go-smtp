@@ -8,6 +8,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- The server no longer accepts a literal `=`, space, control or non-ASCII byte
+  in an xtext parameter (`AUTH`, `ENVID`, and an `rfc822` `ORCPT`). RFC 3461
+  §4 and RFC 4954 §8 allow only xchars (printable US-ASCII other than `+` and
+  `=`) and `+HH` hexchars, so `ENVID=e=mc2` and `AUTH=e=mc2@example.com` were
+  accepted although `=` must be sent as `+3D`. Lower-case hex digits are still
+  accepted. Found by the new `FuzzDecodeXtext` and `FuzzEncodeXtext` targets,
+  which check both functions against the RFC grammar and CI runs for 10
+  seconds each.
 - The server no longer lets a source route run past the end of a `MAIL` or
   `RCPT` path. The obsolete A-d-l (RFC 5321 §4.1.2) was skipped up to the first
   `:` anywhere in the argument, so `<@r> X=:u@x>` was accepted as `u@x`, and a

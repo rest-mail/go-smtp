@@ -1767,6 +1767,33 @@ func TestServerDSNwithSMTPUTF8(t *testing.T) {
 	}
 }
 
+// An xtext value carries '=' and every octet outside xchar as a hexchar (RFC
+// 3461 section 4, RFC 4954 section 8), so a literal one is malformed.
+func TestServer_xtextLiteralNonXchar(t *testing.T) {
+	_, s, c, scanner, _ := testServerEhlo(t,
+		func(s *smtp.Server) {
+			s.EnableDSN = true
+			s.EnableSMTPUTF8 = true
+		})
+	defer s.Close()
+	defer c.Close()
+
+	for _, tc := range []struct{ cmd, want string }{
+		{"MAIL FROM:<e=mc2@example.com> ENVID=e=mc2", "501 5.5.4"},
+		{"MAIL FROM:<e=mc2@example.com> AUTH=e=mc2@example.com", "500 5.5.4"},
+		{"MAIL FROM:<élisa@example.org> SMTPUTF8 AUTH=élisa@example.org", "500 5.5.4"},
+		{"MAIL FROM:<e=mc2@example.com> ENVID=e+3Dmc2 AUTH=e+3Dmc2@example.com", "250 "},
+		{"RCPT TO:<e=mc2@example.com> ORCPT=rfc822;e=mc2@example.com", "501 5.5.4"},
+		{"RCPT TO:<e=mc2@example.com> ORCPT=rfc822;e+3Dmc2@example.com", "250 "},
+	} {
+		io.WriteString(c, tc.cmd+"\r\n")
+		scanner.Scan()
+		if !strings.HasPrefix(scanner.Text(), tc.want) {
+			t.Fatalf("%s: got %q, want %q", tc.cmd, scanner.Text(), tc.want)
+		}
+	}
+}
+
 func TestServerRRVS(t *testing.T) {
 	be, s, c, scanner, caps := testServerEhlo(t,
 		func(s *smtp.Server) {
