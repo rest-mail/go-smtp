@@ -15,6 +15,41 @@ func cutPrefixFold(s, prefix string) (string, bool) {
 	return s[len(prefix):], true
 }
 
+// isWSP reports whether ch separates SMTP tokens: SP, which RFC 5321 §4.1.2
+// requires, or HTAB, which the server also tolerates (RFC 5234 WSP). Any
+// other byte, including the bytes of a UTF-8 space such as U+0085 NEL or
+// U+00A0 NBSP, is token content: an SMTPUTF8 esmtp-value may carry UTF-8
+// (RFC 6531 §3.3).
+func isWSP(ch byte) bool {
+	return ch == ' ' || ch == '\t'
+}
+
+// trimWSP removes leading and trailing SP and HTAB from s. Unlike
+// strings.TrimSpace it leaves Unicode whitespace in place.
+func trimWSP(s string) string {
+	return strings.Trim(s, " \t")
+}
+
+// splitWSP splits s into the tokens separated by runs of SP and HTAB. Unlike
+// strings.Fields it does not split on Unicode whitespace.
+func splitWSP(s string) []string {
+	var fields []string
+	for {
+		for len(s) > 0 && isWSP(s[0]) {
+			s = s[1:]
+		}
+		if s == "" {
+			return fields
+		}
+		i := 0
+		for i < len(s) && !isWSP(s[i]) {
+			i++
+		}
+		fields = append(fields, s[:i])
+		s = s[i:]
+	}
+}
+
 func parseCmd(line string) (cmd string, arg string, err error) {
 	line = strings.TrimRight(line, "\r\n")
 	// SMTP verbs are ASCII (RFC 5321 section 2.4). Unicode case folding
@@ -36,7 +71,7 @@ func parseCmd(line string) (cmd string, arg string, err error) {
 		// XCLIENT is a 7-letter verb (not the 4-letter form the logic below
 		// assumes) and carries attribute arguments.
 		if i := strings.IndexByte(line, ' '); i >= 0 {
-			return "XCLIENT", strings.TrimSpace(line[i+1:]), nil
+			return "XCLIENT", trimWSP(line[i+1:]), nil
 		}
 		return "XCLIENT", "", nil
 	case l == 0:
@@ -56,7 +91,7 @@ func parseCmd(line string) (cmd string, arg string, err error) {
 		return "", "", fmt.Errorf("mangled command: %q", line)
 	}
 
-	return strings.ToUpper(line[0:4]), strings.TrimSpace(line[5:]), nil
+	return strings.ToUpper(line[0:4]), trimWSP(line[5:]), nil
 }
 
 // Takes the arguments proceeding a command and files them
@@ -65,10 +100,11 @@ func parseCmd(line string) (cmd string, arg string, err error) {
 //
 //	" BODY=8BITMIME SIZE=1024 SMTPUTF8"
 //
-// The leading space is mandatory.
+// The leading space is mandatory. Parameters are separated by SP or HTAB
+// only (see isWSP).
 func parseArgs(s string) (map[string]string, error) {
 	argMap := map[string]string{}
-	for _, arg := range strings.Fields(s) {
+	for _, arg := range splitWSP(s) {
 		// Split on the first '=' only: a parameter value may itself contain
 		// '=' (e.g. base64-ish or AUTH values).
 		key, value, _ := strings.Cut(arg, "=")
@@ -86,7 +122,7 @@ func parseArgs(s string) (map[string]string, error) {
 
 func parseHelloArgument(arg string) (string, error) {
 	domain := arg
-	if idx := strings.IndexRune(arg, ' '); idx >= 0 {
+	if idx := strings.IndexAny(arg, " \t"); idx >= 0 {
 		domain = arg[:idx]
 	}
 	if domain == "" {
