@@ -333,7 +333,7 @@ func (c *Conn) handleXClient(arg string) {
 		return
 	}
 	if c.bdatWriter() != nil {
-		c.writeResponse(502, EnhancedCode{5, 5, 1}, "XCLIENT not allowed during message transfer")
+		c.writeResponse(503, EnhancedCode{5, 5, 1}, "XCLIENT not allowed during message transfer")
 		return
 	}
 
@@ -501,11 +501,11 @@ func (c *Conn) handleGreet(enhanced bool, arg string) {
 // READY state -> waiting for MAIL
 func (c *Conn) handleMail(arg string) {
 	if c.helo == "" {
-		c.writeResponse(502, EnhancedCode{5, 5, 1}, "Please introduce yourself first.")
+		c.writeResponse(503, EnhancedCode{5, 5, 1}, "Please introduce yourself first.")
 		return
 	}
 	if c.bdatWriter() != nil {
-		c.writeResponse(502, EnhancedCode{5, 5, 1}, "MAIL not allowed during message transfer")
+		c.writeResponse(503, EnhancedCode{5, 5, 1}, "MAIL not allowed during message transfer")
 		return
 	}
 	// RFC 5321 §4.1.1.2/§4.1.4: MAIL begins a mail transaction, and a new one
@@ -966,11 +966,11 @@ func isPrintableASCII(val string) bool {
 // MAIL state -> waiting for RCPTs followed by DATA
 func (c *Conn) handleRcpt(arg string) {
 	if !c.fromReceived {
-		c.writeResponse(502, EnhancedCode{5, 5, 1}, "Missing MAIL FROM command.")
+		c.writeResponse(503, EnhancedCode{5, 5, 1}, "Missing MAIL FROM command.")
 		return
 	}
 	if c.bdatWriter() != nil {
-		c.writeResponse(502, EnhancedCode{5, 5, 1}, "RCPT not allowed during message transfer")
+		c.writeResponse(503, EnhancedCode{5, 5, 1}, "RCPT not allowed during message transfer")
 		return
 	}
 
@@ -1107,11 +1107,16 @@ func checkNotifySet(values []DSNNotify) error {
 
 func (c *Conn) handleAuth(arg string) {
 	if c.helo == "" {
-		c.writeResponse(502, EnhancedCode{5, 5, 1}, "Please introduce yourself first.")
+		c.writeResponse(503, EnhancedCode{5, 5, 1}, "Please introduce yourself first.")
 		return
 	}
 	if c.didAuth {
 		c.writeResponse(503, EnhancedCode{5, 5, 1}, "Already authenticated")
+		return
+	}
+	// RFC 4954 section 4 forbids AUTH during a mail transaction.
+	if c.fromReceived {
+		c.writeResponse(503, EnhancedCode{5, 5, 1}, "AUTH not allowed during mail transaction")
 		return
 	}
 
@@ -1269,7 +1274,12 @@ var testHookStartTLSUpgrade func()
 
 func (c *Conn) handleStartTLS() {
 	if _, isTLS := c.TLSConnectionState(); isTLS {
-		c.writeResponse(502, EnhancedCode{5, 5, 1}, "Already running in TLS")
+		c.writeResponse(503, EnhancedCode{5, 5, 1}, "Already running in TLS")
+		return
+	}
+
+	if c.fromReceived {
+		c.writeResponse(503, EnhancedCode{5, 5, 1}, "STARTTLS not allowed during mail transaction")
 		return
 	}
 
@@ -1389,16 +1399,16 @@ func (c *Conn) handleData(arg string) {
 		return
 	}
 	if c.bdatWriter() != nil {
-		c.writeResponse(502, EnhancedCode{5, 5, 1}, "DATA not allowed during message transfer")
+		c.writeResponse(503, EnhancedCode{5, 5, 1}, "DATA not allowed during message transfer")
 		return
 	}
 	if c.binarymime {
-		c.writeResponse(502, EnhancedCode{5, 5, 1}, "DATA not allowed for BINARYMIME messages")
+		c.writeResponse(503, EnhancedCode{5, 5, 1}, "DATA not allowed for BINARYMIME messages")
 		return
 	}
 
 	if !c.fromReceived || len(c.recipients) == 0 {
-		c.writeResponse(502, EnhancedCode{5, 5, 1}, "Missing RCPT TO command.")
+		c.writeResponse(503, EnhancedCode{5, 5, 1}, "Missing RCPT TO command.")
 		return
 	}
 
@@ -1477,7 +1487,7 @@ func (c *Conn) handleBdat(arg string) {
 	}
 
 	if !c.fromReceived || len(c.recipients) == 0 {
-		c.writeResponse(502, EnhancedCode{5, 5, 1}, "Missing RCPT TO command.")
+		c.writeResponse(503, EnhancedCode{5, 5, 1}, "Missing RCPT TO command.")
 		return
 	}
 

@@ -422,7 +422,7 @@ func TestServerAuthTwice(t *testing.T) {
 
 	io.WriteString(c, "AUTH PLAIN AHVzZXJuYW1lAHBhc3N3b3Jk\r\n")
 	scanner.Scan()
-	if !strings.HasPrefix(scanner.Text(), "503 ") {
+	if !strings.HasPrefix(scanner.Text(), "503 5.5.1 ") {
 		t.Fatal("Invalid AUTH response:", scanner.Text())
 	}
 
@@ -434,7 +434,7 @@ func TestServerAuthTwice(t *testing.T) {
 
 	io.WriteString(c, "AUTH PLAIN AHVzZXJuYW1lAHBhc3N3b3Jk\r\n")
 	scanner.Scan()
-	if !strings.HasPrefix(scanner.Text(), "503 ") {
+	if !strings.HasPrefix(scanner.Text(), "503 5.5.1 ") {
 		t.Fatal("Invalid AUTH response:", scanner.Text())
 	}
 }
