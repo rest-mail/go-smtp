@@ -166,3 +166,270 @@ func FuzzParseDeliverByArgument(f *testing.F) {
 		}
 	})
 }
+
+// pathSeeds cover the null reverse-path, dot-string and quoted local-parts,
+// SMTPUTF8, source routes, the domainless Postmaster form and the boundaries
+// of each (trailing parameters, missing brackets, control bytes).
+var pathSeeds = []string{
+	"", "<>", "<> SIZE=10", "<>x", "<root@nsa.gov>", "root@nsa.gov",
+	"<root@nsa.gov> AUTH=asdf@example.org", "root@nsa.gov\tSIZE=1", "<root@nsa.gov",
+	"<élisa@exämple.org> SMTPUTF8", "<\xff@\xfe>", `<"a b\"c\\d"@example.org>`,
+	`"a>b"@example.org`, `<"\a"@x>`, `<"\`, `<""@x>`, "<a\x00b@x>", "<a@x\x7f>",
+	`<"a\` + "\x01" + `"@x>`, "<@r1.example,@r2.example:u@example.org>",
+	"@r.example:u@example.org", "<@:u@x>", "<@r.example>", "<@r> X=:u@x>",
+	"<@r\x00:u@x>", "<@r\t:u@x>", "<Postmaster>", "<postMASTER> NOTIFY=NEVER",
+	"<Postmaster>\tX=1", "<Postmaster>x", "<Postmaster", "<Postmaster@example.org>",
+	"Postmaster", "<Poſtmaster>", "<Foo Bar <root@nsa.gov>>", "a:b:c@example.org",
+	"<a@b@c>", "<a@[192.0.2.1]>", "<a@b>c", "a@b>",
+}
+
+// isASCIIPrefixFold reports whether s starts with prefix, ignoring ASCII case
+// only: SMTP keywords such as Postmaster are ASCII (RFC 5321 §2.4).
+func isASCIIPrefixFold(s, prefix string) bool {
+	if len(s) < len(prefix) {
+		return false
+	}
+	for i := 0; i < len(prefix); i++ {
+		a, b := s[i], prefix[i]
+		if 'A' <= a && a <= 'Z' {
+			a += 'a' - 'A'
+		}
+		if 'A' <= b && b <= 'Z' {
+			b += 'a' - 'A'
+		}
+		if a != b {
+			return false
+		}
+	}
+	return true
+}
+
+// checkAcceptedPath checks a non-null path parsePath accepted from input
+// against RFC 5321 §4.1.2, independently of how the parser reached it.
+func checkAcceptedPath(t *testing.T, input, mbox, rest string) {
+	t.Helper()
+	if !strings.HasSuffix(input, rest) {
+		t.Fatalf("%q: parser left %q, not a suffix of its input", input, rest)
+	}
+	consumed := input[:len(input)-len(rest)]
+	for i := 0; i < len(mbox); i++ {
+		if mbox[i] < 0x20 || mbox[i] == 0x7F {
+			t.Fatalf("%q: control byte leaked into mailbox %q", input, mbox)
+		}
+	}
+	// Path = "<" [ A-d-l ":" ] Mailbox ">"; the closing bracket is consumed
+	// exactly when the opening one was.
+	bracketed := strings.HasPrefix(consumed, "<")
+	if bracketed != strings.HasSuffix(consumed, ">") {
+		t.Fatalf("%q: unbalanced path %q", input, consumed)
+	}
+	body := consumed
+	if bracketed {
+		body = body[1 : len(body)-1]
+	} else if rest != "" && rest[0] != ' ' && rest[0] != '\t' && rest[0] != '>' {
+		t.Fatalf("%q: unbracketed path ended inside a token, left %q", input, rest)
+	}
+	if strings.HasPrefix(body, "@") {
+		// A-d-l = At-domain *( "," At-domain ): domains only, so the route
+		// can neither run past the path's end nor hide whitespace or controls.
+		route, after, ok := strings.Cut(body, ":")
+		if !ok {
+			t.Fatalf("%q: source route without ':' accepted", input)
+		}
+		for i := 0; i < len(route); i++ {
+			if c := route[i]; c <= ' ' || c == 0x7F || c == '<' || c == '>' {
+				t.Fatalf("%q: source route %q crosses the path boundary", input, route)
+			}
+		}
+		body = after
+	}
+	local, domain := body, ""
+	if strings.HasPrefix(body, `"`) {
+		// Quoted-string = DQUOTE *QcontentSMTP DQUOTE; the mailbox carries
+		// the content with each quoted-pair reduced to its character.
+		var sb strings.Builder
+		i := 1
+		for ; i < len(body) && body[i] != '"'; i++ {
+			if body[i] == '\\' {
+				i++
+			}
+			if i < len(body) {
+				sb.WriteByte(body[i])
+			}
+		}
+		if i >= len(body) {
+			t.Fatalf("%q: unterminated quoted-string accepted", input)
+		}
+		local, domain = sb.String(), body[i+1:]
+		if !strings.HasPrefix(domain, "@") {
+			t.Fatalf("%q: quoted local-part not followed by '@'", input)
+		}
+	} else {
+		at := strings.IndexByte(body, '@')
+		if at < 0 {
+			t.Fatalf("%q: mailbox without '@' accepted", input)
+		}
+		local, domain = body[:at], body[at:]
+	}
+	if local == "" || len(domain) < 2 {
+		t.Fatalf("%q: empty local-part or domain accepted: %q", input, mbox)
+	}
+	if strings.ContainsAny(domain, " \t>") {
+		t.Fatalf("%q: domain %q runs past the path", input, domain)
+	}
+	if mbox != local+domain {
+		t.Fatalf("%q: mailbox %q, want %q", input, mbox, local+domain)
+	}
+}
+
+// validPathParts derives a dot-string local-part, a domain and a quoted
+// local-part from arbitrary fuzz input, so the targets also check acceptance:
+// rejecting every input must not satisfy them.
+func validPathParts(input string) (local, domain, quoted string) {
+	var l, d, q strings.Builder
+	for i := 0; i < len(input) && i < 64; i++ {
+		c := input[i]
+		switch {
+		case 'a' <= c && c <= 'z', 'A' <= c && c <= 'Z', '0' <= c && c <= '9':
+			l.WriteByte(c)
+			d.WriteByte(c)
+		case c >= 0x80 || strings.IndexByte("!#$%&'*+-/=?^_`{|}~", c) >= 0:
+			l.WriteByte(c) // atext, plus UTF-8 for SMTPUTF8
+		}
+		if c >= ' ' && c != 0x7F {
+			q.WriteByte(c)
+		}
+	}
+	return "u" + l.String(), "d" + d.String() + ".example", q.String()
+}
+
+func FuzzParseReversePath(f *testing.F) {
+	for _, seed := range pathSeeds {
+		f.Add(seed)
+	}
+	f.Fuzz(func(t *testing.T, input string) {
+		if len(input) > maxParserFuzzInput {
+			t.Skip()
+		}
+		// conn.handleMail trims the argument after "FROM:".
+		s := strings.TrimSpace(input)
+		p := parser{s: s}
+		mbox, err := p.parseReversePath()
+		if strings.HasPrefix(s, "<>") {
+			// Reverse-path = Path / "<>" (RFC 5321 §4.1.2).
+			if err != nil || mbox != "" || p.s != s[2:] {
+				t.Fatalf("null reverse-path %q => (%q, %v, rest %q)", s, mbox, err, p.s)
+			}
+		} else if err == nil {
+			checkAcceptedPath(t, s, mbox, p.s)
+		}
+		if isASCIIPrefixFold(s, "<postmaster>") && err == nil {
+			// The domainless Postmaster form is a forward-path only (§4.1.1.3).
+			t.Fatalf("MAIL accepted domainless %q", s)
+		}
+
+		local, domain, quoted := validPathParts(input)
+		addr := local + "@" + domain
+		for _, tc := range []struct{ raw, mbox, rest string }{
+			{"<>", "", ""},
+			{"<> SIZE=1", "", " SIZE=1"},
+			{"<" + addr + ">", addr, ""},
+			{"<" + addr + "> BODY=8BITMIME", addr, " BODY=8BITMIME"},
+			{addr + "\tSIZE=1", addr, "\tSIZE=1"},
+			{"<@a.example,@b.example:" + addr + ">", addr, ""},
+		} {
+			p := parser{s: tc.raw}
+			got, err := p.parseReversePath()
+			if err != nil || got != tc.mbox || p.s != tc.rest {
+				t.Fatalf("valid %q => (%q, %v, rest %q)", tc.raw, got, err, p.s)
+			}
+		}
+		if quoted != "" {
+			raw := `<"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(quoted) + `"@` + domain + ">"
+			p := parser{s: raw}
+			if got, err := p.parseReversePath(); err != nil || got != quoted+"@"+domain || p.s != "" {
+				t.Fatalf("valid quoted %q => (%q, %v, rest %q)", raw, got, err, p.s)
+			}
+		}
+	})
+}
+
+func FuzzParseForwardPath(f *testing.F) {
+	for _, seed := range pathSeeds {
+		f.Add(seed)
+	}
+	f.Fuzz(func(t *testing.T, input string) {
+		if len(input) > maxParserFuzzInput {
+			t.Skip()
+		}
+		// conn.handleRcpt trims the argument after "TO:", tries the
+		// domainless Postmaster form, then falls back to an ordinary path.
+		s := strings.TrimSpace(input)
+		p := parser{s: s}
+		mbox, ok := p.parsePostmasterPath()
+		wantPostmaster := isASCIIPrefixFold(s, "<postmaster>") &&
+			(len(s) == 12 || s[12] == ' ' || s[12] == '\t')
+		if ok != wantPostmaster {
+			t.Fatalf("Postmaster form %q: ok = %v, want %v", s, ok, wantPostmaster)
+		}
+		if ok {
+			// Postmaster is case-insensitive; keep the client's spelling.
+			if mbox != s[1:11] || p.s != s[12:] {
+				t.Fatalf("Postmaster form %q => (%q, rest %q)", s, mbox, p.s)
+			}
+		} else {
+			if p.s != s {
+				t.Fatalf("Postmaster fallback consumed input: %q => rest %q", s, p.s)
+			}
+			mbox, err := p.parsePath()
+			if err == nil {
+				checkAcceptedPath(t, s, mbox, p.s)
+			}
+			if strings.HasPrefix(s, "<>") && err == nil {
+				// A forward-path is never null (§4.1.1.3).
+				t.Fatalf("RCPT accepted null path %q", s)
+			}
+		}
+
+		// Spell Postmaster with the case pattern of the input's bytes.
+		pm := []byte("postmaster")
+		for i := range pm {
+			if i < len(input) && input[i]&1 == 1 {
+				pm[i] -= 'a' - 'A'
+			}
+		}
+		local, domain, _ := validPathParts(input)
+		for _, tc := range []struct{ raw, mbox, rest string }{
+			{"<" + string(pm) + ">", string(pm), ""},
+			{"<" + string(pm) + "> NOTIFY=NEVER", string(pm), " NOTIFY=NEVER"},
+			{"<" + string(pm) + ">\tX=1", string(pm), "\tX=1"},
+		} {
+			p := parser{s: tc.raw}
+			if got, ok := p.parsePostmasterPath(); !ok || got != tc.mbox || p.s != tc.rest {
+				t.Fatalf("valid %q => (%q, %v, rest %q)", tc.raw, got, ok, p.s)
+			}
+		}
+		for _, tc := range []struct{ raw, mbox string }{
+			{"<" + string(pm) + "@" + domain + ">", string(pm) + "@" + domain},
+			{"<" + local + "@" + domain + ">", local + "@" + domain},
+			{"<@r.example:" + local + "@" + domain + ">", local + "@" + domain},
+		} {
+			p := parser{s: tc.raw}
+			if _, ok := p.parsePostmasterPath(); ok {
+				t.Fatalf("%q taken as the domainless Postmaster form", tc.raw)
+			}
+			if got, err := p.parsePath(); err != nil || got != tc.mbox || p.s != "" {
+				t.Fatalf("valid %q => (%q, %v, rest %q)", tc.raw, got, err, p.s)
+			}
+		}
+		for _, raw := range []string{"<>", "<" + string(pm) + ">x", "<" + string(pm)} {
+			p := parser{s: raw}
+			if _, ok := p.parsePostmasterPath(); ok {
+				t.Fatalf("%q taken as the domainless Postmaster form", raw)
+			}
+			if got, err := p.parsePath(); err == nil {
+				t.Fatalf("RCPT accepted %q as %q", raw, got)
+			}
+		}
+	})
+}

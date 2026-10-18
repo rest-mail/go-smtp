@@ -8,6 +8,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- The server no longer lets a source route run past the end of a `MAIL` or
+  `RCPT` path. The obsolete A-d-l (RFC 5321 §4.1.2) was skipped up to the first
+  `:` anywhere in the argument, so `<@r> X=:u@x>` was accepted as `u@x`, and a
+  route could carry whitespace or control bytes. A route that reaches
+  whitespace, `<`, `>` or a control byte before its `:` is now rejected. Found
+  by the new `FuzzParseReversePath` and `FuzzParseForwardPath` targets, which
+  CI runs for 10 seconds each.
 - A large pipelined group no longer deadlocks the client (#78). `Pipeliner`
   only read replies in `Wait`, so once a group outgrew the buffers the server
   stopped reading (its replies went unread) while the client was still blocked

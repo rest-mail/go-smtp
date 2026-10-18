@@ -201,6 +201,15 @@ func (p *parser) parsePath() (string, error) {
 		if i < 0 {
 			return "", fmt.Errorf("malformed a-d-l")
 		}
+		// The source route (A-d-l, RFC 5321 §4.1.2) is a list of domains and
+		// is skipped, not returned. Bound the skip to the path: a ':' found
+		// past whitespace, an angle bracket or a control byte belongs to the
+		// parameters or another token, e.g. "<@r> X=:u@x>".
+		for j := 0; j < i; j++ {
+			if ch := p.s[j]; ch == ' ' || ch == '<' || ch == '>' || isCTL(ch) {
+				return "", fmt.Errorf("malformed a-d-l")
+			}
+		}
 		p.s = p.s[i+1:]
 	}
 	mbox, err := p.parseMailbox()
