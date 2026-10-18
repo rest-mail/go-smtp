@@ -1,8 +1,23 @@
 # Coverage
 
-Statement coverage of the library package and `internal/checklist` is **85.9%**
-(the package alone 85.0%), measured with `go test -covermode=atomic -coverprofile=… . ./internal/...`.
-`cmd/smtp-debug-server`, a demo program, is left out of the figure.
+Statement coverage of the library package and `internal/checklist` is **87.2%**
+as CI measures it, which is the number the gate compares with its floor. CI runs
+
+```
+go test -race -count=1 -covermode=atomic -coverprofile=coverage.out . ./internal/...
+go tool cover -func=coverage.out
+```
+
+(the package alone 86.2%, `internal/checklist` 99.3%). `cmd/smtp-debug-server`,
+a demo program, is left out of the figure because the package list does not
+name it.
+
+The figure depends on the Go toolchain, because the cover tool splits
+statements into blocks differently from one release to the next. CI uses the
+current stable Go (1.27.2 when this was measured) and gets 87.2%. The same tests
+on Go 1.27.1 report 89.1% (the package alone 88.4%). The race detector does not
+change the number: the uncovered blocks are the same in both runs. The floor
+leaves room for that difference.
 
 The other `go-*` libraries fail CI below 95%, through go-spf's shared
 `rfc-verification.yml`. go-smtp is not there yet, and this slot (the RFC 5321
@@ -23,11 +38,10 @@ These are known gaps, not exclusions. The functions below are the ones with the
 lowest coverage in the package; the next slots, which check the extensions
 clause by clause, are where most of them get tests.
 
-- **Never run by a test:** the TLS client helpers (`DialTLS`, `NewClientStartTLS`,
-  `SendMailTLS`, `DialStartTLS` partly), the listen helpers (`ListenAndServe`,
-  `ListenAndServeTLS`, `network`), `Server.String`, the `Conn` accessors
-  (`Server`, `Hostname`, `Conn`, `Reject`), `Backend.NewSession`'s default,
-  `SMTPError.Temporary` and the client `Error` and `Unwrap`.
+- **Never run by a test:** `Conn.handlePanic`, which only the BDAT and LMTP
+  panic paths call. The TLS client helpers, the listen helpers and the `Conn`
+  accessors are covered by `helpers_test.go`; `SendMailTLS` is tested only
+  against an untrusted certificate, so its success path is not.
 - **Partly covered:** the error branches of `handleMail`, `handleRcpt`,
   `handleAuth`, `handleBdat`, `handleDataLMTP` and `handleXClient` (RFC 3461,
   4954, 3030, 2033 and XCLIENT rows), and the client's `Auth`, `Verify`,

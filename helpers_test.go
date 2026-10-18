@@ -18,6 +18,7 @@ import (
 	smtp "github.com/rest-mail/go-smtp"
 )
 
+// checklist: SMTP-SRV-04
 func TestConnStateString(t *testing.T) {
 	for state, want := range map[smtp.ConnState]string{
 		smtp.StateNew:        "new",
@@ -30,6 +31,7 @@ func TestConnStateString(t *testing.T) {
 	}
 }
 
+// checklist: SMTP-REP-03
 func TestSMTPErrorTemporary(t *testing.T) {
 	for code, want := range map[int]bool{250: false, 421: true, 450: true, 499: true, 500: false, 554: false} {
 		if got := (&smtp.SMTPError{Code: code}).Temporary(); got != want {
@@ -38,6 +40,7 @@ func TestSMTPErrorTemporary(t *testing.T) {
 	}
 }
 
+// checklist: SMTP-SRV-01
 func TestCloseConnectionError(t *testing.T) {
 	inner := errors.New("go away")
 	err := smtp.CloseConnection(inner)
@@ -49,6 +52,7 @@ func TestCloseConnectionError(t *testing.T) {
 	}
 }
 
+// checklist: SMTP-EXT-09
 func TestLMTPDataErrorMessages(t *testing.T) {
 	lmtpErr := smtp.LMTPDataError{
 		"b@example.org": &smtp.SMTPError{Code: 550, Message: "no such user"},
@@ -71,6 +75,8 @@ func TestLMTPDataErrorMessages(t *testing.T) {
 // BackendFunc adapts a function to a Backend, and the connection hands that
 // function its own accessors: the server, the client's EHLO name and the
 // underlying net.Conn.
+//
+// checklist: SMTP-SRV-06
 func TestBackendFuncAndConnAccessors(t *testing.T) {
 	type seen struct {
 		server   *smtp.Server
@@ -125,6 +131,8 @@ func TestBackendFuncAndConnAccessors(t *testing.T) {
 
 // A backend turns a connection away with Conn.Reject: 421, then the connection
 // closes.
+//
+// checklist: SMTP-REP-02
 func TestConnReject(t *testing.T) {
 	s := smtp.NewServer(smtp.BackendFunc(func(c *smtp.Conn) (smtp.Session, error) {
 		c.Reject()
@@ -207,6 +215,7 @@ func testTLSServer(t *testing.T, addr string) *smtp.Server {
 	return s
 }
 
+// checklist: SMTP-SRV-05
 func TestListenAndServe(t *testing.T) {
 	s := testTLSServer(t, freeAddr(t))
 	done := make(chan error, 1)
@@ -224,6 +233,7 @@ func TestListenAndServe(t *testing.T) {
 	}
 }
 
+// checklist: SMTP-SRV-05
 func TestListenAndServeBadAddr(t *testing.T) {
 	s := testTLSServer(t, "not an address")
 	if err := s.ListenAndServe(); err == nil {
@@ -234,6 +244,7 @@ func TestListenAndServeBadAddr(t *testing.T) {
 	}
 }
 
+// checklist: SMTP-SRV-05
 func TestListenAndServeTLS(t *testing.T) {
 	s := testTLSServer(t, freeAddr(t))
 	done := make(chan error, 1)
@@ -261,6 +272,7 @@ func TestListenAndServeTLS(t *testing.T) {
 	}
 }
 
+// checklist: SMTP-EXT-07
 func TestNewClientStartTLS(t *testing.T) {
 	s := testTLSServer(t, freeAddr(t))
 	done := make(chan error, 1)
@@ -306,6 +318,7 @@ func TestNewClientStartTLS(t *testing.T) {
 	}
 }
 
+// checklist: SMTP-SRV-05
 func TestServerNetworkDefaultsToUnixForLMTP(t *testing.T) {
 	// A unix socket path stands in for LMTP's default network: the listener is
 	// a unix socket and the server answers LMTP on it.
