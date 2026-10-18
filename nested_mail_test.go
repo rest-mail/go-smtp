@@ -33,7 +33,7 @@ func TestServerNestedMailRejected(t *testing.T) {
 	// Nested MAIL without an intervening RSET must be rejected with 503.
 	io.WriteString(c, "MAIL FROM:<b@example.com>\r\n")
 	scanner.Scan()
-	if !strings.HasPrefix(scanner.Text(), "503 ") {
+	if !strings.HasPrefix(scanner.Text(), "503 5.5.1 ") {
 		t.Fatalf("nested MAIL FROM: got %q, want 503", scanner.Text())
 	}
 

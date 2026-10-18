@@ -8,6 +8,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- Out-of-sequence commands now return `503 5.5.1` rather than `502`
+  (SMTP-ORD-05): MAIL/AUTH before HELO/EHLO, RCPT before MAIL, DATA/BDAT
+  without recipients, MAIL/RCPT/DATA/XCLIENT between BDAT chunks, DATA after
+  BODY=BINARYMIME, and STARTTLS on a TLS connection. AUTH and STARTTLS are
+  also refused with `503 5.5.1` during a mail transaction. This is a
+  client-visible change; existing response text is preserved.
+
 - A `utf-8` `ORCPT` address now follows RFC 6533 §3. The server refuses
   malformed UTF-8 (overlong forms, encoded surrogates, octets past U+10FFFF,
   stray or truncated sequences), which QUCHAR does not allow (RFC 3629 §4), and
