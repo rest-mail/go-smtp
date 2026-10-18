@@ -15,6 +15,7 @@ func TestParser(t *testing.T) {
 		{"root@nsa.gov", "root@nsa.gov", ""},
 		{"<root@nsa.gov> AUTH=asdf@example.org", "root@nsa.gov", " AUTH=asdf@example.org"},
 		{"root@nsa.gov AUTH=asdf@example.org", "root@nsa.gov", " AUTH=asdf@example.org"},
+		{"<@r1.example,@r2.example:u@example.org> SIZE=1", "u@example.org", " SIZE=1"},
 	}
 	for _, tc := range validReversePaths {
 		p := parser{tc.raw}
@@ -36,6 +37,11 @@ func TestParser(t *testing.T) {
 		" BODY=8BITMIME SIZE=12345",
 		"a:b:c@example.org",
 		"<root@nsa.gov",
+		// The source route must end inside the path (found by fuzzing).
+		"<@r> X=:u@x>",
+		"<@r\x00:u@x>",
+		"<@r\t:u@x>",
+		"<@r<x:u@x>",
 	}
 	for _, tc := range invalidReversePaths {
 		p := parser{tc}
