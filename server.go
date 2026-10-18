@@ -340,6 +340,10 @@ func (s *Server) handleConn(c *Conn) error {
 				c.writeResponse(500, EnhancedCode{5, 4, 0}, "Too long line, closing connection")
 				return nil
 			}
+			if err == errBareLF {
+				c.writeResponse(500, EnhancedCode{5, 5, 2}, "Bare LF is not a line ending, closing connection")
+				return nil
+			}
 
 			if neterr, ok := err.(net.Error); ok && neterr.Timeout() {
 				c.writeResponse(421, EnhancedCode{4, 4, 2}, "Idle timeout, bye bye")

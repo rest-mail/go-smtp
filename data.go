@@ -199,10 +199,21 @@ func (r *dataReader) Read(b []byte) (n int, err error) {
 				r.state = stateEOF
 				continue
 			}
-			r.state = stateData
+			// Not the end-of-data line: ".\r" followed by something else.
+			// Drop the dot (dot-stuffing) but keep the CR it was holding back,
+			// and look at c again, since it may be the LF of a CRLF.
+			r.r.UnreadByte() // cannot fail straight after ReadByte
+			c = '\r'
+			r.state = stateCR
 		case stateCR:
 			if c == '\n' {
 				r.state = stateBeginLine
+				break
+			}
+			// A CR that is not followed by LF is not a line ending, but the
+			// next byte may still be the LF that completes one: "\r\r\n" ends
+			// a line, so a following ".\r\n" is the end-of-data marker.
+			if c == '\r' {
 				break
 			}
 			r.state = stateData
