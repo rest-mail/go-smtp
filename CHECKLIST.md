@@ -26,8 +26,8 @@ line length of §4.5.3.1.5 is recorded as SMTP-LIM-06.
 | SMTP-SYN-02 | 4.1.2 | MUST | A path is `<`, an optional source route and `:`, a mailbox and `>`; a quoted-string local-part holds no control characters; text that is not a path is a 501. | `TestParser`, `TestParserRejectsControlBytes`, `TestServerEmptyFrom1`, `FuzzParseReversePath`, `FuzzParseForwardPath` |
 | SMTP-SYN-03 | 4.1.1.3, 4.5.1 | MUST | `RCPT TO:<Postmaster>` is accepted without a domain, in any letter case; the domain-qualified form keeps its domain. | `TestServerPostmasterRcpt`, `TestParsePostmasterPath`, `FuzzParseForwardPath` |
 | SMTP-SYN-04 | 4.1.1.3 | Normative | A forward-path is never null: `RCPT TO:<>` and an empty `RCPT TO:` are refused. | `TestServerEmptyTo`, `FuzzParseForwardPath` |
-| SMTP-SYN-05 | 2.4 | MUST | Command verbs and the `FROM:` and `TO:` keywords are case-insensitive and ASCII; a non-ASCII look-alike is not a verb. | `TestRFC5321_CommandsCaseInsensitive`, `TestParseCmdASCII`, `FuzzParseCmd` |
-| SMTP-SYN-06 | 4.1.1.1, 4.1.2 | Normative | Parameters are `keyword` or `keyword=value` separated by spaces; a value may itself hold `=`. | `TestParseArgsBoundaries`, `TestParseArgsEqualsInValue`, `FuzzParseArgs` |
+| SMTP-SYN-05 | 2.4 | MUST | Command verbs and the `FROM:` and `TO:` keywords are case-insensitive and ASCII; a non-ASCII look-alike is not a verb. | `TestRFC5321_CommandsCaseInsensitive`, `TestParseCmdASCII`, `TestParseCmdKeepsUnicodeSpaceInArgument`, `FuzzParseCmd` |
+| SMTP-SYN-06 | 4.1.1.1, 4.1.2 | Normative | Parameters are `keyword` or `keyword=value` separated by spaces; a value may itself hold `=`. | `TestParseArgsBoundaries`, `TestParseArgsEqualsInValue`, `TestParseArgsUnicodeSpaceInValue`, `FuzzParseArgs` |
 | SMTP-SYN-07 | 4.1.1.2 | Normative | Whitespace separates the path from the parameters: `MAIL FROM:<a@b>SIZE=10` is refused, not read as a parameter. | `TestMailParamRequiresSpace` |
 | SMTP-SYN-08 | 4.1.2 | Normative | A parameter keyword is not repeated within one command: `SIZE=10 SIZE=20` is a 501. | `TestMailParamNoDuplicates` |
 | SMTP-SYN-09 | 4.1.1.1 | MUST | `HELO` and `EHLO` without a domain argument are a 501. | `TestRFC5321_UnknownAndArgumentErrors` |
@@ -50,7 +50,7 @@ line length of §4.5.3.1.5 is recorded as SMTP-LIM-06.
 
 | ID | Section | Level | Requirement | Tests |
 |----|---------|-------|-------------|-------|
-| SMTP-CMD-01 | 4.1.1.1 | MUST | EHLO is answered 250: the first line holds the greeting, each extension is on its own `250-` line, and the last line is `250 `; a backend can add capabilities. | `TestServerExtraCaps`, `TestServerFeatureBackend` |
+| SMTP-CMD-01 | 4.1.1.1 | MUST | EHLO is answered 250: the first line holds the greeting, each extension is on its own `250-` line, and the last line is `250 `; a backend can add capabilities. | `TestServerExtraCaps`, `TestServerFeatureBackend`, `TestParseHelloArgumentSeparators` |
 | SMTP-CMD-02 | 4.1.1.1, 4.5.1 | MUST | HELO is supported and answered 250. | `TestServer_helo`, `TestRFC5321_CommandsCaseInsensitive` |
 | SMTP-CMD-03 | 4.1.1.2 | MUST | MAIL FROM begins a transaction and is answered 250 when accepted. | `TestServer`, `TestServerEmptyFrom2` |
 | SMTP-CMD-04 | 4.1.1.9 | MUST | NOOP does nothing and is answered 250. | `TestServer_otherCommands` |
