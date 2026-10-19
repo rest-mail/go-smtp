@@ -26,6 +26,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   and could even make a new parameter. Those bytes are now value content,
   which RFC 6531 allows in an SMTPUTF8 esmtp-value. The HELO/EHLO domain now
   also ends at an HTAB, not only a space. CI's `FuzzParseArgs` found this.
+- The same SP/HTAB rule now holds for the rest of the command arguments:
+  the path after `MAIL FROM:` and `RCPT TO:`, the XCLIENT attributes, the AUTH
+  mechanism and initial response, and the BDAT size and `LAST`. A NEL or NBSP
+  at the end of the last MAIL or RCPT parameter was still trimmed, and one in
+  an XCLIENT value split it in two. Now an XCLIENT value keeps the byte, and
+  where the grammar asks for ASCII the argument is refused with the existing
+  error (`BDAT 8\u0085` is `501 Malformed size argument`, not an 8-byte chunk).
 
 - Out-of-sequence commands now return `503 5.5.1` rather than `502`
   (SMTP-ORD-05): MAIL/AUTH before HELO/EHLO, RCPT before MAIL, DATA/BDAT

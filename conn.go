@@ -341,7 +341,7 @@ func (c *Conn) handleXClient(arg string) {
 	if attrs == nil {
 		attrs = &XClientAttrs{}
 	}
-	for _, field := range strings.Fields(arg) {
+	for _, field := range splitWSP(arg) {
 		key, value, ok := strings.Cut(field, "=")
 		if !ok {
 			c.writeResponse(501, EnhancedCode{5, 5, 4}, "Malformed XCLIENT attribute: "+field)
@@ -524,7 +524,7 @@ func (c *Conn) handleMail(arg string) {
 		return
 	}
 
-	p := parser{s: strings.TrimSpace(arg)}
+	p := parser{s: trimWSP(arg)}
 	from, err := p.parseReversePath()
 	if err != nil {
 		c.writeResponse(501, EnhancedCode{5, 5, 2}, "Was expecting MAIL arg syntax of FROM:<address>")
@@ -980,7 +980,7 @@ func (c *Conn) handleRcpt(arg string) {
 		return
 	}
 
-	p := parser{s: strings.TrimSpace(arg)}
+	p := parser{s: trimWSP(arg)}
 	// RFC 5321 §4.1.1.3/§4.5.1: accept the domainless "<Postmaster>" form, which
 	// parsePath cannot parse (it has no "@domain"). Fall back to normal path
 	// parsing for every other address.
@@ -1120,7 +1120,7 @@ func (c *Conn) handleAuth(arg string) {
 		return
 	}
 
-	parts := strings.Fields(arg)
+	parts := splitWSP(arg)
 	if len(parts) == 0 {
 		c.writeResponse(502, EnhancedCode{5, 5, 4}, "Missing parameter")
 		return
@@ -1478,7 +1478,7 @@ func (c *Conn) handleData(arg string) {
 }
 
 func (c *Conn) handleBdat(arg string) {
-	args := strings.Fields(arg)
+	args := splitWSP(arg)
 	if len(args) == 0 {
 		c.writeResponse(501, EnhancedCode{5, 5, 4}, "Missing chunk size argument")
 		return
