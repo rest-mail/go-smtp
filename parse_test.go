@@ -252,3 +252,61 @@ func TestParseDeliverByBoundaries(t *testing.T) {
 		}
 	}
 }
+
+// checklist: SMTP-SYN-06
+// RFC 5321 §4.1.2 separates parameters with SP (HTAB is tolerated); the bytes
+// of a UTF-8 space such as U+0085 NEL or U+00A0 NBSP are value content, which
+// RFC 6531 §3.3 lets an esmtp-value carry. CI's fuzzer found the NEL case.
+func TestParseArgsUnicodeSpaceInValue(t *testing.T) {
+	nel := "0000000000000000000000000000000000000000000000000\u0085"
+	for _, tc := range []struct {
+		input string
+		want  map[string]string
+	}{
+		{" AUTH=" + nel, map[string]string{"AUTH": nel}},
+		{" AUTH=a\u0085b", map[string]string{"AUTH": "a\u0085b"}},
+		{" X=a b Y= ", map[string]string{"X": "a b", "Y": " "}},
+		{" X=1 Y=2", map[string]string{"X": "1 Y=2"}},
+		{" X=1\tY=2", map[string]string{"X": "1", "Y": "2"}},
+		{"  X=1", map[string]string{" X": "1"}},
+	} {
+		args, err := parseArgs(tc.input)
+		if err != nil || !reflect.DeepEqual(args, tc.want) {
+			t.Errorf("parseArgs(%q) = (%q, %v), want (%q, nil)", tc.input, args, err, tc.want)
+		}
+	}
+}
+
+// checklist: SMTP-SYN-05
+// parseCmd trims only SP and HTAB around the argument, so a trailing NEL or
+// NBSP in the last parameter reaches parseArgs intact.
+func TestParseCmdKeepsUnicodeSpaceInArgument(t *testing.T) {
+	for _, tc := range []struct{ line, cmd, arg string }{
+		{"NOOP x\u0085\r\n", "NOOP", "x\u0085"},
+		{"MAIL FROM:<a@b> AUTH=x ", "MAIL", "FROM:<a@b> AUTH=x "},
+		{"VRFY \u0085x", "VRFY", "\u0085x"},
+		{"NOOP \t x \t", "NOOP", "x"},
+		{"XCLIENT NAME=x\u0085", "XCLIENT", "NAME=x\u0085"},
+	} {
+		cmd, arg, err := parseCmd(tc.line)
+		if err != nil || cmd != tc.cmd || arg != tc.arg {
+			t.Errorf("parseCmd(%q) = (%q, %q, %v), want (%q, %q, nil)", tc.line, cmd, arg, err, tc.cmd, tc.arg)
+		}
+	}
+}
+
+// checklist: SMTP-CMD-01
+// The HELO/EHLO domain ends at SP or HTAB, the same separators as parameters;
+// a UTF-8 space does not end it.
+func TestParseHelloArgumentSeparators(t *testing.T) {
+	for _, tc := range []struct{ arg, want string }{
+		{"mx.example", "mx.example"},
+		{"mx.example extra", "mx.example"},
+		{"mx.example\textra", "mx.example"},
+		{"mx.example extra", "mx.example extra"},
+	} {
+		if got, err := parseHelloArgument(tc.arg); err != nil || got != tc.want {
+			t.Errorf("parseHelloArgument(%q) = (%q, %v), want (%q, nil)", tc.arg, got, err, tc.want)
+		}
+	}
+}

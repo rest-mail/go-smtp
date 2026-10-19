@@ -19,6 +19,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- ESMTP parameters are now separated by SP and HTAB only (RFC 5321 §4.1.2).
+  The server used to split them, and trim the command argument, on any
+  Unicode whitespace, so a U+0085 NEL or U+00A0 NBSP inside or at the end of
+  a value silently cut the value short (`AUTH=x\u0085` arrived as `AUTH=x`),
+  and could even make a new parameter. Those bytes are now value content,
+  which RFC 6531 allows in an SMTPUTF8 esmtp-value. The HELO/EHLO domain now
+  also ends at an HTAB, not only a space. CI's `FuzzParseArgs` found this.
+
 - Out-of-sequence commands now return `503 5.5.1` rather than `502`
   (SMTP-ORD-05): MAIL/AUTH before HELO/EHLO, RCPT before MAIL, DATA/BDAT
   without recipients, MAIL/RCPT/DATA/XCLIENT between BDAT chunks, DATA after
