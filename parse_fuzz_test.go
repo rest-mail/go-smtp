@@ -165,6 +165,29 @@ func FuzzParseDeliverByArgument(f *testing.F) {
 	} {
 		f.Add(seed)
 	}
+	// Check valid bounded deadlines once, so rejecting every input cannot
+	// satisfy the fuzz invariants. This must stay out of the fuzz body: when
+	// the body derived a deadline from len(input), every byte the minimizer
+	// removed changed fmt's and strconv's coverage, so no byte could go and
+	// minimizing one interesting input walked O(n²) candidates for the whole
+	// -fuzzminimizetime, which reads as 0 execs/sec.
+	for _, seconds := range []int64{0, 1, 123457, 99999999, 999999999} {
+		for _, suffix := range []string{"N", "NT", "R", "RT"} {
+			if seconds == 0 && suffix[0] == 'R' {
+				continue
+			}
+			for _, valid := range []string{
+				fmt.Sprintf("%d;%s", seconds, suffix),
+				fmt.Sprintf("+%09d;%s", seconds, suffix),
+			} {
+				got := parseDeliverByArgument(valid)
+				if got == nil || got.Time != time.Duration(seconds)*time.Second ||
+					string(got.Mode) != suffix[:1] || got.Trace != (len(suffix) == 2) {
+					f.Fatalf("valid BY failed: %q => %+v", valid, got)
+				}
+			}
+		}
+	}
 	f.Fuzz(func(t *testing.T, input string) {
 		if len(input) > maxParserFuzzInput {
 			t.Skip()
@@ -184,20 +207,6 @@ func FuzzParseDeliverByArgument(f *testing.F) {
 				string(got.Mode) != suffix[:1] || got.Trace != (len(suffix) == 2) ||
 				(got.Mode == DeliverByReturn && seconds <= 0) {
 				t.Fatalf("invalid BY result: %q => %+v", input, got)
-			}
-		}
-		// Generate valid bounded deadlines as well as mutating raw syntax,
-		// so rejecting every input cannot satisfy the fuzz invariants.
-		seconds := int64(len(input)) * 123457 % 1000000000
-		for _, suffix := range []string{"N", "NT", "R", "RT"} {
-			if seconds == 0 && suffix[0] == 'R' {
-				continue
-			}
-			valid := fmt.Sprintf("+%09d;%s", seconds, suffix)
-			got := parseDeliverByArgument(valid)
-			if got == nil || got.Time != time.Duration(seconds)*time.Second ||
-				string(got.Mode) != suffix[:1] || got.Trace != (len(suffix) == 2) {
-				t.Fatalf("valid BY failed: %q => %+v", valid, got)
 			}
 		}
 	})
