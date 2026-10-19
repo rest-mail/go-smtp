@@ -11,6 +11,36 @@ import (
 // Bound work and allocations even when the fuzzer generates oversized inputs.
 const maxParserFuzzInput = 4096
 
+// wireFields is the oracle's token split: SMTP separates tokens with SP
+// (RFC 5321 §4.1.2), and the server also tolerates HTAB. Every other byte,
+// including those of a UTF-8 space such as U+0085, belongs to a token.
+func wireFields(s string) []string {
+	var fields []string
+	start := -1
+	for i := 0; i <= len(s); i++ {
+		if i == len(s) || s[i] == ' ' || s[i] == '\t' {
+			if start >= 0 {
+				fields = append(fields, s[start:i])
+				start = -1
+			}
+		} else if start < 0 {
+			start = i
+		}
+	}
+	return fields
+}
+
+// wireTrim strips the SP and HTAB around s, and nothing else.
+func wireTrim(s string) string {
+	for len(s) > 0 && (s[0] == ' ' || s[0] == '\t') {
+		s = s[1:]
+	}
+	for len(s) > 0 && (s[len(s)-1] == ' ' || s[len(s)-1] == '\t') {
+		s = s[:len(s)-1]
+	}
+	return s
+}
+
 // checklist: SMTP-SYN-05
 func FuzzParseCmd(f *testing.F) {
 	for _, seed := range []string{
@@ -50,7 +80,7 @@ func FuzzParseCmd(f *testing.F) {
 		}
 		wantArg := ""
 		if hasArgs && cmd != "STARTTLS" {
-			wantArg = strings.TrimSpace(rest)
+			wantArg = wireTrim(rest)
 		}
 		if arg != wantArg {
 			t.Fatalf("argument bytes changed: got %q, want %q", arg, wantArg)
@@ -73,6 +103,9 @@ func FuzzParseArgs(f *testing.F) {
 		"", " ", " BODY=8BITMIME SIZE=1024 SMTPUTF8", " SIZE=1 size=2",
 		" SMTPUTF8 smtputf8", " AUTH=a=b== AuTh=x", " X=a=b== EMPTY= FLAG",
 		" AUTH=élisa=a==", " X=\xff", "=", " X=1\tY=2\r\n", " X=1\x00",
+		// CI found strings.Fields splitting a value at U+0085 NEL.
+		"0000000000000000000000000000000000000000000000000\u0085",
+		" X=a\u00a0b Y=\u0085", " \u2028X=1",
 	} {
 		f.Add(seed)
 	}
@@ -83,7 +116,7 @@ func FuzzParseArgs(f *testing.F) {
 		args, err := parseArgs(input)
 		seen := make(map[string]bool)
 		duplicate := false
-		for _, field := range strings.Fields(input) {
+		for _, field := range wireFields(input) {
 			end := strings.IndexByte(field, '=')
 			if end < 0 {
 				end = len(field)
@@ -110,7 +143,7 @@ func FuzzParseArgs(f *testing.F) {
 		}
 		// Any value made of one field, including embedded '=', must survive;
 		// changing the ASCII casing of the key must still count as a repeat.
-		value := strings.Join(strings.Fields(input), "")
+		value := strings.Join(wireFields(input), "")
 		one, oneErr := parseArgs(" AuTh=" + value)
 		if oneErr != nil || one["AUTH"] != value {
 			t.Fatalf("AUTH value changed: %q => (%v, %v)", value, one, oneErr)
