@@ -372,3 +372,17 @@ func (p *parser) parseLocalPart() (string, error) {
 		}
 	}
 }
+
+// isDecimal reports whether s contains one or more ASCII decimal digits.
+// strconv's integer parsers alone also accept a leading sign.
+func isDecimal(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
+}

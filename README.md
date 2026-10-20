@@ -36,7 +36,7 @@ An ESMTP client and server library written in Go.
 ## The RFC checklist
 
 [CHECKLIST.md](CHECKLIST.md) lists the requirements of RFC 5321 (the SMTP
-server and client core) and RFC 3207 (STARTTLS) item by item. The other
+server and client core), RFC 3207 (STARTTLS) and RFC 1870 (SIZE) item by item. The other
 extensions still have one summary row each. A small program,
 [`internal/checklist`](internal/checklist/main.go), checks it against the tests
 in CI. It is the same program as
@@ -73,6 +73,16 @@ multiple lines. This also bounds greetings and backend-supplied EHLO lines;
 keep domain names, capabilities and other protocol tokens within the budget.
 SASL `334` challenges are sent intact because RFC 4954 §4 makes their size
 independent of ordinary SMTP line limits.
+
+SIZE declarations are whole-message octet estimates (headers and CRLF included,
+SMTP transparency dots and the DATA terminator excluded). The server accepts
+1–20 decimal digits, passes estimates up to `int64` to the backend, and answers
+552 for declarations above its configured limit or representable range. The
+unlimited configuration advertises `SIZE 0`. The declared size never delimits
+DATA; actual content is bounded by `MaxMessageBytes`. A client omits SIZE when
+`MailOptions.Size` is zero and rejects negative estimates. Storage reservation,
+recipient limits, retry queues and delivery notifications remain host policy;
+see the RFC 1870 checklist's explicit policy rows.
 
 ## Relationship with net/smtp
 

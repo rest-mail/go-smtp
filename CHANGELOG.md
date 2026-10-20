@@ -8,12 +8,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Checked RFC 1870 SIZE requirements and its multi-recipient example, with
+  boundary, message-octet counting and client error-propagation tests. A numeric
+  limit fuzz target uses an arbitrary-precision reference and runs in CI.
+
 - Clause-by-clause RFC 3207 STARTTLS checklist, with tests for the usage example,
   TLS state, session replacement, plaintext local delivery, temporary refusal,
   certificate verification and a stalled client handshake. Host policy and
   unsupported enforcement modes are explicitly recorded.
 
 ### Fixed
+
+- SIZE declarations now accept 1–20 decimal digits through the signed 64-bit
+  API range instead of stopping at 4 GiB. Syntactically valid larger values
+  receive 552 rather than a syntax error; signs and overlong values receive
+  501. Unlimited servers advertise `SIZE 0`, explicitly conveying no fixed
+  configured maximum instead of promising resource checks through bare SIZE.
+- Clients reject negative message-size estimates and malformed signed EHLO
+  SIZE limits. MailOptions.Size documentation now includes headers and CRLF.
 
 - Ordinary server reply lines now fit RFC 5321's 512-octet limit, counting
   status codes and CRLF. Overlong backend diagnostics, greetings and EHLO lines

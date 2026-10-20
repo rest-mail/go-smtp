@@ -471,6 +471,9 @@ func (c *Client) buildMailCmd(from string, opts *MailOptions) (string, error) {
 	if err := validateLine(from); err != nil {
 		return "", err
 	}
+	if opts != nil && opts.Size < 0 {
+		return "", errors.New("smtp: message size must not be negative")
+	}
 
 	var sb strings.Builder
 	// A high enough power of 2 than 510+14+26+11+9+9+39+500
@@ -930,7 +933,7 @@ func (c *Client) MaxMessageSize() (size int, ok bool) {
 		return 0, false
 	}
 	v := c.ext["SIZE"]
-	if v == "" {
+	if !isDecimal(v) {
 		return 0, false
 	}
 	size, err := strconv.Atoi(v)

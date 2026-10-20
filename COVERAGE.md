@@ -31,6 +31,14 @@ The new tests cover byte boundaries with and without enhanced statuses,
 multiline replies, complete UTF-8 characters, backend transaction state and
 the RFC 4954 exception for SASL challenges. The CI floor remains 85%.
 
+After the RFC 1870 SIZE audit, the same local Go 1.27.1 run reports
+**91.4%** combined (library **90.9%**, checker **99.3%**). Tests cover
+20-digit syntax and integer overflow, backend estimates above 4 GiB, explicit
+unlimited advertisement, dot transparency and CRLF byte counting, the RFC's
+recipient-error example, and client errors at every transfer stage. The new
+numeric-limit fuzz target uses an arbitrary-precision reference and runs for
+10 seconds in CI. The CI floor remains 85%; this is still below the target.
+
 The other `go-*` libraries fail CI below 95%, through go-spf's shared
 `rfc-verification.yml`. go-smtp is not there yet, and this slot (the RFC 5321
 core) does not close the gap, so CI keeps its own steps and gates on a **floor
