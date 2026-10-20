@@ -39,6 +39,14 @@ recipient-error example, and client errors at every transfer stage. The new
 numeric-limit fuzz target uses an arbitrary-precision reference and runs for
 10 seconds in CI. The CI floor remains 85%; this is still below the target.
 
+After the RFC 2920 PIPELINING audit, the same local Go 1.27.1 run reports
+**91.5%** combined (library **91.0%**, checker **99.3%**). Tests cover reply
+flush boundaries with later commands already buffered, positional and multiline
+response matching after failures, the RFC's recipient examples, and empty DATA
+recovery with exactly the dot terminator. The TCP window is still assumed, not
+discovered; PIPE-CLIENT-07 records that conformance gap. No parser was added or
+changed by this audit; existing parser fuzz targets and the 85% CI floor remain.
+
 The other `go-*` libraries fail CI below 95%, through go-spf's shared
 `rfc-verification.yml`. go-smtp is not there yet, and this slot (the RFC 5321
 core) does not close the gap, so CI keeps its own steps and gates on a **floor

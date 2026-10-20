@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Clause-by-clause RFC 2920 PIPELINING checklist, its successful and failed
+  recipient examples, multiline/positional client reply tests and explicit
+  documentation of the client's fixed 4096-byte window limitation.
+
 - Checked RFC 1870 SIZE requirements and its multi-recipient example, with
   boundary, message-octet counting and client error-propagation tests. A numeric
   limit fuzz target uses an arbitrary-precision reference and runs in CI.
@@ -18,6 +22,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   unsupported enforcement modes are explicitly recorded.
 
 ### Fixed
+
+- Server synchronization and unknown/malformed-command replies now flush before
+  later buffered commands are processed, as required by RFC 2920. RSET, MAIL
+  and RCPT replies can still share a batch.
+- An unwritten DATA writer now sends only the dot terminator, without the
+  extra blank line textproto.DotWriter normally adds. This permits RFC 2920's
+  recovery when a peer accepts DATA despite refusing every recipient. Writes
+  after DATA close return an error.
 
 - SIZE declarations now accept 1–20 decimal digits through the signed 64-bit
   API range instead of stopping at 4 GiB. Syntactically valid larger values

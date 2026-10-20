@@ -14,7 +14,7 @@ import (
 // without the client waiting for a response between them, saving a network
 // round-trip per command for high-throughput senders.
 //
-// Those three are the only commands RFC 2920 permits inside a pipelined group.
+// Those three are the only commands this API permits inside a pipelined group.
 // EHLO, DATA, VRFY and QUIT must end a group, so they are issued afterwards with
 // the Client's normal (synchronous) methods.
 //
@@ -22,11 +22,11 @@ import (
 // Rcpt — each writes its command immediately but does not read the response.
 // Call Wait to read all queued responses, in order, ending the group; the
 // Client is then back in synchronous mode, so a message body is sent with the
-// usual Client.Data. A group larger than the flow-control window (see
-// pipelineWindow) is sent in window-sized parts: before writing past the window,
-// the queueing method reads the responses already owed, so the server's replies
-// cannot fill the buffers and deadlock both ends. Every result is still reported
-// by Wait, in queue order.
+// usual Client.Data. A group larger than the assumed flow-control window (see
+// pipelineWindow) is sent in window-sized parts: before writing past that window,
+// the queueing method reads the responses already owed to reduce the risk of
+// deadlock. The actual transport window is not checked. Every result is still
+// reported by Wait, in queue order.
 //
 //	p, err := c.Pipeline()
 //	if err != nil {
@@ -42,7 +42,10 @@ import (
 //
 // A Pipeliner must not be used concurrently, and no other method of the
 // underlying Client may be called between the first queued command and Wait, or
-// responses will be read out of order.
+// responses will be read out of order. Callers must inspect every Wait result
+// before sending content. If all recipients failed and a nonconforming peer
+// nevertheless accepts Client.Data, close the unwritten writer to send only the
+// terminating dot, check the final response, and reset the transaction.
 type Pipeliner struct {
 	c       *Client
 	cmds    []pipelinedCmd // sent commands whose responses are not read yet
@@ -58,7 +61,10 @@ type Pipeliner struct {
 // always, 4K octets". Otherwise a big group (issue #78) deadlocks: the server
 // stops reading because its replies have filled the buffers, and the client
 // stops reading because it is still blocked writing commands. Keeping at most
-// this many bytes outstanding means a write never waits on a reply.
+// this many bytes outstanding reduces that risk when the transport provides at
+// least this window. It is not a discovered TCP window: smaller windows (or a single command larger than
+// the window) can still deadlock until CommandTimeout. This is a known RFC 2920
+// section 3.1 conformance gap; see PIPE-CLIENT-07 in CHECKLIST.md.
 const pipelineWindow = 4096
 
 type pipelineKind int
