@@ -8,6 +8,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- RFC 3461 DSN parameter/protocol checklist, the six-recipient submission
+  example, syntax/error/state/size tests and a NOTIFY list fuzz target checked
+  against an independent ASCII grammar. Notification lifecycle, downgrade
+  policy and unsupported address-type responsibilities are explicit gaps.
+
 - RFC 6152 8BITMIME checklist with the RFC envelope/command example, all high-bit
   octets, 1000-octet lines, dot transparency and explicit host/gap rows. A DATA
   fuzz target compares byte preservation with Go's textproto transparency reader.
@@ -30,6 +35,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   unsupported enforcement modes are explicitly recorded.
 
 ### Fixed
+
+- DSN NOTIFY now accepts repeated conditions and null list elements permitted
+  by RFC 3461's RFC 822 list grammar, exposing unique conditions to the backend.
+  NEVER still must be standalone; client options can repeat valid conditions.
+- Non-ASCII RET/NOTIFY look-alikes such as long s (`ſ`) are refused instead of
+  becoming valid ASCII keywords during Unicode case conversion.
 
 - The client honors `MailOptions.Body` instead of ignoring it. `Body7Bit` selects
   7-bit transport, and explicit `Body8BitMIME` fails before MAIL if unsupported.

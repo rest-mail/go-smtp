@@ -1,8 +1,8 @@
 # Coverage
 
-After merging the RFC 4954 AUTH exchange and RFC 6152 8BITMIME audits,
+After the RFC 3461 DSN parameter/protocol audit,
 statement coverage of the library package and `internal/checklist` is
-**92.3%** combined (library **91.8%**, checker **99.3%**), measured locally
+**93.2%** combined (library **92.8%**, checker **99.3%**), measured locally
 on Go 1.27.1 linux/arm64 without the race detector. The local command was:
 
 ```
@@ -76,6 +76,15 @@ checker **99.3%**). This includes the new SASL decoder's fuzz seeds, the AUTH
 wire examples, invalid response/error paths and oversized initial responses.
 The 85% CI floor is unchanged; this is not a claim that the 95% target or all
 RFC 4954 requirements are met.
+
+The DSN audit adds the RFC 3461 §10.1 submission envelope, per-recipient
+metadata and RSET isolation, invalid/duplicate parameter refusals, backend
+status preservation, default size allowances and client validation. The new
+NOTIFY parser accepts RFC 822 lists (including repeated/null list elements),
+normalizes backend flags, and refuses non-ASCII look-alikes; its fuzz target
+uses an independent ASCII grammar. No notification generator or queue is
+covered or supplied by this transport. Host responsibilities and unsupported
+address types remain explicit in the checklist; the 85% CI floor is unchanged.
 
 ## Left uncovered on purpose
 
