@@ -73,13 +73,16 @@ type Server struct {
 	// Only use if DELIVERBY is enabled.
 	MinimumDeliverByTime time.Duration
 
-	// Advertise MT-PRIORITY (RFC 6710) capability.
-	// Should only be used if backend supports it.
+	// Advertise MT-PRIORITY (RFC 6710) capability. Enable only when the
+	// backend enforces priority authorization and implements the selected
+	// policy. In particular, Mail must reject or lower positive priorities
+	// from untrusted or unauthorized sources (RFC 6710 section 4.1).
+	// Queue ordering, logging, trace fields and relay metadata are host work.
 	EnableMTPRIORITY bool
-	// The priority profile mapping as defined
-	// in RFC 6710 section 10.2.
-	//
-	// Default value of NONE to advertise no specific profile.
+	// Priority assignment policy name advertised with MT-PRIORITY. The host
+	// must supply 1..20 ASCII letters, digits, '-', '_' or '.' (RFC 6710
+	// section 7); the transport does not validate this configuration.
+	// An empty value omits the name; clients assume the MIXER policy.
 	MtPriorityProfile PriorityProfile
 
 	// Additional capabilities to advertise in response to EHLO, e.g.

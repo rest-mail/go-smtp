@@ -42,7 +42,8 @@ RFC 6152 (8BITMIME) item by item, plus individual
 AUTH exchange requirements from RFC 4954 §4 and the DSN parameter/protocol
 rules from RFC 3461 §§2–4, 5.1 and 5.4, and the SMTPUTF8 envelope rules
 from RFC 6531 (including refusal of `SMTPUTF8=`) and the RRVS parameter
-from RFC 7293. Other extensions retain summary
+from RFC 7293, DELIVERBY transport from RFC 2852 and MT-PRIORITY transport
+from RFC 6710. Other extensions retain summary
 rows. A small program,
 [`internal/checklist`](internal/checklist/main.go), checks it against the tests
 in CI. It is the same program as
@@ -161,6 +162,26 @@ is a host decision requiring DSNs and notification adjustments; the client
 does not silently drop the parameter. Hosts also generate deadline/trace DSNs,
 include Arrival-Date/Deliver-By-Date, preserve mode/trace across hops and choose
 MX routes. The transport checklist explicitly records these responsibilities.
+
+MT-PRIORITY (`EnableMTPRIORITY`) transports one priority for the whole message.
+The server accepts only RFC 6710's `0`, `1` through `9`, and `-1` through `-9`;
+`+1`, `-0` and leading zeroes are syntax errors (501 5.5.2). A nil
+`MailOptions.MTPriority` leaves the default of 0 or site policy to the backend.
+The original requested value is preserved even if the selected policy internally
+rounds to fewer service classes. `MtPriorityProfile` is only an advertisement:
+set it to a valid 1–20 character ASCII policy name, or leave it empty to withhold
+the name (clients assume MIXER). The configuration is not validated.
+
+Enable this extension only when the backend authorizes priority requests.
+In particular, `Session.Mail` must reject or lower positive priorities from
+untrusted or unauthorized sources; successful SMTP AUTH alone does not grant
+that permission. The host implements policy levels, queue ordering, retries,
+trace/log fields, DSN priorities and metadata preservation across aliases and
+relay hops. Custom backend SMTP replies can report reassignment (250 2.3.6),
+a priority below the current minimum (450/550 X.7.15), or priority-specific size
+limits (552 5.7.16). Client.Mail refuses an explicit priority when the peer does
+not advertise MT-PRIORITY; a relay must explicitly choose fallback and omit the
+option for such a peer. These policy boundaries are recorded in the checklist.
 
 ## Relationship with net/smtp
 

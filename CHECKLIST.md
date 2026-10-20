@@ -10,13 +10,14 @@ An item that does not apply, or is a known gap, says "n/a" and why. CI checks
 this file against the tests with `go run ./internal/checklist`; the format is
 described in the [README](README.md#the-rfc-checklist).
 
-Not covered yet: each extension (LMTP,
-MT-PRIORITY, XCLIENT) is one row in the extension summary, mapping its existing
-tests, and has not been checked clause by clause; later slots do that.
+Not covered yet: LMTP and XCLIENT each have an extension summary row mapping
+existing tests; their full clause-by-clause audits remain for later slices.
 STARTTLS (RFC 3207), SIZE (RFC 1870), PIPELINING (RFC 2920),
 CHUNKING/BINARYMIME (RFC 3030), 8BITMIME (RFC 6152), AUTH exchange rules
-(RFC 4954 §4), DSN parameter/protocol rules (RFC 3461 §§2–4, 5.1, 5.4)
-the SMTPUTF8 envelope (RFC 6531) the RRVS parameter (RFC 7293) and DELIVERBY transport (RFC 2852) are audited below; the remaining AUTH and DSN lifecycle rules remain for later slices.
+(RFC 4954 §4), DSN parameter/protocol rules (RFC 3461 §§2–4, 5.1, 5.4),
+the SMTPUTF8 envelope (RFC 6531), the RRVS parameter (RFC 7293), DELIVERBY
+transport (RFC 2852) and MT-PRIORITY transport (RFC 6710) are audited below.
+The remaining AUTH and DSN lifecycle rules remain for later slices.
 RFC 6409 (submission) is not in this slot. Reply line lengths (§4.5.3.1.5)
 are checked by SMTP-LIM-06;
 SASL challenges retain the independent size rules of RFC 4954 §4.
@@ -138,7 +139,7 @@ SASL challenges retain the independent size rules of RFC 4954 §4.
 | SMTP-EXT-09 | RFC 2033 | Normative | One row for the extension: LMTP: `LHLO`, one reply per recipient after the data, and the client side. The clauses of the RFC are not checked one by one yet. | `TestServer_LMTP`, `TestServer_LMTP_Early`, `TestServer_LMTP_Expand`, `TestServer_LMTP_DuplicatedRcpt`, `TestServer_Chunking_LMTP`, `TestLMTP`, `TestLMTPData`, `TestLMTPRcptLeakAcrossTransactions`, `TestLMTPDataErrorMessages` |
 | SMTP-EXT-10 | RFC 7293 | Normative | RRVS summary: the `RRVS` parameter on RCPT. The RFC 7293 audit is below. | `TestServerRRVS`, `TestClientRRVS` |
 | SMTP-EXT-11 | RFC 2852 | Normative | DELIVERBY summary: `BY` on MAIL only, in range; the detailed audit below separates transport from host delivery policy. | `TestServerDELIVERBY`, `TestClientDELIVERBY`, `TestClientDeliverByTruncatesToSeconds`, `TestParseDeliverByBoundaries`, `FuzzParseDeliverByArgument`, `TestServerDeliverByAndMTPriorityRejectedOnRcpt` |
-| SMTP-EXT-12 | RFC 6710 | Normative | One row for the extension: MT-PRIORITY: the `MT-PRIORITY` parameter on MAIL only, in range. The clauses of the RFC are not checked one by one yet. | `TestServerMTPRIORITY`, `TestClientMTPRIORITY` |
+| SMTP-EXT-12 | RFC 6710 | Normative | MT-PRIORITY summary: the MAIL parameter; the detailed RFC 6710 transport audit below separates syntax from host authorization and queue policy. | `TestServerMTPRIORITY`, `TestClientMTPRIORITY` |
 | SMTP-EXT-13 | Postfix XCLIENT (not an IETF RFC) | Normative | One row for the extension: XCLIENT: a trusted peer may set the client's address and name; an untrusted one may not. The clauses of the RFC are not checked one by one yet. | `TestServerXClientTrusted`, `TestServerXClientUntrusted`, `TestServerXClientKeepsUnicodeSpaceInValue` |
 
 
@@ -499,3 +500,46 @@ passing a relative duration to `Session.Mail` does not enforce a deadline.
 | BY-DSN-03 | 4.1, 5 | SHOULD | Deadline-related DSNs include Arrival-Date and Deliver-By-Date in the prescribed date format. | n/a: host supplies DSN messages; transport does not inspect their content. |
 | BY-MX-01 | 7 | SHOULD NOT | Clients avoid trying multiple MX hosts merely to discover DELIVERBY support. | n/a: host chooses MX routes; Client connects to one chosen peer. |
 | BY-MX-02 | 7 | Normative | MX minimum advertisements account for downstream minima and normal relay latency. | n/a: host configures MinimumDeliverByTime from its routing policy. |
+
+
+## MT-PRIORITY transport (RFC 6710)
+
+Section numbers below refer to [RFC 6710](https://www.rfc-editor.org/rfc/rfc6710).
+This is a transport audit, not a claim that enabling the flag implements a
+priority service. The host must authorize sources before accepting upgraded
+priorities, implement its assignment policy, and preserve metadata across queues
+and hops. `MailOptions.MTPriority` is the original requested value, not an
+internally rounded service class. A nil option leaves the default/policy choice
+to the backend. These host duties and configuration gaps are explicit below.
+
+| ID | Section | Level | Requirement | Tests |
+|----|---------|-------|-------------|-------|
+| PRI-EHLO-01 | 3(2–3), 7 | Normative | Advertise MT-PRIORITY when enabled, optionally followed by the configured policy name; no name means the server withholds its policy. | `TestRFC6710Server` |
+| PRI-SYN-01 | 3(5), 4.1(1), 7 | MUST | Accept exactly zero or one optionally negative nonzero ASCII digit; reject malformed values and duplicate parameters without invoking Mail. | `TestRFC6710Server`, `FuzzRFC6710Priority` |
+| PRI-LEN-01 | 3(6) | Normative | Permit 15 additional octets on MAIL for the priority parameter, with the default line budget. | `TestRFC6710LongMailAndLMTP` |
+| PRI-SRV-01 | 3(5), 4.1(4), 5.1 | Normative | The priority is one MAIL parameter for the whole message, not a per-recipient RCPT parameter; disabled support refuses it. | `TestRFC6710Server` |
+| PRI-STATE-01 | 4.1(4), 5 | Normative | Preserve all 19 exact requested priority values for the backend, including values not individually supported by a named policy. | `TestRFC6710Server` |
+| PRI-STATE-02 | 4.1(4–5) | Normative | A refused parameter never starts a transaction; a nested MAIL cannot replace it, and reset, EHLO or completed DATA clears it; omission reaches Mail as nil. | `TestRFC6710Server` |
+| PRI-CLI-01 | 3(3,5), 4.2(1), 5 | MUST | Serialize the explicitly supplied priority unchanged, regardless of an absent or unknown policy name; refuse API values outside -9..9 before writing. | `TestRFC6710Client`, `TestRFC6710ExampleEnvelope` |
+| PRI-CLI-02 | 4.3(1) | Normative | Do not send MT-PRIORITY to a peer that did not advertise it; explicit options fail locally and the caller may retry with the option omitted. | `TestRFC6710Client` |
+| PRI-EXAMPLE-01 | 8 | Normative | Reproduce the priority-3 submission and relay envelopes with ENVID=QQ314159 and BY=125;R or BY=120;R. | `TestRFC6710ExampleEnvelope`, `TestRFC6710Client` |
+| PRI-STATUS-01 | 4.1, 5, 10 | Normative | Preserve backend policy refusal codes, including X.7.15 for a too-low priority and 552 X.7.16 for priority-specific size limits; refusal does not start a transaction. | `TestRFC6710BackendStatuses` |
+| PRI-STATUS-02 | 4.1, 10 | SHOULD | A backend can report reassignment with a custom 250 X.3.6 and the new priority at the start of the text, while accepting the transaction. | `TestRFC6710BackendStatuses` |
+| PRI-LMTP-01 | 3(7), 6 | Normative | LMTP can advertise the extension and expose the original requested priority to a host delivery/filtering engine. | `TestRFC6710LongMailAndLMTP` |
+| PRI-PROFILE-01 | 7, 10.1(1) | Normative | A policy name is 1..20 ASCII letters, digits, hyphen, underscore or dot. | n/a: known configuration gap: MtPriorityProfile is advertised verbatim; the host must supply a valid name. |
+| PRI-TRACE-01 | 4.1(2), 7 | SHOULD | Include the PRIORITY clause when inserting Received trace fields. | n/a: host constructs Received fields; transport does not edit message headers. |
+| PRI-LOG-01 | 4.1(3) | SHOULD | Include the received priority in transaction logs. | n/a: host owns message transaction logging and receives the exact priority in Mail. |
+| PRI-DEFAULT-01 | 4.1(5) | Normative | Without an explicit priority use site policy, with default 0. | n/a: Mail receives nil; host chooses policy and must apply the default. |
+| PRI-AUTH-01 | 4.1, 11 | MUST NOT | Do not allow positive priorities from untrusted or unauthorized sources. | n/a: mandatory host authorization policy; enabling the extension alone does not gate positive values, even after SMTP AUTH. Mail must reject or lower them using the connection's trust context. |
+| PRI-REASSIGN-01 | 4.1 | MAY | Site policy may raise or lower a requested or omitted priority; an MSA may refuse it. | n/a: host owns policy decisions; transport preserves backend status replies but does not assign priorities. |
+| PRI-RELAY-01 | 4.2(1), 5 | MUST | Relay the determined priority to conforming next hops, retaining the unrounded value rather than the internal service class. | n/a: host owns stored metadata and relay construction; Client only serializes supplied MailOptions. |
+| PRI-ALIAS-01 | 4.4 | SHOULD | Preserve the priority for expanded or translated recipients. | n/a: aliases and mailing lists are host responsibilities. |
+| PRI-GATEWAY-01 | 4.5 | SHOULD | Foreign gateways map equivalent priorities or follow non-conforming-peer rules. | n/a: no foreign gateway in this transport library. |
+| PRI-DSN-01 | 4.6 | SHOULD | Generated delivery reports use the source message's priority. | n/a: host generates DSNs and retains the original metadata. |
+| PRI-DSN-02 | 4.6 | Normative | Relayed DSNs follow ordinary priority authorization rules rather than automatic elevation. | n/a: host owns message classification and policy; transport does not inspect DATA for DSNs. |
+| PRI-LEVEL-01 | 5 | MUST | Implement every distinct level of the selected assignment policy, rounding unsupported service classes upward (capped at the highest) internally. | n/a: host owns the scheduling/service-class policy; selecting a profile name alone supplies no scheduling implementation. |
+| PRI-ORDER-01 | 5.1 | Normative | Prefer higher-priority queued messages, retaining ordinary ordering within each level; retry/expiration intervals may be more aggressive. | n/a: transport has no queue, scheduler, retry or expiration machinery. |
+| PRI-GREY-01 | 5.1 | Normative | Authorized priority senders avoid greylisting except for explicit policy restrictions or misconfiguration. | n/a: greylisting and source trust policy belong to the host. |
+| PRI-TIME-01 | 5.2 | Normative | DELIVERBY and priority can be combined without requiring either extension to enable the other. | n/a: host selects deadlines per priority; the example tests only verify combined parameter transport. |
+| PRI-MX-01 | 9.1 | Normative | Configure MX peers consistently or disable priority service to avoid inconsistent delivery. | n/a: DNS and multi-server deployment configuration are outside this library. |
+| PRI-POLICY-01 | 9.2, 10.1–10.2, Apps. A–C | Normative | Document and consistently deploy the assignment policy, its levels, retry/expiry/size limits and trust rules; register additional policies as appropriate. | n/a: host deployment and policy-registration duties; the built-in constants name policies without implementing their schedulers. |

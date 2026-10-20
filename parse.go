@@ -471,3 +471,15 @@ func parseBdatArgs(arg string) (uint64, bool, error) {
 	}
 	return size, last, nil
 }
+
+// parseMTPriority implements RFC 6710 section 7's priority-value grammar.
+// Integer conversion alone would also allow +1, -0 and leading zeroes.
+func parseMTPriority(value string) (int, error) {
+	if len(value) == 1 && value[0] >= '0' && value[0] <= '9' {
+		return int(value[0] - '0'), nil
+	}
+	if len(value) == 2 && value[0] == '-' && value[1] >= '1' && value[1] <= '9' {
+		return -int(value[1] - '0'), nil
+	}
+	return 0, errors.New("Malformed MT-PRIORITY parameter value")
+}
