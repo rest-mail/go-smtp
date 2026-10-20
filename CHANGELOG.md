@@ -8,6 +8,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Checked RFC 6531 SMTPUTF8 envelope requirements: the EHLO keyword, the MAIL
+  parameter, UTF-8 mailboxes, per-transaction state and ASCII VRFY/EXPN
+  replies. Message headers, IDNA, downgrade and trace fields are explicit host
+  responsibilities.
+
 - Checked RFC 3030 CHUNKING/BINARYMIME transport requirements, the RFC's
   single-chunk and pipelined binary examples, error/recovery and byte-preservation
   tests, and a BDAT argument fuzzer using an independent grammar/integer oracle.
@@ -40,6 +45,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   unsupported enforcement modes are explicitly recorded.
 
 ### Fixed
+
+- The server refuses a non-ASCII reverse-path (550 5.6.7) or forward-path
+  (553 5.6.7) unless the MAIL carried SMTPUTF8, refuses addresses that are not
+  valid UTF-8 (501 5.5.2), and refuses a value on SMTPUTF8 (501 5.5.4). The
+  client refuses to send a non-ASCII address without SMTPUTF8 instead of
+  writing it (RFC 6531 §§3.1, 3.4, 3.5). Callers sending such addresses through
+  `Mail`/`Rcpt` must now set `MailOptions.UTF8`; `SendMail` already does.
 
 - Failed and out-of-sequence BDAT chunks are fully consumed before replying;
   already-pipelined rejected chunks cannot inject their payload as commands.

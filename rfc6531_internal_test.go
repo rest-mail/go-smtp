@@ -1,0 +1,187 @@
+package smtp
+
+import (
+	"strings"
+	"testing"
+)
+
+type rfc6531Session struct {
+	nopSession
+	got chan string
+}
+
+func (s rfc6531Session) Mail(from string, opts *MailOptions) error {
+	if opts.UTF8 {
+		from += " +SMTPUTF8"
+	}
+	s.got <- "MAIL " + from
+	return nil
+}
+
+func (s rfc6531Session) Rcpt(to string, _ *RcptOptions) error {
+	s.got <- "RCPT " + to
+	return nil
+}
+
+// rfc6531Conn returns a greeted connection after EHLO, with its capabilities.
+func rfc6531Conn(t *testing.T, enable bool) (command func(string, string) []string, caps []string, got chan string) {
+	t.Helper()
+	got = make(chan string, 16)
+	_, raw, br, _ := newFlushTestConn(t, func(s *Server) {
+		s.EnableSMTPUTF8 = enable
+		s.Backend = BackendFunc(func(*Conn) (Session, error) { return rfc6531Session{got: got}, nil })
+	})
+	command = func(command, want string) []string {
+		t.Helper()
+		writeFlushBatch(t, raw, command+"\r\n")
+		reply := readFlushReply(t, br)
+		if !strings.HasPrefix(reply[0], want) {
+			t.Fatalf("%q reply = %q, want %s", command, reply, want)
+		}
+		return reply
+	}
+	caps = command("EHLO client.example", "250")
+	return command, caps, got
+}
+
+// checklist: UTF8-EHLO-01 UTF8-EHLO-02
+func TestRFC6531Advertisement(t *testing.T) {
+	for _, enable := range []bool{true, false} {
+		_, caps, _ := rfc6531Conn(t, enable)
+		var utf8, eightBit int
+		for _, cap := range caps {
+			switch {
+			case strings.HasPrefix(cap[4:], "SMTPUTF8"):
+				utf8++
+				if cap[4:] != "SMTPUTF8" {
+					t.Fatalf("parameter on SMTPUTF8 advertisement: %q", cap)
+				}
+			case cap[4:] == "8BITMIME":
+				eightBit++
+			}
+		}
+		if want := map[bool]int{true: 1, false: 0}[enable]; utf8 != want {
+			t.Fatalf("enable=%v: SMTPUTF8 advertisements = %d, want %d", enable, utf8, want)
+		}
+		if enable && eightBit != 1 {
+			t.Fatalf("SMTPUTF8 advertised without 8BITMIME: %q", caps)
+		}
+	}
+}
+
+// checklist: UTF8-MAIL-01 UTF8-MAIL-02 UTF8-ADDR-01 UTF8-ADDR-02 UTF8-ADDR-03 UTF8-STATE-01
+func TestRFC6531ServerEnvelope(t *testing.T) {
+	command, _, got := rfc6531Conn(t, true)
+	expect := func(want string) {
+		t.Helper()
+		if g := <-got; g != want {
+			t.Fatalf("session saw %q, want %q", g, want)
+		}
+	}
+
+	// §3.1 item 4: the MAIL parameter does not accept a value.
+	command("MAIL FROM:<élisa@exämple.org> SMTPUTF8=yes", "501 5.5.4")
+
+	// §3.2: a UTF-8 string in every mailbox position, unchanged.
+	command("MAIL FROM:<élisa@exämple.org> smtputf8", "250 ")
+	expect("MAIL élisa@exämple.org +SMTPUTF8")
+	command("RCPT TO:<用户@例子.广告>", "250 ")
+	expect("RCPT 用户@例子.广告")
+	command("RCPT TO:<ascii@example.org>", "250 ")
+	expect("RCPT ascii@example.org")
+	// RFC 3629 UTF-8 only; invalid octets are not a mailbox.
+	command("RCPT TO:<\xff@example.org>", "501 5.5.2")
+
+	// §3.5: without SMTPUTF8 on MAIL, a non-ASCII address is refused with
+	// 550 (sender) or 553 (recipient) and X.6.7.
+	command("RSET", "250 ")
+	command("MAIL FROM:<élisa@exämple.org>", "550 5.6.7")
+	command("MAIL FROM:<a@example.org> BODY=8BITMIME", "250 ")
+	expect("MAIL a@example.org")
+	command("RCPT TO:<用户@例子.广告>", "553 5.6.7")
+	// The flag belongs to the transaction: a later SMTPUTF8 MAIL needs RSET first,
+	// and a new MAIL without it does not inherit the previous one.
+	command("RSET", "250 ")
+	command("MAIL FROM:<a@example.org> SMTPUTF8", "250 ")
+	expect("MAIL a@example.org +SMTPUTF8")
+	command("RSET", "250 ")
+	command("MAIL FROM:<a@example.org>", "250 ")
+	expect("MAIL a@example.org")
+	command("RCPT TO:<用户@例子.广告>", "553 5.6.7")
+	command("RCPT TO:<b@example.org>", "250 ")
+	expect("RCPT b@example.org")
+}
+
+// checklist: UTF8-ADDR-02 UTF8-MAIL-02
+func TestRFC6531ServerDisabled(t *testing.T) {
+	command, _, _ := rfc6531Conn(t, false)
+	command("MAIL FROM:<a@example.org> SMTPUTF8", "504 ")
+	command("MAIL FROM:<élisa@exämple.org>", "550 5.6.7")
+}
+
+// checklist: UTF8-VRFY-01
+func TestRFC6531VrfyRepliesStayASCII(t *testing.T) {
+	command, _, _ := rfc6531Conn(t, true)
+	for line, want := range map[string]string{
+		"VRFY élisa SMTPUTF8": "252 ", "VRFY élisa": "252 ",
+		"EXPN listé SMTPUTF8": "502 ", "EXPN listé": "502 ",
+	} {
+		for _, reply := range command(line, want) {
+			if !isASCII(reply) {
+				t.Fatalf("%q reply %q is not ASCII", line, reply)
+			}
+		}
+	}
+}
+
+// checklist: UTF8-CLIENT-01 UTF8-CLIENT-02 UTF8-CLIENT-03 UTF8-STATE-01
+func TestRFC6531Client(t *testing.T) {
+	const intl = "用户@例子.广告"
+
+	c, wrote := newMailParamClient("SMTPUTF8", "8BITMIME")
+	if err := c.Mail(intl, nil); err == nil || !strings.Contains(err.Error(), "SMTPUTF8") {
+		t.Fatalf("Mail without SMTPUTF8 = %v", err)
+	}
+	if err := c.Mail(intl, &MailOptions{}); err == nil {
+		t.Fatal("Mail with empty options sent a non-ASCII sender")
+	}
+	if wrote.Len() != 0 {
+		t.Fatalf("refused MAIL wrote %q", wrote.String())
+	}
+	c.Close()
+
+	c, wrote = newMailParamClient("SMTPUTF8", "8BITMIME")
+	if err := c.Mail("a@example.org", nil); err != nil {
+		t.Fatal(err)
+	}
+	wrote.Reset()
+	if err := c.Rcpt(intl, nil); err == nil || !strings.Contains(err.Error(), "SMTPUTF8") {
+		t.Fatalf("Rcpt without SMTPUTF8 MAIL = %v", err)
+	}
+	if wrote.Len() != 0 {
+		t.Fatalf("refused RCPT wrote %q", wrote.String())
+	}
+	c.Close()
+
+	// §3.1 item 3: the client ignores parameters on the keyword.
+	c, wrote = newMailParamClient("8BITMIME")
+	c.ext["SMTPUTF8"] = "FUTURE"
+	c.text.R.Reset(strings.NewReader("250 ok\r\n250 ok\r\n250 ok\r\n"))
+	if err := c.Mail(intl, &MailOptions{UTF8: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Rcpt(intl, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := wrote.String(), "MAIL FROM:<"+intl+"> BODY=8BITMIME SMTPUTF8\r\nRCPT TO:<"+intl+">\r\n"; got != want {
+		t.Fatalf("wire = %q, want %q", got, want)
+	}
+	// RSET ends the transaction; the next one starts without SMTPUTF8.
+	if err := c.Reset(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.buildRcptCmd(intl, nil); err == nil {
+		t.Fatal("SMTPUTF8 survived RSET")
+	}
+	c.Close()
+}

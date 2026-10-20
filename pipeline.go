@@ -104,6 +104,7 @@ func (c *Client) Pipeline() (*Pipeliner, error) {
 // within one session); when Wait reads a successful response, the pending
 // recipient list is cleared.
 func (p *Pipeliner) Reset() error {
+	p.c.utf8 = false
 	return p.enqueue(pipelinedCmd{expectCode: 250, kind: pipelineReset}, "RSET")
 }
 

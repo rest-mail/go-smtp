@@ -483,7 +483,7 @@ func TestUTF8AddrRFC6533Regressions(t *testing.T) {
 // The client puts the fixed encodings on the wire and refuses an
 // original recipient that has no RFC 6533 encoding.
 //
-// checklist: SMTP-EXT-06
+// checklist: SMTP-EXT-06 UTF8-DSN-01
 func TestClientORCPTUTF8Encoding(t *testing.T) {
 	c := &Client{ext: map[string]string{"DSN": ""}}
 	opts := &RcptOptions{OriginalRecipientType: DSNAddressTypeUTF8, OriginalRecipient: `"a\b"@example.com`}

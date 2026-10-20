@@ -45,6 +45,8 @@ type Conn struct {
 	session    Session
 	locker     sync.Mutex
 	binarymime bool
+	// utf8 records SMTPUTF8 on the current MAIL (RFC 6531 §3.4).
+	utf8 bool
 
 	// First error encountered writing a response. Once set, the command loop
 	// stops: further responses cannot reach the peer.
@@ -547,6 +549,7 @@ func (c *Conn) handleMail(arg string) {
 	opts := &MailOptions{}
 
 	c.binarymime = false
+	c.utf8 = false
 	// This is where the Conn may put BODY=8BITMIME, but we already
 	// read the DATA as bytes, so it does not effect our processing.
 	for key, value := range args {
@@ -569,6 +572,11 @@ func (c *Conn) handleMail(arg string) {
 		case "SMTPUTF8":
 			if !c.server.EnableSMTPUTF8 {
 				c.writeResponse(504, EnhancedCode{5, 5, 4}, "SMTPUTF8 is not implemented")
+				return
+			}
+			// RFC 6531 §3.1 item 4: the parameter does not accept a value.
+			if value != "" {
+				c.writeResponse(501, EnhancedCode{5, 5, 4}, "SMTPUTF8 does not accept a value")
 				return
 			}
 			opts.UTF8 = true
@@ -682,11 +690,22 @@ func (c *Conn) handleMail(arg string) {
 		}
 	}
 
+	// RFC 6531 §3.5: a non-ASCII reverse-path needs SMTPUTF8 on this MAIL.
+	if !opts.UTF8 && !isASCII(from) {
+		c.writeResponse(550, EnhancedCode{5, 6, 7}, "Non-ASCII addresses not permitted for that sender")
+		return
+	}
+	if !utf8.ValidString(from) {
+		c.writeResponse(501, EnhancedCode{5, 5, 2}, "Address is not valid UTF-8")
+		return
+	}
+
 	if err := c.Session().Mail(from, opts); err != nil {
 		if se, ok := successResponse(err); ok {
 			// The backend accepted the sender but supplied a custom 2xx line.
 			c.writeResponse(se.Code, se.EnhancedCode, se.Message)
 			c.fromReceived = true
+			c.utf8 = opts.UTF8
 			if isTerminating(err) {
 				c.closeAfterReplies()
 			}
@@ -701,6 +720,7 @@ func (c *Conn) handleMail(arg string) {
 
 	c.writeResponse(250, EnhancedCode{2, 0, 0}, fmt.Sprintf("Roger, accepting mail from <%v>", from))
 	c.fromReceived = true
+	c.utf8 = opts.UTF8
 }
 
 func fromHexDigit(b byte) (byte, bool) {
@@ -999,6 +1019,16 @@ func (c *Conn) handleRcpt(arg string) {
 			c.writeResponse(501, EnhancedCode{5, 5, 2}, "Was expecting RCPT arg syntax of TO:<address>")
 			return
 		}
+	}
+
+	// RFC 6531 §3.5: a non-ASCII forward-path needs SMTPUTF8 on the MAIL.
+	if !c.utf8 && !isASCII(recipient) {
+		c.writeResponse(553, EnhancedCode{5, 6, 7}, "Non-ASCII addresses not permitted for that recipient")
+		return
+	}
+	if !utf8.ValidString(recipient) {
+		c.writeResponse(501, EnhancedCode{5, 5, 2}, "Address is not valid UTF-8")
+		return
 	}
 
 	if c.server.MaxRecipients > 0 && len(c.recipients) >= c.server.MaxRecipients {
@@ -2080,5 +2110,6 @@ func (c *Conn) reset() {
 	}
 
 	c.fromReceived = false
+	c.utf8 = false
 	c.recipients = nil
 }
