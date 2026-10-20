@@ -2,7 +2,7 @@
 //
 // It also implements the following extensions:
 //
-//   - 8BITMIME (RFC 1652)
+//   - 8BITMIME (RFC 6152)
 //   - ENHANCEDSTATUSCODES (RFC 2034)
 //   - AUTH (RFC 2554)
 //   - DELIVERBY (RFC 2852)
@@ -42,6 +42,9 @@ const (
 // MailOptions contains parameters for the MAIL command.
 type MailOptions struct {
 	// Value of BODY= argument, 7BIT, 8BITMIME or BINARYMIME.
+	// On the client, the empty value selects 8BITMIME when advertised, otherwise
+	// basic SMTP. Explicit 8BITMIME requires server support; BINARYMIME is not
+	// supported by the DATA-only client. Content validation is the caller's job.
 	Body BodyType
 
 	// Size of the body. Can be 0 if not specified by client.

@@ -438,8 +438,12 @@ func (c *Client) Auth(a sasl.Client) error {
 }
 
 // Mail issues a MAIL command to the server using the provided email address.
-// If the server supports the 8BITMIME extension, Mail adds the BODY=8BITMIME
-// parameter.
+// Unless opts.Body is set, Mail adds BODY=8BITMIME when the server advertises
+// 8BITMIME. An explicit Body7Bit selects BODY=7BIT (or basic SMTP when the
+// extension is absent); Body8BitMIME requires advertised support. Other body
+// types are refused: this client sends DATA, not the BDAT needed by BINARYMIME.
+// The caller must supply content matching the selected transport; Mail and
+// Data do not validate MIME or convert 8-bit content into 7-bit content.
 // This initiates a mail transaction and is followed by one or more Rcpt calls.
 //
 // If opts is not nil, MAIL arguments provided in the structure will be added
@@ -476,8 +480,29 @@ func (c *Client) buildMailCmd(from string, opts *MailOptions) (string, error) {
 	// A high enough power of 2 than 510+14+26+11+9+9+39+500
 	sb.Grow(2048)
 	fmt.Fprintf(&sb, "MAIL FROM:<%s>", from)
-	if _, ok := c.ext["8BITMIME"]; ok {
+	body := BodyType("")
+	if opts != nil {
+		body = opts.Body
+	}
+	_, eightBit := c.ext["8BITMIME"]
+	switch body {
+	case "":
+		if eightBit {
+			sb.WriteString(" BODY=8BITMIME")
+		}
+	case Body7Bit:
+		if eightBit {
+			sb.WriteString(" BODY=7BIT")
+		}
+	case Body8BitMIME:
+		if !eightBit {
+			return "", errors.New("smtp: server does not support 8BITMIME")
+		}
 		sb.WriteString(" BODY=8BITMIME")
+	case BodyBinaryMIME:
+		return "", errors.New("smtp: BINARYMIME requires BDAT, which this client does not support")
+	default:
+		return "", errors.New("smtp: unknown BODY parameter value")
 	}
 	if _, ok := c.ext["SIZE"]; ok && opts != nil && opts.Size != 0 {
 		fmt.Fprintf(&sb, " SIZE=%v", opts.Size)

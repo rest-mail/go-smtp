@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- RFC 6152 8BITMIME checklist with the RFC envelope/command example, all high-bit
+  octets, 1000-octet lines, dot transparency and explicit host/gap rows. A DATA
+  fuzz target compares byte preservation with Go's textproto transparency reader.
 - Clause-by-clause RFC 3207 STARTTLS checklist, with tests for the usage example,
   TLS state, session replacement, plaintext local delivery, temporary refusal,
   certificate verification and a stalled client handshake. Host policy and
@@ -15,6 +18,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- The client honors `MailOptions.Body` instead of ignoring it. `Body7Bit` selects
+  7-bit transport, and explicit `Body8BitMIME` fails before MAIL if unsupported.
+  Invalid body types and `BodyBinaryMIME` are refused rather than silently
+  downgraded; BINARYMIME needs BDAT, which this client does not implement.
+  Empty/default options retain automatic 8BITMIME selection. Callers remain
+  responsible for providing content matching the transport; no MIME conversion
+  or content validation is added.
 - Ordinary server reply lines now fit RFC 5321's 512-octet limit, counting
   status codes and CRLF. Overlong backend diagnostics, greetings and EHLO lines
   are truncated at UTF-8 character boundaries while keeping the status and

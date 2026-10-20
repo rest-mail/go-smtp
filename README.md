@@ -36,7 +36,7 @@ An ESMTP client and server library written in Go.
 ## The RFC checklist
 
 [CHECKLIST.md](CHECKLIST.md) lists the requirements of RFC 5321 (the SMTP
-server and client core) and RFC 3207 (STARTTLS) item by item. The other
+server and client core), RFC 3207 (STARTTLS) and RFC 6152 (8BITMIME) item by item. The other
 extensions still have one summary row each. A small program,
 [`internal/checklist`](internal/checklist/main.go), checks it against the tests
 in CI. It is the same program as
@@ -73,6 +73,17 @@ multiple lines. This also bounds greetings and backend-supplied EHLO lines;
 keep domain names, capabilities and other protocol tokens within the budget.
 SASL `334` challenges are sent intact because RFC 4954 §4 makes their size
 independent of ordinary SMTP line limits.
+
+The client honors explicit `MailOptions.Body`: `Body7Bit` uses 7-bit transport,
+and `Body8BitMIME` requires the peer's advertised 8BITMIME support. With no body
+option, it selects 8BITMIME when available, as before. This DATA-only client
+refuses `BodyBinaryMIME`; it requires BDAT. The default `Mail`/`SendMail` API and
+`Data` do not inspect or convert MIME: callers must provide 7-bit content when
+the peer lacks 8BITMIME. Backends must preserve accepted 8-bit data during
+storage/delivery and negotiate, convert losslessly, or fail at the next hop.
+Those responsibilities and the automatic API's validation gap are explicit in
+the checklist. The DATA fuzz target compares transparency against Go's
+`net/textproto` reader, accounting for that reader's CRLF-to-LF conversion.
 
 ## Relationship with net/smtp
 

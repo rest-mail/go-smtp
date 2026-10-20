@@ -31,6 +31,16 @@ The new tests cover byte boundaries with and without enhanced statuses,
 multiline replies, complete UTF-8 characters, backend transaction state and
 the RFC 4954 exception for SASL challenges. The CI floor remains 85%.
 
+After the RFC 6152 8BITMIME audit, local Go 1.27.1 (linux/arm64, no race
+detector) reports **91.3%** combined (library **90.8%**, checker **99.3%**).
+The added tests cover explicit client body choices and refusal paths,
+all high-bit octets through DATA, the RFC envelope/example sequence,
+duplicate/invalid BODY parameters, dot transparency and 1000-octet lines.
+The DATA fuzz target checks byte preservation against a direct stuffing
+oracle and Go's `net/textproto` reader. MIME conversion/validation and
+backend delivery remain outside these transport tests; see the checklist's
+explicit gap and host responsibility rows. The 85% gate is unchanged.
+
 The other `go-*` libraries fail CI below 95%, through go-spf's shared
 `rfc-verification.yml`. go-smtp is not there yet, and this slot (the RFC 5321
 core) does not close the gap, so CI keeps its own steps and gates on a **floor

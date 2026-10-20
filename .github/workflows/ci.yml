@@ -46,6 +46,7 @@ jobs:
         run: |
           go test -run='^$' -fuzz='^FuzzParseCmd$' -fuzztime=10s -parallel=1 .
           go test -run='^$' -fuzz='^FuzzParseArgs$' -fuzztime=10s -parallel=1 .
+          go test -run='^$' -fuzz='^FuzzRFC6152DataOctets$' -fuzztime=10s -parallel=1 .
           go test -run='^$' -fuzz='^FuzzParseDeliverByArgument$' -fuzztime=10s -parallel=1 .
           go test -run='^$' -fuzz='^FuzzParseReversePath$' -fuzztime=10s -parallel=1 .
           go test -run='^$' -fuzz='^FuzzParseForwardPath$' -fuzztime=10s -parallel=1 .
