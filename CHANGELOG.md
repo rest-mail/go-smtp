@@ -15,6 +15,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- Ordinary server reply lines now fit RFC 5321's 512-octet limit, counting
+  status codes and CRLF. Overlong backend diagnostics, greetings and EHLO lines
+  are truncated at UTF-8 character boundaries while keeping the status and
+  existing multiline framing. SASL challenges are preserved intact under
+  RFC 4954's independent size rules. Backend capability tokens must fit on
+  their own line; longer diagnostics can use newline-separated text.
 - STARTTLS parameters are now refused with 501 instead of being discarded and
   starting a handshake. Parsing and its fuzz oracle preserve the parameters.
 - STARTTLS client constructors now complete the handshake and certificate

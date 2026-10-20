@@ -25,6 +25,12 @@ and `internal/checklist` is 99.3%. This includes handshake success, certificate
 rejection, handshake timeout and nested-upgrade refusal. The next CI run must
 supply the comparable CI figure; the 85% gate is unchanged.
 
+After enforcing the ordinary reply line limit (SMTP-LIM-06), the same local
+Go 1.27.1 run reports **91.2%** combined (library **90.7%**, checker **99.3%**).
+The new tests cover byte boundaries with and without enhanced statuses,
+multiline replies, complete UTF-8 characters, backend transaction state and
+the RFC 4954 exception for SASL challenges. The CI floor remains 85%.
+
 The other `go-*` libraries fail CI below 95%, through go-spf's shared
 `rfc-verification.yml`. go-smtp is not there yet, and this slot (the RFC 5321
 core) does not close the gap, so CI keeps its own steps and gates on a **floor
@@ -52,6 +58,7 @@ clause by clause, are where most of them get tests.
   `handleAuth`, `handleBdat`, `handleDataLMTP` and `handleXClient` (RFC 3461,
   4954, 3030, 2033 and XCLIENT rows), and the client's `Auth`, `Verify`,
   `Extension`, `Noop`, `Quit` and `Reset` failure paths.
-- **RFC 5321 core:** every requirement in CHECKLIST.md marked tested has a test;
-  the one that does not (SMTP-LIM-06) is listed there with the
-  reason.
+- **RFC 5321 core:** SMTP-LIM-06 now has boundary, multiline, UTF-8 and
+  backend transaction tests for reply lengths. SASL challenges are tested to
+  retain their independent RFC 4954 size rules. This does not complete the
+  extension audits or reach the 95% coverage target.

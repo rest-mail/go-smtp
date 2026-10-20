@@ -17,6 +17,9 @@ type EnhancedCode [3]int
 // error is surfaced to the client as "554 5.0.0 Error: transaction failed:
 // <error text>", which leaks the raw internal message — return an *SMTPError,
 // for example via Errorf, to choose the status code and message instead.
+// Each reply line is limited to 512 octets including its status and CRLF;
+// overlong text is truncated at a UTF-8 character boundary. Use newlines in
+// Message to provide multiple diagnostic lines within that per-line limit.
 type SMTPError struct {
 	Code         int
 	EnhancedCode EnhancedCode

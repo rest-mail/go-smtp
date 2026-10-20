@@ -1903,20 +1903,31 @@ func (c *Conn) writeResponse(code int, enhCode EnhancedCode, text ...string) {
 	text = strings.Split(strings.Join(text, "\n"), "\n")
 
 	lastLineIndex := len(text) - 1
-	for i := 0; i < lastLineIndex; i++ {
-		if _, err := fmt.Fprintf(c.text.W, "%d-%v\r\n", code, text[i]); err != nil {
+	for i, line := range text {
+		prefix := fmt.Sprintf("%d-", code)
+		if i == lastLineIndex {
+			prefix = fmt.Sprintf("%d ", code)
+			if enhCode != NoEnhancedCode {
+				prefix += fmt.Sprintf("%d.%d.%d ", enhCode[0], enhCode[1], enhCode[2])
+			}
+		}
+
+		// RFC 5321 §4.5.3.1.5: count the prefix and CRLF in the 512-octet
+		// reply line limit. Keep the existing line structure and status codes;
+		// only the text is shortened, at a UTF-8 character boundary.
+		// SASL challenges are protocol data, not diagnostics: RFC 4954 §4
+		// explicitly makes their size independent of ordinary SMTP limits.
+		limit := 512 - len(prefix) - len("\r\n")
+		if code != 334 && len(line) > limit {
+			for limit > 0 && !utf8.RuneStart(line[limit]) {
+				limit--
+			}
+			line = line[:limit]
+		}
+		if _, err := fmt.Fprintf(c.text.W, "%s%s\r\n", prefix, line); err != nil {
 			c.setWriteError(err)
 			return
 		}
-	}
-	var err error
-	if enhCode == NoEnhancedCode {
-		_, err = fmt.Fprintf(c.text.W, "%d %v\r\n", code, text[lastLineIndex])
-	} else {
-		_, err = fmt.Fprintf(c.text.W, "%d %v.%v.%v %v\r\n", code, enhCode[0], enhCode[1], enhCode[2], text[lastLineIndex])
-	}
-	if err != nil {
-		c.setWriteError(err)
 	}
 }
 
