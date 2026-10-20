@@ -1542,34 +1542,40 @@ func (c *Conn) handleBdat(arg string) {
 	c.locker.Unlock()
 
 	if r != nil {
-		c.dataResult = make(chan error, 1)
+		// RSET can start a new transaction before this backend returns. Keep
+		// its result channel and envelope tied to the original transfer.
+		result := make(chan error, 1)
+		c.dataResult = result
+		status := c.bdatStatus
+		recipients := append([]string(nil), c.recipients...)
+		session := c.Session()
 
 		go func() {
 			defer func() {
 				if err := recover(); err != nil {
-					c.handlePanic(err, c.bdatStatus)
+					c.handlePanic(err, status)
 
-					c.dataResult <- errPanic
+					result <- errPanic
 					r.CloseWithError(errPanic)
 				}
 			}()
 
 			var err error
 			if !c.server.LMTP {
-				err = c.Session().Data(r)
+				err = session.Data(r)
 			} else {
-				lmtpSession, ok := c.Session().(LMTPSession)
+				lmtpSession, ok := session.(LMTPSession)
 				if !ok {
-					err = c.Session().Data(r)
-					for _, rcpt := range c.recipients {
-						c.bdatStatus.SetStatus(rcpt, err)
+					err = session.Data(r)
+					for _, rcpt := range recipients {
+						status.SetStatus(rcpt, err)
 					}
 				} else {
-					err = lmtpSession.LMTPData(r, c.bdatStatus)
+					err = lmtpSession.LMTPData(r, status)
 				}
 			}
 
-			c.dataResult <- err
+			result <- err
 			r.CloseWithError(err)
 		}()
 	}

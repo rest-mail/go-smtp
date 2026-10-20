@@ -347,7 +347,7 @@ validating the enclosed MIME object remains the caller's responsibility.
 | CHUNK-DATA-03 | 2 | Normative | LAST completes one delivery; a zero-length LAST is valid and earlier chunks do not trigger delivery. | `TestRFC3030Examples`, `TestRFC3030NonLastDoesNotDeliver` |
 | CHUNK-DATA-04 | 2 | MUST | Commands between/after chunks remain subject to command line limits, even if a valid body shares the same read buffer. | `TestRFC3030ReadAheadLimits` |
 | CHUNK-STATE-01 | 2 | MUST | BDAT following LAST without a new envelope gets 503 and its payload is consumed as data. | `TestRFC3030RejectedChunksAreOpaque` |
-| CHUNK-STATE-02 | 2 | MUST | DATA during an unfinished BDAT transaction gets 503; DATA and BDAT may be used in different transactions of the same session. | `TestRFC3030BinaryAndResetRules`, `TestRFC3030Examples` |
+| CHUNK-STATE-02 | 2 | MUST | DATA during an unfinished BDAT transaction gets 503; DATA and BDAT may be used in different transactions of the same session. | `TestRFC3030BinaryAndResetRules`, `TestRFC3030Examples`, `TestBDATResultAfterReset` |
 | CHUNK-STATE-03 | 2 | MUST | RSET between chunks abandons the accumulated body and permits a fresh transaction. | `TestRFC3030BinaryAndResetRules` |
 | CHUNK-ERROR-01 | 2 | MUST | Consume a failed chunk before sending its error, including oversized and out-of-sequence chunks; payload is never interpreted as commands. | `TestRFC3030RejectedChunksAreOpaque`, `TestRFC3030DiscardBeforeReply` |
 | CHUNK-ERROR-02 | 2 | MUST | Accept and discard chunks already pipelined after a failed chunk; RSET recovers the transaction. | `TestRFC3030RejectedChunksAreOpaque` |
