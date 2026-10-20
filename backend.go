@@ -75,6 +75,10 @@ type Session interface {
 	// Set currently processed message contents and send it.
 	//
 	// r must be consumed before Data returns.
+	// The reader preserves 8-bit octets and CRLF after SMTP dot unstuffing.
+	// Backends accepting 8-bit messages must preserve those octets in storage
+	// and delivery. Relays must negotiate 8BITMIME with their next hop, convert
+	// losslessly to valid 7-bit MIME, or report a delivery failure (RFC 6152 §3).
 	Data(r io.Reader) error
 }
 

@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- RFC 6152 8BITMIME checklist with the RFC envelope/command example, all high-bit
+  octets, 1000-octet lines, dot transparency and explicit host/gap rows. A DATA
+  fuzz target compares byte preservation with Go's textproto transparency reader.
 - RFC 4954 AUTH exchange checklist rows, wire tests for the RFC's PLAIN and
   empty EXTERNAL examples, malformed Base64, retries and response sizes; a
   SASL response decoder fuzz target runs in CI. Remaining authentication
@@ -27,6 +30,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   unsupported enforcement modes are explicitly recorded.
 
 ### Fixed
+
+- The client honors `MailOptions.Body` instead of ignoring it. `Body7Bit` selects
+  7-bit transport, and explicit `Body8BitMIME` fails before MAIL if unsupported.
+  Invalid body types and `BodyBinaryMIME` are refused rather than silently
+  downgraded; BINARYMIME needs BDAT, which this client does not implement.
+  Empty/default options retain automatic 8BITMIME selection. Callers remain
+  responsible for providing content matching the transport; no MIME conversion
+  or content validation is added.
 
 - Malformed Base64 in AUTH now returns `501 5.5.2` instead of `454 4.7.0`;
   a missing mechanism returns `501`, successful authentication uses `235 2.7.0`,

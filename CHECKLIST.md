@@ -10,13 +10,14 @@ An item that does not apply, or is a known gap, says "n/a" and why. CI checks
 this file against the tests with `go run ./internal/checklist`; the format is
 described in the [README](README.md#the-rfc-checklist).
 
-Not covered yet: each extension (8BITMIME, DSN, CHUNKING,
+Not covered yet: each extension (DSN, CHUNKING,
 SMTPUTF8, LMTP, RRVS, DELIVERBY, MT-PRIORITY, XCLIENT) is one
 row in the extension summary, mapping its existing tests, and has not been checked
 clause by clause; later slots do that. STARTTLS (RFC 3207), SIZE (RFC 1870),
-PIPELINING (RFC 2920) and AUTH exchange rules (RFC 4954 §4) are audited below;
-the rest of RFC 4954 remains for later slices. RFC 6409 (submission) is not in
-this slot. Reply line lengths (§4.5.3.1.5) are checked by SMTP-LIM-06;
+PIPELINING (RFC 2920), 8BITMIME (RFC 6152) and AUTH exchange rules
+(RFC 4954 §4) are audited below; the rest of RFC 4954 remains for later slices.
+RFC 6409 (submission) is not in this slot. Reply line lengths (§4.5.3.1.5)
+are checked by SMTP-LIM-06;
 SASL challenges retain the independent size rules of RFC 4954 §4.
 
 
@@ -126,7 +127,7 @@ SASL challenges retain the independent size rules of RFC 4954 §4.
 | ID | Section | Level | Requirement | Tests |
 |----|---------|-------|-------------|-------|
 | SMTP-EXT-01 | RFC 2920 | Normative | PIPELINING regression summary; the clause-by-clause RFC 2920 audit below records its fixed-window client limitation. | `TestPipeline_NoRoundTripDeadlock`, `TestPipeline_Integration`, `TestPipeline_NotSupported`, `TestPipeline_LargeGroupDoesNotDeadlock`, `TestPipeline_LMTPSeesOnlyAcceptedRecipients`, `TestPipeline_StalledServerTimesOut`, `TestPipeline_ServerHangupMidGroup`, `TestPipelinedRepliesShareOneWrite`, `TestSingleCommandReplyIsPrompt`, `TestPartialPipelinedLineDoesNotHoldReplies` |
-| SMTP-EXT-02 | RFC 6152 | Normative | One row for the extension: 8BITMIME: `BODY=8BITMIME` and `7BIT` are accepted, any other value is refused. The clauses of the RFC are not checked one by one yet. | `TestServer8BITMIME`, `TestServer_BODYInvalidValue` |
+| SMTP-EXT-02 | RFC 6152 | Normative | 8BITMIME summary: `BODY=8BITMIME` and `7BIT` are accepted, other values are refused without BINARYMIME. Clause-by-clause transport checks and host responsibilities are below. | `TestServer8BITMIME`, `TestServer_BODYInvalidValue` |
 | SMTP-EXT-03 | RFC 1870 | Normative | SIZE summary: declared and actual sizes are checked against `MaxMessageBytes` (inclusive); oversized content is drained with a bound. The RFC 1870 audit is below. | `TestServerBadSize`, `TestServerTooBig`, `TestServerSizeLimit_ExactlyMaxAccepted`, `TestServerSizeLimit_OverMaxRejected`, `TestServerSizeLimit_RejectWithinLimitKeepsConnection`, `TestServerSizeLimit_OversizedKeepsConnection`, `TestServerSizeLimit_OverLimitDrainBounded`, `TestServerSizeLimit_LMTP_OverLimitDrainBounded`, `TestServerSizeLimit_LMTP_Fallback_OverLimitDrainBounded` |
 | SMTP-EXT-04 | RFC 3461, xtext (RFC 3461 §4) | Normative | One row for the extension: DSN: `RET`, `ENVID`, `NOTIFY` and `ORCPT`, with xtext encoding both ways. The clauses of the RFC are not checked one by one yet. | `TestServerDSN`, `TestClientDSN`, `TestClientXtext`, `TestXtextRoundTrip`, `TestServer_xtextLiteralNonXchar`, `FuzzDecodeXtext`, `FuzzEncodeXtext` |
 | SMTP-EXT-05 | RFC 3030 | Normative | One row for the extension: CHUNKING and BINARYMIME: BDAT chunks, reset, errors, size limits and shutdown. The clauses of the RFC are not checked one by one yet. | `TestServer_Chunking`, `TestServer_Chunking_LMTP`, `TestServer_Chunking_Reset`, `TestServer_Chunking_ClosedInTheMiddle`, `TestServer_Chunking_EarlyError`, `TestServer_Chunking_EarlyErrorDuringChunk`, `TestServer_Chunking_tooLongMessage`, `TestServer_Chunking_OverLimitDiscardKeepsConnection`, `TestServer_Chunking_Binarymime`, `TestServer_Chunking_LineLimitAfterNonLastBdat`, `TestBDATShutdownRace`, `TestBdatReadTimeoutClosesConnection`, `TestEODBDATChunksIgnoreDotSequences`, `TestServerBdatUnicodeSpaceIsNotSeparator` |
@@ -215,6 +216,34 @@ commands; a host's relay and submission policy remains outside this library.
 | TLS-SEC-01 | 6 | MUST | Selected hosts can require successful TLS negotiation meeting the configured cipher and authentication policy before message transfer. | n/a: client TLS-required constructors enforce negotiation using tls.Config; server per-host enforcement is host backend policy, not a built-in library-wide gate (TLS-POLICY-02). |
 | TLS-SEC-02 | 6 | SHOULD | Opportunistic TLS is also available as a local policy. | n/a: host transport choice; select DialStartTLS or Dial before transferring mail, with retry and downgrade policy outside the library. |
 
+## 8BITMIME (RFC 6152)
+
+Sections here refer to [RFC 6152](https://www.rfc-editor.org/rfc/rfc6152).
+The section 4 dialogue uses its envelope addresses and command sequence, with
+RFC 5321's 221 QUIT response in place of the example's 250. Tests prove the
+transport boundary, not MIME validation or the backend's eventual delivery.
+Explicit client body options are checked; the automatic/default API still
+requires the caller to supply content suitable for the negotiated transport.
+
+| ID | Section | Level | Requirement | Tests |
+|----|---------|-------|-------------|-------|
+| MIME-SYNTAX-01 | 2 | Normative | EHLO advertises 8BITMIME without arguments. | `TestRFC6152ServerExample` |
+| MIME-SYNTAX-02 | 2, 3 | Normative | BODY accepts 7BIT or 8BITMIME, case-insensitively. | `TestRFC6152ServerExample`, `TestRFC6152ServerBodyGrammar`, `TestRFC6152ClientBodyOptions` |
+| MIME-SYNTAX-03 | 3 | Normative | A MAIL command contains at most one BODY parameter. | `TestRFC6152ServerExample`, `TestRFC6152ServerBodyGrammar` |
+| MIME-SYNTAX-04 | 2, 3 | Normative | BODY is optional for ordinary 7-bit mail. | `TestRFC6152ServerExample` |
+| MIME-DATA-01 | 3 | SHALL | DATA retains high-bit octets. | `TestRFC6152ServerExample`, `TestRFC6152ClientPreservesOctets`, `FuzzRFC6152DataOctets` |
+| MIME-DATA-02 | 3 | Normative | Dot transparency still applies. | `TestRFC6152ServerExample`, `TestRFC6152ClientPreservesOctets`, `FuzzRFC6152DataOctets` |
+| MIME-DATA-03 | 3 | Normative | The final content CRLF belongs to the message. | `TestRFC6152ServerExample`, `TestRFC6152ClientPreservesOctets`, `FuzzRFC6152DataOctets` |
+| MIME-DATA-04 | 1, 3 | Normative | DATA permits lines of at least 1000 octets including CRLF. | `TestRFC6152ServerExample` |
+| MIME-CLIENT-01 | 3 | Normative | The client negotiates before using BODY=8BITMIME. | `TestRFC6152ClientBodyOptions`, `TestRFC6152ClientPreservesOctets` |
+| MIME-CLIENT-02 | 3 | MUST NOT | An explicit 8-bit request fails when the peer lacks support. | `TestRFC6152ClientBodyOptions` |
+| MIME-CLIENT-03 | 1, 3 | Normative | 8BITMIME does not authorize BINARYMIME transport. | `TestRFC6152ClientBodyOptions`, `TestRFC6152ServerBodyGrammar` |
+| MIME-POLICY-01 | 3 | MUST NOT | Send no high-bit content without negotiated support. | n/a: gap: default Mail/SendMail and Data do not inspect content; callers must ensure 7-bit content for an unextended peer. Explicit Body8BitMIME is protected by MIME-CLIENT-02. |
+| MIME-RELAY-01 | 3 | MUST | Accepted 8-bit mail retains its octets through delivery. | n/a: backend storage/delivery responsibility; tests prove bytes presented to Session.Data only. |
+| MIME-RELAY-02 | 3 | Normative | A relay facing an unextended next hop converts or fails delivery. | n/a: host routing, retry and delivery-failure policy; no MIME converter or queue is supplied. |
+| MIME-RELAY-03 | 3 | MUST | Conversion loses no information. | n/a: no MIME conversion implementation; responsibility of a host choosing conversion. |
+| MIME-RELAY-04 | 3 | MUST | Converted mail is valid 7-bit MIME. | n/a: no MIME conversion implementation; responsibility of a host choosing conversion. |
+| MIME-EXAMPLE-01 | 4 | Normative | The example's extended mail transaction succeeds. | `TestRFC6152ServerExample` |
 
 ## Message size declaration (RFC 1870)
 
