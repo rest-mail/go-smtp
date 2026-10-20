@@ -177,6 +177,10 @@ func (c *Conn) handle(cmd string, arg string) {
 	case "AUTH":
 		c.handleAuth(arg)
 	case "STARTTLS":
+		if arg != "" {
+			c.writeResponse(501, EnhancedCode{5, 5, 4}, "STARTTLS does not accept parameters")
+			return
+		}
 		c.handleStartTLS()
 	case "XCLIENT":
 		c.handleXClient(arg)
@@ -462,7 +466,9 @@ func (c *Conn) handleGreet(enhanced bool, arg string) {
 	if c.server.MaxMessageBytes > 0 {
 		caps = append(caps, fmt.Sprintf("SIZE %v", c.server.MaxMessageBytes))
 	} else {
-		caps = append(caps, "SIZE")
+		// RFC 1870 §3: zero explicitly means no fixed limit. A bare SIZE
+		// instead promises resource checks before accepting a declaration (§7).
+		caps = append(caps, "SIZE 0")
 	}
 	if c.server.MaxRecipients > 0 {
 		caps = append(caps, fmt.Sprintf("LIMITS RCPTMAX=%v", c.server.MaxRecipients))
@@ -551,18 +557,20 @@ func (c *Conn) handleMail(arg string) {
 	for key, value := range args {
 		switch key {
 		case "SIZE":
-			size, err := strconv.ParseUint(value, 10, 32)
-			if err != nil {
-				c.writeResponse(501, EnhancedCode{5, 5, 4}, "Unable to parse SIZE as an integer")
+			if len(value) > 20 || !isDecimal(value) {
+				c.writeResponse(501, EnhancedCode{5, 5, 4}, "SIZE must contain 1 to 20 decimal digits")
 				return
 			}
 
-			if c.server.MaxMessageBytes > 0 && int64(size) > c.server.MaxMessageBytes {
+			// Valid 20-digit values can exceed int64. They are too large for
+			// this implementation, not malformed SIZE syntax (RFC 1870 §6.1).
+			size, err := strconv.ParseInt(value, 10, 64)
+			if err != nil || (c.server.MaxMessageBytes > 0 && size > c.server.MaxMessageBytes) {
 				c.writeResponse(552, EnhancedCode{5, 3, 4}, "Max message size exceeded")
 				return
 			}
 
-			opts.Size = int64(size)
+			opts.Size = size
 		case "SMTPUTF8":
 			if !c.server.EnableSMTPUTF8 {
 				c.writeResponse(504, EnhancedCode{5, 5, 4}, "SMTPUTF8 is not implemented")
@@ -1336,6 +1344,8 @@ func (c *Conn) handleStartTLS() {
 	}
 	c.helo = ""
 	c.didAuth = false
+	// Proxy assertions are SMTP knowledge obtained before TLS, too.
+	c.xclient = nil
 	c.reset()
 }
 
@@ -1901,20 +1911,31 @@ func (c *Conn) writeResponse(code int, enhCode EnhancedCode, text ...string) {
 	text = strings.Split(strings.Join(text, "\n"), "\n")
 
 	lastLineIndex := len(text) - 1
-	for i := 0; i < lastLineIndex; i++ {
-		if _, err := fmt.Fprintf(c.text.W, "%d-%v\r\n", code, text[i]); err != nil {
+	for i, line := range text {
+		prefix := fmt.Sprintf("%d-", code)
+		if i == lastLineIndex {
+			prefix = fmt.Sprintf("%d ", code)
+			if enhCode != NoEnhancedCode {
+				prefix += fmt.Sprintf("%d.%d.%d ", enhCode[0], enhCode[1], enhCode[2])
+			}
+		}
+
+		// RFC 5321 §4.5.3.1.5: count the prefix and CRLF in the 512-octet
+		// reply line limit. Keep the existing line structure and status codes;
+		// only the text is shortened, at a UTF-8 character boundary.
+		// SASL challenges are protocol data, not diagnostics: RFC 4954 §4
+		// explicitly makes their size independent of ordinary SMTP limits.
+		limit := 512 - len(prefix) - len("\r\n")
+		if code != 334 && len(line) > limit {
+			for limit > 0 && !utf8.RuneStart(line[limit]) {
+				limit--
+			}
+			line = line[:limit]
+		}
+		if _, err := fmt.Fprintf(c.text.W, "%s%s\r\n", prefix, line); err != nil {
 			c.setWriteError(err)
 			return
 		}
-	}
-	var err error
-	if enhCode == NoEnhancedCode {
-		_, err = fmt.Fprintf(c.text.W, "%d %v\r\n", code, text[lastLineIndex])
-	} else {
-		_, err = fmt.Fprintf(c.text.W, "%d %v.%v.%v %v\r\n", code, enhCode[0], enhCode[1], enhCode[2], text[lastLineIndex])
-	}
-	if err != nil {
-		c.setWriteError(err)
 	}
 }
 

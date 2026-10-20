@@ -117,7 +117,8 @@ func NewClient(conn net.Conn) *Client {
 	return c
 }
 
-// NewClientStartTLS creates a new Client and performs a STARTTLS command.
+// NewClientStartTLS creates a new Client and negotiates STARTTLS. It returns
+// success only after the TLS handshake and certificate verification complete.
 func NewClientStartTLS(conn net.Conn, tlsConfig *tls.Config) (*Client, error) {
 	c := NewClient(conn)
 	if err := initStartTLS(c, tlsConfig); err != nil {
@@ -313,6 +314,9 @@ func (c *Client) ehlo() error {
 //
 // If server returns an error, it will be of type *SMTPError.
 func (c *Client) startTLS(config *tls.Config) error {
+	if _, ok := c.TLSConnectionState(); ok {
+		return errors.New("smtp: TLS is already active")
+	}
 	if err := c.hello(); err != nil {
 		return err
 	}
@@ -331,8 +335,23 @@ func (c *Client) startTLS(config *tls.Config) error {
 	if testHookStartTLS != nil {
 		testHookStartTLS(config)
 	}
-	c.setConn(tls.Client(c.conn, config))
+	tc := tls.Client(c.conn, config)
+	// STARTTLS must not report success before certificate verification and
+	// the handshake finish. Bound the negotiation like a command exchange.
+	if c.CommandTimeout > 0 {
+		tc.SetDeadline(time.Now().Add(c.CommandTimeout))
+	}
+	if err := tc.Handshake(); err != nil {
+		c.Close()
+		return err
+	}
+	tc.SetDeadline(time.Time{})
+	c.setConn(tc)
+	// RFC 3207 §4.2: no pre-TLS SMTP knowledge survives the upgrade.
+	c.ext = nil
+	c.rcpts = nil
 	c.didHello = false
+	c.helloError = nil
 	return nil
 }
 
@@ -473,6 +492,9 @@ func (c *Client) Mail(from string, opts *MailOptions) error {
 func (c *Client) buildMailCmd(from string, opts *MailOptions) (string, error) {
 	if err := validateLine(from); err != nil {
 		return "", err
+	}
+	if opts != nil && opts.Size < 0 {
+		return "", errors.New("smtp: message size must not be negative")
 	}
 
 	var sb strings.Builder
@@ -646,6 +668,15 @@ var _ io.WriteCloser = (*DataCommand)(nil)
 
 // Write implements io.Writer.
 func (cmd *DataCommand) Write(b []byte) (int, error) {
+	if cmd.closeErr != nil {
+		return 0, cmd.closeErr
+	}
+	if len(b) == 0 {
+		return 0, nil
+	}
+	if cmd.wc == nil {
+		cmd.wc = cmd.client.text.DotWriter()
+	}
 	return cmd.wc.Write(b)
 }
 
@@ -741,7 +772,16 @@ func (cmd *DataCommand) close() error {
 		defer func() { _ = cmd.client.conn.SetWriteDeadline(time.Time{}) }()
 	}
 
-	if err := cmd.wc.Close(); err != nil {
+	var err error
+	if cmd.wc == nil {
+		// RFC 2920 §3.1 recovery requires a single dot after DATA accepts
+		// an envelope with no recipients. textproto.DotWriter.Close adds
+		// an unwanted blank line when nothing has been written.
+		err = cmd.client.text.PrintfLine(".")
+	} else {
+		err = cmd.wc.Close()
+	}
+	if err != nil {
 		cmd.closeErr = err
 		return err
 	}
@@ -781,14 +821,15 @@ func (lmtpErr LMTPDataError) Unwrap() []error {
 
 // Data issues a DATA command to the server and returns a writer that
 // can be used to write the mail headers and body. The caller should
-// close the writer before calling any more methods on c. A call to
+// close the writer before calling any more methods on c. Closing without
+// writing sends an empty message (only the dot terminator). A call to
 // Data must be preceded by one or more calls to Rcpt.
 func (c *Client) Data() (*DataCommand, error) {
 	_, _, err := c.cmd(354, "DATA")
 	if err != nil {
 		return nil, err
 	}
-	return &DataCommand{client: c, wc: c.text.DotWriter()}, nil
+	return &DataCommand{client: c}, nil
 }
 
 // SendMail will use an existing connection to send an email from
@@ -933,7 +974,7 @@ func (c *Client) MaxMessageSize() (size int, ok bool) {
 		return 0, false
 	}
 	v := c.ext["SIZE"]
-	if v == "" {
+	if !isDecimal(v) {
 		return 0, false
 	}
 	size, err := strconv.Atoi(v)

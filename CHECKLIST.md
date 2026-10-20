@@ -10,13 +10,14 @@ An item that does not apply, or is a known gap, says "n/a" and why. CI checks
 this file against the tests with `go run ./internal/checklist`; the format is
 described in the [README](README.md#the-rfc-checklist).
 
-Not covered yet: each extension (PIPELINING, 8BITMIME, SIZE, DSN, CHUNKING,
-SMTPUTF8, STARTTLS, LMTP, RRVS, DELIVERBY, MT-PRIORITY, XCLIENT) is one
+Not covered yet: each extension (8BITMIME, DSN, CHUNKING,
+SMTPUTF8, LMTP, RRVS, DELIVERBY, MT-PRIORITY, XCLIENT) is one
 row in the extension summary, mapping its existing tests, and has not been checked
-clause by clause; later slots do that. AUTH exchange rules (RFC 4954 §4)
-are audited below; the rest of RFC 4954 remains for later slices. RFC 6409 (submission) is not in this
-slot. The reply
-line length of §4.5.3.1.5 is recorded as SMTP-LIM-06.
+clause by clause; later slots do that. STARTTLS (RFC 3207), SIZE (RFC 1870),
+PIPELINING (RFC 2920) and AUTH exchange rules (RFC 4954 §4) are audited below;
+the rest of RFC 4954 remains for later slices. RFC 6409 (submission) is not in
+this slot. Reply line lengths (§4.5.3.1.5) are checked by SMTP-LIM-06;
+SASL challenges retain the independent size rules of RFC 4954 §4.
 
 
 ## Syntax and lexical rules (§2.3, §2.4, §4.1.2)
@@ -86,7 +87,7 @@ line length of §4.5.3.1.5 is recorded as SMTP-LIM-06.
 | SMTP-LIM-03 | 4.5.3.1.1-3 | MUST | A local-part of 64 octets, a domain of 255 octets and a path of 256 octets are accepted. | `TestRFC5321_MinimumAddressSizes` |
 | SMTP-LIM-04 | 4.5.3.1.8 | MUST | At least 100 recipients are accepted in one transaction. | `TestRFC5321_HundredRecipients` |
 | SMTP-LIM-05 | 4.5.3.2 | SHOULD | A configured read timeout closes a connection that stops sending, in DATA as well as between commands; the timeout restarts as data arrives. | `TestDataReadTimeoutClosesConnection`, `TestDataBodyReadDeadlineRefresh` |
-| SMTP-LIM-06 | 4.5.3.1.5 | MUST | A reply line is at most 512 octets, CRLF included. | n/a: a gap, not asserted yet: the library's own replies are short, but text a backend supplies is not truncated. |
+| SMTP-LIM-06 | 4.5.3.1.5 | MUST | A server reply line is at most 512 octets, code and CRLF included; RFC 4954 SASL challenges have independent size rules. | `TestRFC5321_ReplyLine512`, `TestRFC5321_MultilineReplyLine512`, `TestRFC5321_BackendReplyLine512`, `TestRFC4954_LongChallengeNotTruncated` |
 
 ## Replies (§4.2)
 
@@ -94,7 +95,7 @@ line length of §4.5.3.1.5 is recorded as SMTP-LIM-06.
 |----|---------|-------|-------------|-------|
 | SMTP-REP-01 | 4.2 | MUST | The server greets a new connection with a 220 reply. | `TestServer_helo`, `TestServer` |
 | SMTP-REP-02 | 3.8, 4.2.2 | MUST | A server that must stop answers 421 before closing: on shutdown, and after an internal error. | `TestServerCloseSends421`, `TestServerPanicRecover`, `TestConnReject` |
-| SMTP-REP-03 | 4.2.1 | MUST | The code a backend returns is the reply code, with its text; a plain error is not leaked to the client. | `TestErrorf`, `TestBackendErrorf_StatusNotLeaked`, `TestDataWrappedSMTPError`, `TestMailWrappedSMTPError`, `TestCustomResponse_Mail`, `TestCustomResponse_Rcpt`, `TestCustomResponse_Data`, `TestSMTPErrorTemporary` |
+| SMTP-REP-03 | 4.2.1 | MUST | The code a backend returns is the reply code, with its text; a plain error is not leaked to the client. | `TestErrorf`, `TestBackendErrorf_StatusNotLeaked`, `TestDataWrappedSMTPError`, `TestMailWrappedSMTPError`, `TestCustomResponse_Mail`, `TestCustomResponse_Rcpt`, `TestCustomResponse_Data`, `TestSMTPErrorTemporary`, `TestRFC5321_BackendReplyLine512` |
 
 ## Connection handling (§3.8, §4.1.1.10), library behaviour
 
@@ -124,14 +125,14 @@ line length of §4.5.3.1.5 is recorded as SMTP-LIM-06.
 
 | ID | Section | Level | Requirement | Tests |
 |----|---------|-------|-------------|-------|
-| SMTP-EXT-01 | RFC 2920 | Normative | One row for the extension: PIPELINING: the replies to a batch of commands are sent in order and in one write; the client does not deadlock. The clauses of the RFC are not checked one by one yet. | `TestPipeline_NoRoundTripDeadlock`, `TestPipeline_Integration`, `TestPipeline_NotSupported`, `TestPipeline_LargeGroupDoesNotDeadlock`, `TestPipeline_LMTPSeesOnlyAcceptedRecipients`, `TestPipeline_StalledServerTimesOut`, `TestPipeline_ServerHangupMidGroup`, `TestPipelinedRepliesShareOneWrite`, `TestSingleCommandReplyIsPrompt`, `TestPartialPipelinedLineDoesNotHoldReplies` |
+| SMTP-EXT-01 | RFC 2920 | Normative | PIPELINING regression summary; the clause-by-clause RFC 2920 audit below records its fixed-window client limitation. | `TestPipeline_NoRoundTripDeadlock`, `TestPipeline_Integration`, `TestPipeline_NotSupported`, `TestPipeline_LargeGroupDoesNotDeadlock`, `TestPipeline_LMTPSeesOnlyAcceptedRecipients`, `TestPipeline_StalledServerTimesOut`, `TestPipeline_ServerHangupMidGroup`, `TestPipelinedRepliesShareOneWrite`, `TestSingleCommandReplyIsPrompt`, `TestPartialPipelinedLineDoesNotHoldReplies` |
 | SMTP-EXT-02 | RFC 6152 | Normative | One row for the extension: 8BITMIME: `BODY=8BITMIME` and `7BIT` are accepted, any other value is refused. The clauses of the RFC are not checked one by one yet. | `TestServer8BITMIME`, `TestServer_BODYInvalidValue` |
-| SMTP-EXT-03 | RFC 1870 | Normative | One row for the extension: SIZE: the declared size and the message size are checked against `MaxMessageBytes` (inclusive), and an oversize message is drained and the connection kept. The clauses of the RFC are not checked one by one yet. | `TestServerBadSize`, `TestServerTooBig`, `TestServerSizeLimit_ExactlyMaxAccepted`, `TestServerSizeLimit_OverMaxRejected`, `TestServerSizeLimit_RejectWithinLimitKeepsConnection`, `TestServerSizeLimit_OversizedKeepsConnection`, `TestServerSizeLimit_OverLimitDrainBounded`, `TestServerSizeLimit_LMTP_OverLimitDrainBounded`, `TestServerSizeLimit_LMTP_Fallback_OverLimitDrainBounded` |
+| SMTP-EXT-03 | RFC 1870 | Normative | SIZE summary: declared and actual sizes are checked against `MaxMessageBytes` (inclusive); oversized content is drained with a bound. The RFC 1870 audit is below. | `TestServerBadSize`, `TestServerTooBig`, `TestServerSizeLimit_ExactlyMaxAccepted`, `TestServerSizeLimit_OverMaxRejected`, `TestServerSizeLimit_RejectWithinLimitKeepsConnection`, `TestServerSizeLimit_OversizedKeepsConnection`, `TestServerSizeLimit_OverLimitDrainBounded`, `TestServerSizeLimit_LMTP_OverLimitDrainBounded`, `TestServerSizeLimit_LMTP_Fallback_OverLimitDrainBounded` |
 | SMTP-EXT-04 | RFC 3461, xtext (RFC 3461 §4) | Normative | One row for the extension: DSN: `RET`, `ENVID`, `NOTIFY` and `ORCPT`, with xtext encoding both ways. The clauses of the RFC are not checked one by one yet. | `TestServerDSN`, `TestClientDSN`, `TestClientXtext`, `TestXtextRoundTrip`, `TestServer_xtextLiteralNonXchar`, `FuzzDecodeXtext`, `FuzzEncodeXtext` |
 | SMTP-EXT-05 | RFC 3030 | Normative | One row for the extension: CHUNKING and BINARYMIME: BDAT chunks, reset, errors, size limits and shutdown. The clauses of the RFC are not checked one by one yet. | `TestServer_Chunking`, `TestServer_Chunking_LMTP`, `TestServer_Chunking_Reset`, `TestServer_Chunking_ClosedInTheMiddle`, `TestServer_Chunking_EarlyError`, `TestServer_Chunking_EarlyErrorDuringChunk`, `TestServer_Chunking_tooLongMessage`, `TestServer_Chunking_OverLimitDiscardKeepsConnection`, `TestServer_Chunking_Binarymime`, `TestServer_Chunking_LineLimitAfterNonLastBdat`, `TestBDATShutdownRace`, `TestBdatReadTimeoutClosesConnection`, `TestEODBDATChunksIgnoreDotSequences`, `TestServerBdatUnicodeSpaceIsNotSeparator` |
 | SMTP-EXT-06 | RFC 6531, 6533 | Normative | One row for the extension: SMTPUTF8: the parameter, UTF-8 addresses, `ORCPT` with UTF-8 (xtext and unitext), and the client's detection. The clauses of the RFC are not checked one by one yet. | `TestServerSMTPUTF8`, `TestServerSMTPUTF8_Disabled`, `TestServerDSNUTF8AddressORCPT`, `TestServerDSNwithSMTPUTF8`, `TestSendMail_SMTPUTF8_Autodetect`, `TestSendMail_SMTPUTF8_NotAdvertised`, `TestIsASCII`, `TestUTF8AddrOracleCatchesMutants`, `TestUTF8AddrRFC6533Regressions`, `TestClientORCPTUTF8Encoding`, `FuzzDecodeUTF8AddrXtext`, `FuzzEncodeUTF8AddrXtext`, `FuzzEncodeUTF8AddrUnitext` |
-| SMTP-EXT-07 | RFC 3207 | Normative | One row for the extension: STARTTLS: it takes no argument, the 220 is sent before the handshake, a failed handshake closes the connection, and the client keeps the TLS state. The clauses of the RFC are not checked one by one yet. | `TestTLSClient`, `TestTLSConnState`, `TestStartTLSClosesOnHandshakeFailure`, `TestStartTLSCloseRace`, `TestStartTLSReplySentBeforeHandshake`, `TestParseCmdSTARTTLSExact`, `TestAuthTLSRequiredCode`, `TestNewClientStartTLS` |
-| SMTP-EXT-08 | RFC 4954 | Normative | One row for the extension: AUTH: mechanisms, initial response, cancellation, a second AUTH, anonymous access, and read timeouts. The exchange rules have individual rows below; other clauses remain unaudited. | `TestServerAuthTwice`, `TestServerCancelSASL`, `TestServer_authDisabled`, `TestServer_anonymousUserError`, `TestServer_anonymousUserOK`, `TestServer_authParam`, `TestAuthRejectsExtraTokens`, `TestAuthFailed`, `TestClientAuthTrimSpace`, `TestAuthChallengeSentBeforeReadingResponse`, `TestAuthClientCancelReturns501`, `TestAuthContinuationReadTimeoutClosesConnection`, `TestServerAuthUnicodeSpaceIsNotSeparator` |
+| SMTP-EXT-07 | RFC 3207 | Normative | STARTTLS summary: parser, handshake, TLS state, close races and AUTH protection. The clause-by-clause audit is below. | `TestTLSClient`, `TestTLSConnState`, `TestStartTLSClosesOnHandshakeFailure`, `TestStartTLSCloseRace`, `TestStartTLSReplySentBeforeHandshake`, `TestParseCmdSTARTTLSExact`, `TestAuthTLSRequiredCode`, `TestNewClientStartTLS` |
+| SMTP-EXT-08 | RFC 4954 | Normative | One row for the extension: AUTH: mechanisms, initial response, cancellation, a second AUTH, anonymous access, and read timeouts. The exchange rules have individual rows below; other clauses remain unaudited. | `TestServerAuthTwice`, `TestServerCancelSASL`, `TestServer_authDisabled`, `TestServer_anonymousUserError`, `TestServer_anonymousUserOK`, `TestServer_authParam`, `TestAuthRejectsExtraTokens`, `TestAuthFailed`, `TestClientAuthTrimSpace`, `TestAuthChallengeSentBeforeReadingResponse`, `TestAuthClientCancelReturns501`, `TestAuthContinuationReadTimeoutClosesConnection`, `TestServerAuthUnicodeSpaceIsNotSeparator`, `TestRFC4954_LongChallengeNotTruncated` |
 | SMTP-EXT-09 | RFC 2033 | Normative | One row for the extension: LMTP: `LHLO`, one reply per recipient after the data, and the client side. The clauses of the RFC are not checked one by one yet. | `TestServer_LMTP`, `TestServer_LMTP_Early`, `TestServer_LMTP_Expand`, `TestServer_LMTP_DuplicatedRcpt`, `TestServer_Chunking_LMTP`, `TestLMTP`, `TestLMTPData`, `TestLMTPRcptLeakAcrossTransactions`, `TestLMTPDataErrorMessages` |
 | SMTP-EXT-10 | RFC 7293 | Normative | One row for the extension: RRVS: the `RRVS` parameter on RCPT. The clauses of the RFC are not checked one by one yet. | `TestServerRRVS`, `TestClientRRVS` |
 | SMTP-EXT-11 | RFC 2852 | Normative | One row for the extension: DELIVERBY: `BY` on MAIL only, in range. The clauses of the RFC are not checked one by one yet. | `TestServerDELIVERBY`, `TestClientDELIVERBY`, `TestClientDeliverByTruncatesToSeconds`, `TestParseDeliverByBoundaries`, `FuzzParseDeliverByArgument`, `TestServerDeliverByAndMTPriorityRejectedOnRcpt` |
@@ -175,3 +176,124 @@ mechanisms and credential/identity policy through AuthSession.
 | SMTP-AUTH-23 | RFC 4954 §4 | SHOULD | Authorization identities use SASLprep; failed preparation or an unexpectedly empty prepared identity must fail authentication. | n/a: host responsibility; the transport receives opaque SASL bytes and no authorization identity. Hosts must implement preparation and return a SASL error on failure. |
 | SMTP-AUTH-24 | RFC 4954 §4 | MUST | PLAIN over TLS is available for interoperability. | n/a: host responsibility; applications must install a PLAIN AuthSession and a TLS configuration, and clients must supply a PLAIN sasl.Client. This exchange slice tests framing separately from TLS, not a complete PLAIN/TLS deployment. |
 | SMTP-AUTH-25 | RFC 4954 §4 | MUST | AUTH is last in a pipelined group except for eligible one-round-trip mechanisms with an initial response. | n/a: client Auth is synchronous, outside the Pipeliner API; the raw server cannot distinguish a group boundary from buffered continuation bytes. Host-provided mechanisms must not negotiate unsupported security layers. |
+
+
+## STARTTLS (RFC 3207)
+
+Sections in this table refer to [RFC 3207](https://www.rfc-editor.org/rfc/rfc3207).
+The §5 example is exercised as a real plaintext EHLO / STARTTLS / TLS handshake /
+encrypted EHLO exchange, with capabilities checked before and after. TLS uses
+Go's `crypto/tls`; these tests prove the SMTP integration, not the TLS protocol.
+Policy rows distinguish host responsibilities and unsupported modes from tested
+library behaviour. In particular, enabling STARTTLS does not enforce TLS on all
+commands; a host's relay and submission policy remains outside this library.
+
+| ID | Section | Level | Requirement | Tests |
+|----|---------|-------|-------------|-------|
+| TLS-SYNTAX-01 | 2, 3 | Normative | The EHLO keyword is STARTTLS with no parameters when TLS is available. | `TestRFC3207ServerDiscardsKnowledge` |
+| TLS-SYNTAX-02 | 4 | Normative | STARTTLS takes no parameters; parameters receive 501 and do not start a handshake. | `TestRFC3207RejectsParameters` |
+| TLS-REPLY-01 | 4 | Normative | Send 220 before beginning the TLS negotiation. | `TestStartTLSReplySentBeforeHandshake` |
+| TLS-REPLY-02 | 4 | Normative | A client receiving 454 applies its local policy; TLS-required constructors return that error and close rather than send plaintext mail. | `TestRFC3207ClientTemporaryRefusal` |
+| TLS-REPLY-03 | 4 | Normative | Temporary server TLS unavailability is answered 454. | n/a: no temporary-unavailability mode; a nil TLSConfig means permanently unsupported (502), while configured TLS attempts the handshake. |
+| TLS-POLICY-01 | 4 | MUST NOT | A publicly referenced SMTP server must not require STARTTLS for local delivery; configuring TLS alone permits a plaintext transaction. | `TestRFC3207PlaintextDelivery` |
+| TLS-POLICY-02 | 4 | SHOULD | A private server requiring TLS answers commands other than NOOP, EHLO, STARTTLS and QUIT with 530 (enhanced 5.7.0). | n/a: no library-wide require-TLS mode; AllowInsecureAuth=false protects AUTH only. Host submission policy is separate; see TLS-POLICY-03. |
+| TLS-POLICY-03 | 4 | SHOULD | AUTH protected by the host's TLS policy receives 530 with enhanced status 5.7.0 before TLS. | `TestAuthTLSRequiredCode` |
+| TLS-CLIENT-01 | 4 | MUST | After 220, negotiate TLS before any further SMTP commands; report success only after the handshake and certificate verification complete. | `TestRFC3207ClientUpgrade`, `TestRFC3207ClientHandshakeFailure`, `TestRFC3207ClientHandshakeTimeout`, `TestRFC3207ConstructorsVerifyHandshake` |
+| TLS-CLIENT-02 | 4.2 | MUST NOT | The client does not attempt STARTTLS while TLS is already active. | `TestRFC3207ClientUpgrade` |
+| TLS-CLIENT-03 | 4 | SHOULD | Abort the connection when a failure prevents a usable TLS handshake; do not resume plaintext SMTP. | `TestRFC3207ClientHandshakeFailure`, `TestRFC3207ClientHandshakeTimeout`, `TestRFC3207ConstructorsVerifyHandshake` |
+| TLS-PIPE-01 | 4 | Normative | STARTTLS is the last command in a pipelined group. | n/a: the client pipeline API has no STARTTLS operation; startTLS sends a standalone command. TestStartTLSReplySentBeforeHandshake covers the server accepting STARTTLS last in a group. |
+| TLS-POLICY-04 | 4.1, 6 | MUST | Both peers immediately decide whether the achieved authentication and privacy permit continuing. | n/a: host policy through tls.Config (verification, client certificates, protocol and cipher restrictions) and TLSConnectionState; no universal trust policy is imposed by SMTP. Handshake rejection is tested by TLS-CLIENT-03. |
+| TLS-POLICY-05 | 4.1 | SHOULD | A client rejecting an otherwise completed TLS negotiation immediately sends QUIT. | n/a: host policy; the client exposes TLSConnectionState and Quit. Failed TLS negotiation closes the socket instead (TLS-CLIENT-03). |
+| TLS-POLICY-06 | 4.1 | SHOULD | A server rejecting an otherwise completed TLS negotiation answers commands other than QUIT with 554. | n/a: not supported yet as a library-wide state; TLSConfig can reject the handshake, and a host backend can reject the subsequent session. |
+| TLS-STATE-01 | 4.2, 6 | MUST | The server resets SMTP state and discards pre-TLS EHLO, authentication, backend session and XCLIENT assertions. | `TestRFC3207ServerDiscardsKnowledge` |
+| TLS-STATE-02 | 4.2, 6 | MUST | The client discards the pre-TLS service extension list and transaction recipients. | `TestRFC3207ClientUpgrade` |
+| TLS-STATE-03 | 4.2 | SHOULD | The client's first SMTP command after a successful negotiation is a fresh EHLO. | `TestRFC3207ClientUpgrade` |
+| TLS-STATE-04 | 4.2 | MUST | Both peers know whether TLS is active and expose the completed negotiation state. | `TestRFC3207ClientUpgrade`, `TestRFC3207ServerDiscardsKnowledge` |
+| TLS-STATE-05 | 4.2 | MUST NOT | The server does not advertise STARTTLS after the TLS handshake. | `TestRFC3207ServerDiscardsKnowledge` |
+| TLS-SERVER-01 | 4.1, 6 | Normative | A failed server-side TLS handshake ends the connection, preventing further SMTP on a half-upgraded stream. | `TestStartTLSClosesOnHandshakeFailure` |
+| TLS-EXAMPLE-01 | 5 | Normative | The usage example's EHLO, STARTTLS, handshake and encrypted EHLO sequence changes the advertised capabilities. | `TestRFC3207ClientUpgrade`, `TestRFC3207ServerDiscardsKnowledge` |
+| TLS-SEC-01 | 6 | MUST | Selected hosts can require successful TLS negotiation meeting the configured cipher and authentication policy before message transfer. | n/a: client TLS-required constructors enforce negotiation using tls.Config; server per-host enforcement is host backend policy, not a built-in library-wide gate (TLS-POLICY-02). |
+| TLS-SEC-02 | 6 | SHOULD | Opportunistic TLS is also available as a local policy. | n/a: host transport choice; select DialStartTLS or Dial before transferring mail, with retry and downgrade policy outside the library. |
+
+
+## Message size declaration (RFC 1870)
+
+Sections below refer to [RFC 1870](https://www.rfc-editor.org/rfc/rfc1870).
+This is the minimal server model of §7: the library enforces its fixed limit,
+while a backend owns storage availability and recipient policy. An unlimited
+server advertises `SIZE 0`, rather than the bare keyword whose §7 semantics
+require a resource check. Values beyond the signed 64-bit API range receive
+552 even when no administrator limit is configured. The client exposes SIZE
+and SMTP errors; queueing, notifications and retry policy belong to its host.
+The §8 example is a protocol test with backend-supplied recipient failures.
+
+| ID | Section | Level | Requirement | Tests |
+|----|---------|-------|-------------|-------|
+| SIZE-EHLO-01 | 3, 4 | Normative | Advertise SIZE and the fixed inclusive maximum as a decimal octet count. | `TestRFC1870Advertisement` |
+| SIZE-EHLO-02 | 3, 7 | Normative | SIZE 0 means no configured fixed maximum; a bare SIZE does not convey a maximum. | `TestRFC1870Advertisement` |
+| SIZE-EHLO-03 | 3, 7 | Normative | The client distinguishes a numeric maximum (including unlimited zero) from an absent or unusable maximum; only ASCII decimal digits are valid. | `TestRFC1870ClientLimits`, `FuzzRFC1870SizeValues` |
+| SIZE-MAIL-01 | 3, 6 | Normative | A SIZE value is 1–20 ASCII decimal digits, with no sign; leading zeroes are valid. | `TestRFC1870Declarations` |
+| SIZE-MAIL-02 | 6 | Normative | A MAIL command has at most one SIZE parameter. | `TestRFC1870Declarations` |
+| SIZE-MAIL-03 | 3, 6 | Normative | Pass the declared octet estimate to the backend without a 32-bit cap; values outside the implementation's int64 range are refused as too large. | `TestRFC1870Declarations` |
+| SIZE-LINE-01 | 3 | Normative | SIZE extends the base MAIL command line allowance by 26 octets (538 total under the default server limit). | `TestRFC1870ExtendedMailLine` |
+| SIZE-CLIENT-01 | 4, 6 | Normative | Send a SIZE declaration only when the extension was advertised, using a non-negative decimal estimate. | `TestRFC1870ClientDeclarations` |
+| SIZE-CLIENT-02 | 7 | MAY | A minimal client may omit SIZE even when advertised; zero in MailOptions selects omission. | `TestRFC1870ClientDeclarations` |
+| SIZE-DATA-01 | 5, 6 | Normative | Actual size counts headers, body and CRLF, excluding transparency dots and the DATA terminator. | `TestRFC1870DataOctets` |
+| SIZE-DATA-02 | 6 | MUST NOT | Never use the declared SIZE to delimit DATA. | `TestRFC1870DataOctets` |
+| SIZE-DATA-03 | 6.1, 6.3 | MAY | An underestimate may be accepted if the actual message still fits the server's fixed maximum. | `TestRFC1870DataOctets` |
+| SIZE-REPLY-01 | 4, 6.1, 7 | Normative | Refuse a declaration above the fixed maximum with 552 before DATA; equality is accepted. | `TestRFC1870Declarations` |
+| SIZE-REPLY-02 | 6.4 | MAY | A backend may refuse individual recipients with temporary 452 or permanent 552 without discarding other accepted recipients. | `TestRFC1870Example` |
+| SIZE-REPLY-03 | 6.1 | MAY | Temporary storage shortage may be refused with 452 at MAIL time. | n/a: backend storage policy; Session.Mail can return SMTPError 452. The library has no storage allocator. |
+| SIZE-REPLY-04 | 6.3 | SHOULD NOT | After accepting an estimate, do not issue a size-based 552 for content no larger than that estimate. | `TestRFC1870DataOctets` |
+| SIZE-CLIENT-03 | 6.2, 6.4 | Normative | Preserve temporary and permanent errors from MAIL, RCPT, DATA and the final content response for host policy. | `TestRFC1870ClientFailures` |
+| SIZE-POLICY-01 | 6.2 | SHOULD | After MAIL 452, reset or quit and retry later. | n/a: host queue and retry policy; the client returns SMTPError and exposes Reset/Quit. |
+| SIZE-POLICY-02 | 6.2 | SHOULD | After MAIL 552, reset or quit and notify the sender of permanent failure. | n/a: host notification policy; no queue or delivery notification generator in this library. |
+| SIZE-POLICY-03 | 6.4 | Normative | Recipient 452 may be retried; recipient 552 must not be requeued for that recipient. | n/a: host queue policy; the API returns each RCPT error to its caller. |
+| SIZE-POLICY-04 | 7 | Normative | Before accepting a declaration with bare SIZE, check resources and if possible reserve storage. | n/a: server advertises SIZE 0 or a numeric fixed limit, never bare SIZE; actual storage reservations belong to the backend. |
+| SIZE-EXAMPLE-01 | 8 | Normative | The example's 500000-octet estimate, successful recipient, permanent/temporary recipient refusals and successful DATA exchange are exercised. | `TestRFC1870Example` |
+
+The size-counting tests also verify the §6.3 recommendation through the fixed
+limit path. A backend can still choose its own status code, including 552;
+it must apply that recommendation when rejecting for storage/size reasons.
+
+
+## PIPELINING (RFC 2920)
+
+Sections in this table are RFC 2920. The server and the three-command client
+pipeline are audited separately. An n/a gap below is not a conformance claim.
+The client API deliberately sends DATA synchronously after `Wait`; callers must
+check every result, and if every RCPT failed but DATA is accepted, close the
+unwritten data writer, check its result and reset the transaction. The library
+does not automatically choose that recovery or the host's retry policy.
+
+| ID | Section | Level | Requirement | Tests |
+|----|---------|-------|-------------|-------|
+| PIPE-EHLO-01 | 2, 3 | Normative | Advertise PIPELINING as a parameterless EHLO keyword; no new verbs or MAIL/RCPT parameters are introduced. | `TestRFC2920Examples` |
+| PIPE-EHLO-02 | 3 | Normative | Confirm successful EHLO and the PIPELINING keyword before using the extension. | `TestPipeline_NotSupported` |
+| PIPE-CLIENT-01 | 3, 3.1 | Normative | The client sends a pipelined group only after discovering server support. | `TestPipeline_NotSupported`, `TestRFC2920ClientResponseCorrelation` |
+| PIPE-CLIENT-02 | 3.1 | MUST | Check every command status, including statuses after an earlier rejection. | `TestPipeline_NoRoundTripDeadlock`, `TestRFC2920ClientResponseCorrelation` |
+| PIPE-CLIENT-03 | 3.1 | MUST | Correlate statuses by command/response count, never by code value or response text, and support multiline responses. | `TestRFC2920ClientResponseCorrelation` |
+| PIPE-CLIENT-04 | 3.1 | MUST NOT | Do not confuse a multiline response with responses to multiple commands. | `TestRFC2920ClientResponseCorrelation` |
+| PIPE-CLIENT-05 | 3.1 | Normative | Check DATA even when every RCPT failed; if DATA is accepted, recovery sends only a dot and checks the final response. | `TestRFC2920EmptyDataRecovery`, `TestRFC2920EmptyDataWriter` |
+| PIPE-CLIENT-06 | 3.1 | Normative | Only permitted commands occur inside a group; EHLO, DATA, VRFY, EXPN, TURN, QUIT and NOOP end a group. | `TestPipeline_Integration` |
+| PIPE-CLIENT-07 | 3.1 | MUST | A blocking client checks the actual TCP window and keeps each group within it, or processes replies while writing. | n/a: not supported yet; Pipeliner assumes a fixed 4096-byte window, does not discover the actual window and does not read concurrently. Existing congestion tests prove only that configured window, not arbitrary transports or oversized single commands. Tracked by rest-mail/rest-mail-server#374. |
+| PIPE-CLIENT-08 | 3.1 | Normative | Additional extension commands end a group unless their defining extension allows otherwise. | n/a: the client pipeline API exposes only RSET, MAIL and RCPT. Other commands use synchronous Client methods after Wait; extensions without client methods cannot be queued. |
+| PIPE-SERVER-01 | 3.2(1) | MUST | Respond to commands in received order. | `TestRFC2920SynchronizationFlush`, `TestRFC2920Examples`, `TestPipelinedRepliesShareOneWrite` |
+| PIPE-SERVER-02 | 3.2(2) | SHOULD | Buffer responses to grouped transaction commands for transmission together. | `TestPipelinedRepliesShareOneWrite` |
+| PIPE-SERVER-03 | 3.2(3) | SHOULD | Accept DATA if and only if at least one RCPT was accepted, even when the last RCPT failed. | `TestRFC2920Examples` |
+| PIPE-SERVER-04 | 3.2(4) | MUST NOT | Deliver nothing if an empty DATA transaction has no valid recipients. | `TestRFC2920Examples` |
+| PIPE-SERVER-05 | 3.2(5) | MUST NOT | Do not buffer responses to EHLO, DATA, VRFY, EXPN, TURN, QUIT or NOOP behind later commands. | `TestRFC2920SynchronizationFlush`, `TestDataReplySentBeforeBody`, `TestQuitReplySentBeforeClose` |
+| PIPE-SERVER-06 | 3.2(6) | MUST NOT | Do not buffer responses to unrecognized commands. | `TestRFC2920SynchronizationFlush` |
+| PIPE-SERVER-07 | 3.2(7) | MUST | Send pending replies when local input is exhausted; a partial next line must not hold replies. | `TestSingleCommandReplyIsPrompt`, `TestPartialPipelinedLineDoesNotHoldReplies` |
+| PIPE-SERVER-08 | 3.2(8) | MUST NOT | Do not assume future commands will arrive before responding to received commands. | `TestRFC2920Examples`, `TestSingleCommandReplyIsPrompt` |
+| PIPE-SERVER-09 | 3.2(9) | MUST NOT | Do not discard buffered input when a command fails; preserve later commands and body bytes. | `TestRFC2920SynchronizationFlush`, `TestRFC2920Examples` |
+| PIPE-SERVER-10 | 3.2(10) | SHOULD | Default response text identifies its command implicitly or explicitly. | `TestRFC2920ReplyText` |
+| PIPE-POLICY-01 | 3.2(10) | SHOULD | Custom backend reply text should identify the command it answers. | n/a: host responsibility; custom SMTPError diagnostics are supplied by backend code and cannot be semantically classified by the library. |
+| PIPE-EXAMPLE-01 | 4 | Normative | Exercise the RFC's successful multi-recipient and all-recipients-refused dialogues, including content followed by QUIT in one group. | `TestRFC2920Examples` |
+
+The all-recipients-refused example uses RFC 5321's 503 sequencing response in
+place of RFC 2920's illustrative 554. The server always refuses DATA without
+recipients, so the conditional path of §3.2(4) cannot reach backend delivery.
+`TestRFC2920EmptyDataRecovery` separately exercises the client against a peer
+that incorrectly accepts that DATA command. SEND/SOML/SAML, EXPN and TURN are
+not implemented; their refusal remains explicit (SMTP-CMD-07).

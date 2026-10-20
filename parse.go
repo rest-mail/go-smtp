@@ -64,8 +64,11 @@ func parseCmd(line string) (cmd string, arg string, err error) {
 	l := len(line)
 	switch {
 	case strings.EqualFold(line, "STARTTLS") || strings.HasPrefix(strings.ToUpper(line), "STARTTLS "):
-		// STARTTLS takes no arguments; require an exact match (or a
-		// space-separated form) so e.g. "STARTTLSx" is not dispatched as STARTTLS.
+		// Preserve parameters so the handler can reject them with 501
+		// (RFC 3207 §4), rather than silently starting a TLS handshake.
+		if i := strings.IndexByte(line, ' '); i >= 0 {
+			return "STARTTLS", trimWSP(line[i+1:]), nil
+		}
 		return "STARTTLS", "", nil
 	case strings.EqualFold(line, "XCLIENT") || strings.HasPrefix(strings.ToUpper(line), "XCLIENT "):
 		// XCLIENT is a 7-letter verb (not the 4-letter form the logic below
@@ -368,4 +371,18 @@ func (p *parser) parseLocalPart() (string, error) {
 			sb.WriteByte(ch)
 		}
 	}
+}
+
+// isDecimal reports whether s contains one or more ASCII decimal digits.
+// strconv's integer parsers alone also accept a leading sign.
+func isDecimal(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
 }

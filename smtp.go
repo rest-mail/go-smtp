@@ -44,7 +44,10 @@ type MailOptions struct {
 	// Value of BODY= argument, 7BIT, 8BITMIME or BINARYMIME.
 	Body BodyType
 
-	// Size of the body. Can be 0 if not specified by client.
+	// Estimated message size in octets, including headers and CRLF pairs,
+	// excluding SMTP transparency dots and the DATA terminator (RFC 1870).
+	// Must be non-negative. Zero makes the client omit the SIZE parameter;
+	// on the server it can mean either SIZE=0 or no declaration.
 	Size int64
 
 	// TLS is required for the message transmission.

@@ -36,10 +36,11 @@ An ESMTP client and server library written in Go.
 ## The RFC checklist
 
 [CHECKLIST.md](CHECKLIST.md) lists the requirements of RFC 5321 (the SMTP
-server and client core) item by item, plus individual AUTH exchange requirements
-from RFC 4954 §4. Other extensions retain summary rows.
-A small program, [`internal/checklist`](internal/checklist/main.go), checks it
-against the tests in CI. It is the same program as
+server and client core), RFC 3207 (STARTTLS), RFC 1870 (SIZE) and
+RFC 2920 (PIPELINING) item by item, plus individual AUTH exchange requirements
+from RFC 4954 §4. Other extensions retain summary rows. A small program,
+[`internal/checklist`](internal/checklist/main.go), checks it against the tests
+in CI. It is the same program as
 [go-spf](https://github.com/rest-mail/go-spf)'s and the other `go-*`
 libraries', without package `slices`, since this module still declares go 1.13.
 
@@ -50,7 +51,7 @@ exactly:
 | ID | Section | Level | Requirement | Tests |
 |----|---------|-------|-------------|-------|
 | SMTP-RSET-01 | 4.1.1.5 | MUST | RSET clears the sender, the recipients and the data. | `TestRFC5321_RsetAndSecondEhloClearTransaction` |
-| SMTP-LIM-06 | 4.5.3.1.5 | MUST | A reply line is at most 512 octets, CRLF included. | n/a: a gap, not asserted yet. |
+| SMTP-LIM-06 | 4.5.3.1.5 | MUST | A reply line is at most 512 octets, CRLF included (SASL challenges excepted). | `TestRFC5321_ReplyLine512`, `TestRFC5321_MultilineReplyLine512`, `TestRFC5321_BackendReplyLine512`, `TestRFC4954_LongChallengeNotTruncated` |
 ```
 
 Each test names the items it covers in its doc comment:
@@ -64,6 +65,39 @@ func TestRFC5321_RsetAndSecondEhloClearTransaction(t *testing.T) {
 an ID is used twice, an item names no test and is not `n/a`, an item and a test
 disagree about each other, or a `Test` or `Fuzz` function names no item.
 Coverage is in [COVERAGE.md](COVERAGE.md).
+
+The server limits each ordinary reply line to 512 octets, including its reply
+code, enhanced status (if present), and CRLF. Overlong text is truncated at a
+UTF-8 character boundary; the status and existing multiline framing are kept.
+Backends can use newline-separated text to supply longer diagnostics across
+multiple lines. This also bounds greetings and backend-supplied EHLO lines;
+keep domain names, capabilities and other protocol tokens within the budget.
+SASL `334` challenges are sent intact because RFC 4954 §4 makes their size
+independent of ordinary SMTP line limits.
+
+SIZE declarations are whole-message octet estimates (headers and CRLF included,
+SMTP transparency dots and the DATA terminator excluded). The server accepts
+1–20 decimal digits, passes estimates up to `int64` to the backend, and answers
+552 for declarations above its configured limit or representable range. The
+unlimited configuration advertises `SIZE 0`. The declared size never delimits
+DATA; actual content is bounded by `MaxMessageBytes`. A client omits SIZE when
+`MailOptions.Size` is zero and rejects negative estimates. Storage reservation,
+recipient limits, retry queues and delivery notifications remain host policy;
+see the RFC 1870 checklist's explicit policy rows.
+
+PIPELINING replies retain command order. Only transaction-command replies
+(RSET/MAIL/RCPT) are held for batching; synchronization and unknown-command
+replies flush before later commands are processed. The client exposes those
+three queue operations and returns every status from `Wait`; DATA is sent
+synchronously afterwards. Inspect every result before sending message content.
+If every recipient failed but a peer nevertheless accepts DATA, close the
+unwritten writer to send only `.\r\n`, check the final response, and reset.
+An empty DATA writer now sends that terminator without an extra blank line.
+
+The client still assumes a 4096-byte transport window instead of checking the
+actual TCP window or reading responses concurrently. Its congestion tests prove
+that assumed window only; smaller windows and oversized individual commands
+remain a conformance gap (PIPE-CLIENT-07), bounded by `CommandTimeout`.
 
 ## Relationship with net/smtp
 

@@ -38,7 +38,7 @@ jobs:
           total=$(go tool cover -func=coverage.out | awk '/^total:/ { sub(/%/, "", $3); print $3 }')
           echo "Statement coverage: ${total}% (floor ${FLOOR}%)"
           awk -v t="$total" -v f="$FLOOR" 'BEGIN { exit !(t + 0 >= f + 0) }'
-      - name: SMTP RFC checklist
+      - name: RFC checklist
         run: go run ./internal/checklist -file CHECKLIST.md .
       - name: fuzz parsers (10 seconds each)
         env:
@@ -47,6 +47,7 @@ jobs:
           go test -run='^$' -fuzz='^FuzzDecodeSASLResponse$' -fuzztime=10s -parallel=1 .
           go test -run='^$' -fuzz='^FuzzParseCmd$' -fuzztime=10s -parallel=1 .
           go test -run='^$' -fuzz='^FuzzParseArgs$' -fuzztime=10s -parallel=1 .
+          go test -run='^$' -fuzz='^FuzzRFC1870SizeValues$' -fuzztime=10s -parallel=1 .
           go test -run='^$' -fuzz='^FuzzParseDeliverByArgument$' -fuzztime=10s -parallel=1 .
           go test -run='^$' -fuzz='^FuzzParseReversePath$' -fuzztime=10s -parallel=1 .
           go test -run='^$' -fuzz='^FuzzParseForwardPath$' -fuzztime=10s -parallel=1 .
