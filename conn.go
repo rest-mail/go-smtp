@@ -177,6 +177,10 @@ func (c *Conn) handle(cmd string, arg string) {
 	case "AUTH":
 		c.handleAuth(arg)
 	case "STARTTLS":
+		if arg != "" {
+			c.writeResponse(501, EnhancedCode{5, 5, 4}, "STARTTLS does not accept parameters")
+			return
+		}
 		c.handleStartTLS()
 	case "XCLIENT":
 		c.handleXClient(arg)
@@ -1332,6 +1336,8 @@ func (c *Conn) handleStartTLS() {
 	}
 	c.helo = ""
 	c.didAuth = false
+	// Proxy assertions are SMTP knowledge obtained before TLS, too.
+	c.xclient = nil
 	c.reset()
 }
 

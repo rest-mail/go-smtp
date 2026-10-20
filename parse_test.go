@@ -188,7 +188,7 @@ func TestParseCmdASCII(t *testing.T) {
 	}
 	for _, tc := range []struct{ line, cmd, arg string }{
 		{"sTaRtTlS\r\n", "STARTTLS", ""},
-		{"starttls ignored", "STARTTLS", ""},
+		{"starttls ignored", "STARTTLS", "ignored"},
 		{"eHlO café.example\r\n", "EHLO", "café.example"},
 		{"mAiL FROM:<élisa@example.org> SMTPUTF8", "MAIL", "FROM:<élisa@example.org> SMTPUTF8"},
 		{"xClIeNt NAME=café ADDR=127.0.0.1", "XCLIENT", "NAME=café ADDR=127.0.0.1"},

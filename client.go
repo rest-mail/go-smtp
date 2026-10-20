@@ -117,7 +117,8 @@ func NewClient(conn net.Conn) *Client {
 	return c
 }
 
-// NewClientStartTLS creates a new Client and performs a STARTTLS command.
+// NewClientStartTLS creates a new Client and negotiates STARTTLS. It returns
+// success only after the TLS handshake and certificate verification complete.
 func NewClientStartTLS(conn net.Conn, tlsConfig *tls.Config) (*Client, error) {
 	c := NewClient(conn)
 	if err := initStartTLS(c, tlsConfig); err != nil {
@@ -313,6 +314,9 @@ func (c *Client) ehlo() error {
 //
 // If server returns an error, it will be of type *SMTPError.
 func (c *Client) startTLS(config *tls.Config) error {
+	if _, ok := c.TLSConnectionState(); ok {
+		return errors.New("smtp: TLS is already active")
+	}
 	if err := c.hello(); err != nil {
 		return err
 	}
@@ -331,8 +335,23 @@ func (c *Client) startTLS(config *tls.Config) error {
 	if testHookStartTLS != nil {
 		testHookStartTLS(config)
 	}
-	c.setConn(tls.Client(c.conn, config))
+	tc := tls.Client(c.conn, config)
+	// STARTTLS must not report success before certificate verification and
+	// the handshake finish. Bound the negotiation like a command exchange.
+	if c.CommandTimeout > 0 {
+		tc.SetDeadline(time.Now().Add(c.CommandTimeout))
+	}
+	if err := tc.Handshake(); err != nil {
+		c.Close()
+		return err
+	}
+	tc.SetDeadline(time.Time{})
+	c.setConn(tc)
+	// RFC 3207 §4.2: no pre-TLS SMTP knowledge survives the upgrade.
+	c.ext = nil
+	c.rcpts = nil
 	c.didHello = false
+	c.helloError = nil
 	return nil
 }
 

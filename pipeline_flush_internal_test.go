@@ -250,6 +250,7 @@ func TestAuthChallengeSentBeforeReadingResponse(t *testing.T) {
 }
 
 // checklist: SMTP-EXT-07
+// checklist: TLS-REPLY-01
 func TestStartTLSReplySentBeforeHandshake(t *testing.T) {
 	cert, err := tls.X509KeyPair(localhostCert, localhostKey)
 	if err != nil {

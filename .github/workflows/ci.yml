@@ -38,7 +38,7 @@ jobs:
           total=$(go tool cover -func=coverage.out | awk '/^total:/ { sub(/%/, "", $3); print $3 }')
           echo "Statement coverage: ${total}% (floor ${FLOOR}%)"
           awk -v t="$total" -v f="$FLOOR" 'BEGIN { exit !(t + 0 >= f + 0) }'
-      - name: RFC 5321 checklist
+      - name: RFC checklist
         run: go run ./internal/checklist -file CHECKLIST.md .
       - name: fuzz parsers (10 seconds each)
         env:

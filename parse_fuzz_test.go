@@ -79,7 +79,7 @@ func FuzzParseCmd(f *testing.F) {
 			t.Fatalf("wire verb %q synthesized command %q", verb, cmd)
 		}
 		wantArg := ""
-		if hasArgs && cmd != "STARTTLS" {
+		if hasArgs {
 			wantArg = wireTrim(rest)
 		}
 		if arg != wantArg {
