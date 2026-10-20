@@ -305,6 +305,15 @@ func (s *Server) handleConn(c *Conn) error {
 				c.handle(cmd, arg)
 			}
 
+			// RFC 2920 §3.2: only the transaction commands may keep their
+			// replies buffered. Synchronization points and unknown/malformed
+			// commands must flush even if more complete input is available.
+			switch cmd {
+			case "RSET", "MAIL", "RCPT":
+			default:
+				c.flush()
+			}
+
 			// A command that raised no new protocol error resets the run, so the
 			// connection is dropped only for a sustained burst of errors rather
 			// than the Nth error across an otherwise healthy session.

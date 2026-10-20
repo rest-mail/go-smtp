@@ -32,6 +32,7 @@ func mustReadLine(t *testing.T, r *bufio.Reader) string {
 // group, then reads the replies.
 //
 // checklist: SMTP-EXT-01
+// checklist: PIPE-CLIENT-02
 func TestPipeline_NoRoundTripDeadlock(t *testing.T) {
 	cconn, sconn := net.Pipe()
 	defer cconn.Close()
@@ -104,6 +105,7 @@ func TestPipeline_NoRoundTripDeadlock(t *testing.T) {
 // recipients — exercising the recipient tracking that Wait performs.
 //
 // checklist: SMTP-EXT-01
+// checklist: PIPE-CLIENT-06
 func TestPipeline_Integration(t *testing.T) {
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -236,6 +238,7 @@ func TestPipeline_Reset(t *testing.T) {
 // advertise PIPELINING, so callers can fall back to the synchronous API.
 //
 // checklist: SMTP-EXT-01
+// checklist: PIPE-EHLO-02 PIPE-CLIENT-01
 func TestPipeline_NotSupported(t *testing.T) {
 	cconn, sconn := net.Pipe()
 	defer cconn.Close()

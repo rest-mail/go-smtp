@@ -31,8 +31,24 @@ The new tests cover byte boundaries with and without enhanced statuses,
 multiline replies, complete UTF-8 characters, backend transaction state and
 the RFC 4954 exception for SASL challenges. The CI floor remains 85%.
 
-After the RFC 6152 8BITMIME audit, local Go 1.27.1 (linux/arm64, no race
-detector) reports **91.3%** combined (library **90.8%**, checker **99.3%**).
+After the RFC 1870 SIZE audit, the same local Go 1.27.1 run reports
+**91.4%** combined (library **90.9%**, checker **99.3%**). Tests cover
+20-digit syntax and integer overflow, backend estimates above 4 GiB, explicit
+unlimited advertisement, dot transparency and CRLF byte counting, the RFC's
+recipient-error example, and client errors at every transfer stage. The new
+numeric-limit fuzz target uses an arbitrary-precision reference and runs for
+10 seconds in CI. The CI floor remains 85%; this is still below the target.
+
+After the RFC 2920 PIPELINING audit, the same local Go 1.27.1 run reports
+**91.5%** combined (library **91.0%**, checker **99.3%**). Tests cover reply
+flush boundaries with later commands already buffered, positional and multiline
+response matching after failures, the RFC's recipient examples, and empty DATA
+recovery with exactly the dot terminator. The TCP window is still assumed, not
+discovered; PIPE-CLIENT-07 records that conformance gap. No parser was added or
+changed by this audit; existing parser fuzz targets and the 85% CI floor remain.
+
+After the RFC 6152 8BITMIME audit, the same local Go 1.27.1 run reports
+**91.6%** combined (library **91.1%**, checker **99.3%**).
 The added tests cover explicit client body choices and refusal paths,
 all high-bit octets through DATA, the RFC envelope/example sequence,
 duplicate/invalid BODY parameters, dot transparency and 1000-octet lines.

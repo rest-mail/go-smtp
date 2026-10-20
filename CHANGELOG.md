@@ -11,6 +11,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - RFC 6152 8BITMIME checklist with the RFC envelope/command example, all high-bit
   octets, 1000-octet lines, dot transparency and explicit host/gap rows. A DATA
   fuzz target compares byte preservation with Go's textproto transparency reader.
+
+- Clause-by-clause RFC 2920 PIPELINING checklist, its successful and failed
+  recipient examples, multiline/positional client reply tests and explicit
+  documentation of the client's fixed 4096-byte window limitation.
+
+- Checked RFC 1870 SIZE requirements and its multi-recipient example, with
+  boundary, message-octet counting and client error-propagation tests. A numeric
+  limit fuzz target uses an arbitrary-precision reference and runs in CI.
+
 - Clause-by-clause RFC 3207 STARTTLS checklist, with tests for the usage example,
   TLS state, session replacement, plaintext local delivery, temporary refusal,
   certificate verification and a stalled client handshake. Host policy and
@@ -25,6 +34,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   Empty/default options retain automatic 8BITMIME selection. Callers remain
   responsible for providing content matching the transport; no MIME conversion
   or content validation is added.
+
+- Server synchronization and unknown/malformed-command replies now flush before
+  later buffered commands are processed, as required by RFC 2920. RSET, MAIL
+  and RCPT replies can still share a batch.
+- An unwritten DATA writer now sends only the dot terminator, without the
+  extra blank line textproto.DotWriter normally adds. This permits RFC 2920's
+  recovery when a peer accepts DATA despite refusing every recipient. Writes
+  after DATA close return an error.
+
+- SIZE declarations now accept 1–20 decimal digits through the signed 64-bit
+  API range instead of stopping at 4 GiB. Syntactically valid larger values
+  receive 552 rather than a syntax error; signs and overlong values receive
+  501. Unlimited servers advertise `SIZE 0`, explicitly conveying no fixed
+  configured maximum instead of promising resource checks through bare SIZE.
+- Clients reject negative message-size estimates and malformed signed EHLO
+  SIZE limits. MailOptions.Size documentation now includes headers and CRLF.
+
 - Ordinary server reply lines now fit RFC 5321's 512-octet limit, counting
   status codes and CRLF. Overlong backend diagnostics, greetings and EHLO lines
   are truncated at UTF-8 character boundaries while keeping the status and

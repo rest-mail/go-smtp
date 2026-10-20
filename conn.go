@@ -466,7 +466,9 @@ func (c *Conn) handleGreet(enhanced bool, arg string) {
 	if c.server.MaxMessageBytes > 0 {
 		caps = append(caps, fmt.Sprintf("SIZE %v", c.server.MaxMessageBytes))
 	} else {
-		caps = append(caps, "SIZE")
+		// RFC 1870 §3: zero explicitly means no fixed limit. A bare SIZE
+		// instead promises resource checks before accepting a declaration (§7).
+		caps = append(caps, "SIZE 0")
 	}
 	if c.server.MaxRecipients > 0 {
 		caps = append(caps, fmt.Sprintf("LIMITS RCPTMAX=%v", c.server.MaxRecipients))
@@ -555,18 +557,20 @@ func (c *Conn) handleMail(arg string) {
 	for key, value := range args {
 		switch key {
 		case "SIZE":
-			size, err := strconv.ParseUint(value, 10, 32)
-			if err != nil {
-				c.writeResponse(501, EnhancedCode{5, 5, 4}, "Unable to parse SIZE as an integer")
+			if len(value) > 20 || !isDecimal(value) {
+				c.writeResponse(501, EnhancedCode{5, 5, 4}, "SIZE must contain 1 to 20 decimal digits")
 				return
 			}
 
-			if c.server.MaxMessageBytes > 0 && int64(size) > c.server.MaxMessageBytes {
+			// Valid 20-digit values can exceed int64. They are too large for
+			// this implementation, not malformed SIZE syntax (RFC 1870 §6.1).
+			size, err := strconv.ParseInt(value, 10, 64)
+			if err != nil || (c.server.MaxMessageBytes > 0 && size > c.server.MaxMessageBytes) {
 				c.writeResponse(552, EnhancedCode{5, 3, 4}, "Max message size exceeded")
 				return
 			}
 
-			opts.Size = int64(size)
+			opts.Size = size
 		case "SMTPUTF8":
 			if !c.server.EnableSMTPUTF8 {
 				c.writeResponse(504, EnhancedCode{5, 5, 4}, "SMTPUTF8 is not implemented")
