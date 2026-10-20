@@ -2066,7 +2066,7 @@ func TestServerMTPRIORITY(t *testing.T) {
 	for _, msg := range malformedMsgs {
 		io.WriteString(c, msg+"\r\n")
 		scanner.Scan()
-		if !strings.HasPrefix(scanner.Text(), "501 5.5.4") {
+		if !strings.HasPrefix(scanner.Text(), "501 5.5.2") {
 			t.Fatal("Unexpected res on malformed MT-PRIORITY parameter value:", scanner.Text())
 		}
 	}

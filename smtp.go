@@ -87,7 +87,11 @@ type MailOptions struct {
 	// Value of the MT-PRIORITY= argument, or nil if unset. Ranges from -9 to 9.
 	//
 	// Defined in RFC 6710, which places it on MAIL: the priority describes the
-	// message, not an individual recipient.
+	// message, not an individual recipient. The server preserves the exact
+	// requested value; authorization, policy rounding and a nil default of 0
+	// are the backend's responsibility. Client.Mail refuses an explicit value
+	// when the peer does not advertise MT-PRIORITY; a relay must choose its
+	// fallback policy and omit this option for a non-supporting next hop.
 	MTPriority *int
 }
 

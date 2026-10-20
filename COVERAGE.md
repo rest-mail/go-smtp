@@ -1,14 +1,10 @@
 # Coverage
 
-The RFC 2852 DELIVERBY audit adds minimum, case, state and grammar-oracle
-regressions. Its focused tests and vet pass locally. A new coverage measurement,
-full suite, race and timed fuzz run are deferred to CI because the Pi load was
-above 6; the figures below describe the preceding audit, not this change.
-
-After the RFC 7293 RRVS audit, statement coverage of the library package
-and `internal/checklist` is **94.2%** combined (library **93.9%**,
-checker **99.3%**), measured locally
-on Go 1.27.1 linux/arm64 without the race detector. The local command was:
+After the RFC 6710 MT-PRIORITY transport audit, statement coverage of the
+library package and `internal/checklist` is **94.3%** combined (library
+**94.0%**, checker **99.3%**), measured locally on Go 1.27.1 linux/arm64
+without the race detector. This includes the preceding RFC 2852 DELIVERBY
+audit. The local command was:
 
 ```
 go test -count=1 -coverprofile=coverage.out . ./internal/...
@@ -24,7 +20,8 @@ go tool cover -func=coverage.out
 
 `cmd/smtp-debug-server`, a demo program, is left out of the figure because
 the package list does not name it. The 85% CI floor is unchanged; the merged
-suite's CI figure is pending. These local figures do not claim the 95% target.
+suite's CI figure may differ by Go version. These local figures do not claim
+the 95% target.
 
 Earlier CI runs reported 87.2% combined (library 86.2%, checker 99.3%) on
 Go 1.27.2 before the 503 tests of #87 landed. Local and CI statement counts
@@ -99,6 +96,15 @@ normalizes backend flags, and refuses non-ASCII look-alikes; its fuzz target
 uses an independent ASCII grammar. No notification generator or queue is
 covered or supplied by this transport. Host responsibilities and unsupported
 address types remain explicit in the checklist; the 85% CI floor is unchanged.
+
+The RFC 6710 audit covers all 19 transport values, malformed spellings,
+SMTP/LMTP advertisements, default command-length allowance, client fallback,
+transaction isolation after reset/EHLO/DATA, backend policy replies and section
+8's submission/relay MAIL envelopes. The new priority parser is 100% covered;
+its fuzzer checks acceptance against the ABNF grammar and values against an
+independent integer conversion. Positive-priority authorization, scheduling,
+policy rounding, trace/log fields and relay/DSN metadata are host work, not
+claimed as library conformance. The 85% gate remains below the 95% target.
 
 ## Left uncovered on purpose
 

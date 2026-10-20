@@ -675,13 +675,9 @@ func (c *Conn) handleMail(arg string) {
 				c.writeResponse(504, EnhancedCode{5, 5, 4}, "MT-PRIORITY is not implemented")
 				return
 			}
-			mtPriority, err := strconv.Atoi(value)
+			mtPriority, err := parseMTPriority(value)
 			if err != nil {
-				c.writeResponse(501, EnhancedCode{5, 5, 4}, "Malformed MT-PRIORITY parameter value")
-				return
-			}
-			if mtPriority < -9 || mtPriority > 9 {
-				c.writeResponse(501, EnhancedCode{5, 5, 4}, "MT-PRIORITY is outside valid range")
+				c.writeResponse(501, EnhancedCode{5, 5, 2}, "Malformed MT-PRIORITY parameter value")
 				return
 			}
 			opts.MTPriority = &mtPriority
