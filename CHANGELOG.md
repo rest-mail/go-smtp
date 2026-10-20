@@ -46,6 +46,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- Empty assignments such as `SMTPUTF8=` now receive 501 5.5.4, just like
+  non-empty values. ESMTP parsing preserves the equals sign so the server can
+  distinguish a bare flag from an empty assignment (RFC 6531 §3.1 item 4).
+  Rejected parameters never reach the backend or start a mail transaction.
+
 - The server refuses a non-ASCII reverse-path (550 5.6.7) or forward-path
   (553 5.6.7) unless the MAIL carried SMTPUTF8, refuses addresses that are not
   valid UTF-8 (501 5.5.2), and refuses a value on SMTPUTF8 (501 5.5.4). The

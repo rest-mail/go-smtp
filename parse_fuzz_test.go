@@ -102,6 +102,7 @@ func FuzzParseArgs(f *testing.F) {
 	for _, seed := range []string{
 		"", " ", " BODY=8BITMIME SIZE=1024 SMTPUTF8", " SIZE=1 size=2",
 		" SMTPUTF8 smtputf8", " AUTH=a=b== AuTh=x", " X=a=b== EMPTY= FLAG",
+		" SMTPUTF8=", " smtputf8=\tSIZE=0", " SMTPUTF8==",
 		" AUTH=élisa=a==", " X=\xff", "=", " X=1\tY=2\r\n", " X=1\x00",
 		// CI found strings.Fields splitting a value at U+0085 NEL.
 		"0000000000000000000000000000000000000000000000000\u0085",
@@ -129,8 +130,8 @@ func FuzzParseArgs(f *testing.F) {
 				if end < len(field) {
 					value = field[end+1:]
 				}
-				if got, ok := args[key]; !ok || got != value {
-					t.Fatalf("field %q lost key/value bytes: %v", field, args)
+				if got, ok := args[key]; !ok || got.value != value || got.hasValue != (end < len(field)) {
+					t.Fatalf("field %q lost key/value bytes or assignment marker: %v", field, args)
 				}
 			}
 		}
@@ -145,7 +146,7 @@ func FuzzParseArgs(f *testing.F) {
 		// changing the ASCII casing of the key must still count as a repeat.
 		value := strings.Join(wireFields(input), "")
 		one, oneErr := parseArgs(" AuTh=" + value)
-		if oneErr != nil || one["AUTH"] != value {
+		if oneErr != nil || one["AUTH"] != (esmtpArg{value: value, hasValue: true}) {
 			t.Fatalf("AUTH value changed: %q => (%v, %v)", value, one, oneErr)
 		}
 		if _, dupErr := parseArgs(" AuTh=" + value + " aUtH=x"); dupErr == nil {

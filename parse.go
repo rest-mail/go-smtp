@@ -98,20 +98,27 @@ func parseCmd(line string) (cmd string, arg string, err error) {
 	return strings.ToUpper(line[0:4]), trimWSP(line[5:]), nil
 }
 
-// Takes the arguments proceeding a command and files them
-// into a map[string]string after uppercasing each key.  Sample arg
-// string:
+// esmtpArg preserves whether a parameter has an equals sign, including when
+// its value is empty. Flag parameters such as SMTPUTF8 must reject both
+// non-empty and empty assignments.
+type esmtpArg struct {
+	value    string
+	hasValue bool
+}
+
+// parseArgs takes the arguments following a command and uppercases each key.
+// Sample argument string:
 //
 //	" BODY=8BITMIME SIZE=1024 SMTPUTF8"
 //
 // The leading space is mandatory. Parameters are separated by SP or HTAB
 // only (see isWSP).
-func parseArgs(s string) (map[string]string, error) {
-	argMap := map[string]string{}
+func parseArgs(s string) (map[string]esmtpArg, error) {
+	argMap := map[string]esmtpArg{}
 	for _, arg := range splitWSP(s) {
 		// Split on the first '=' only: a parameter value may itself contain
 		// '=' (e.g. base64-ish or AUTH values).
-		key, value, _ := strings.Cut(arg, "=")
+		key, value, hasValue := strings.Cut(arg, "=")
 		key = strings.ToUpper(key)
 		// RFC 5321 §4.1.1.11: an esmtp-keyword must not appear more than once in
 		// a single command. Reject a repeat rather than silently collapsing it in
@@ -119,7 +126,7 @@ func parseArgs(s string) (map[string]string, error) {
 		if _, dup := argMap[key]; dup {
 			return nil, fmt.Errorf("duplicate ESMTP parameter %q", key)
 		}
-		argMap[key] = value
+		argMap[key] = esmtpArg{value: value, hasValue: hasValue}
 	}
 	return argMap, nil
 }

@@ -150,14 +150,14 @@ func TestParseArgsEqualsInValue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parseArgs returned error: %v", err)
 	}
-	if got := args["X"]; got != "a=b" {
-		t.Errorf("args[X] = %q, want %q", got, "a=b")
+	if got := args["X"]; got != (esmtpArg{value: "a=b", hasValue: true}) {
+		t.Errorf("args[X] = %+v, want value a=b with an assignment", got)
 	}
-	if got := args["SIMPLE"]; got != "1" {
-		t.Errorf("args[SIMPLE] = %q, want %q", got, "1")
+	if got := args["SIMPLE"]; got != (esmtpArg{value: "1", hasValue: true}) {
+		t.Errorf("args[SIMPLE] = %+v, want value 1 with an assignment", got)
 	}
-	if got, ok := args["FLAG"]; !ok || got != "" {
-		t.Errorf("args[FLAG] = %q (present=%v), want empty and present", got, ok)
+	if got, ok := args["FLAG"]; !ok || got != (esmtpArg{}) {
+		t.Errorf("args[FLAG] = %+v (present=%v), want bare flag and present", got, ok)
 	}
 }
 
@@ -210,7 +210,7 @@ func TestParseArgsBoundaries(t *testing.T) {
 		}
 	}
 	args, err := parseArgs(" auth=élisa=a== EMPTY= FLAG x==")
-	want := map[string]string{"AUTH": "élisa=a==", "EMPTY": "", "FLAG": "", "X": "="}
+	want := map[string]esmtpArg{"AUTH": {"élisa=a==", true}, "EMPTY": {"", true}, "FLAG": {}, "X": {"=", true}}
 	if err != nil || !reflect.DeepEqual(args, want) {
 		t.Fatalf("parseArgs = (%v, %v), want (%v, nil)", args, err, want)
 	}
@@ -261,18 +261,18 @@ func TestParseArgsUnicodeSpaceInValue(t *testing.T) {
 	nel := "0000000000000000000000000000000000000000000000000\u0085"
 	for _, tc := range []struct {
 		input string
-		want  map[string]string
+		want  map[string]esmtpArg
 	}{
-		{" AUTH=" + nel, map[string]string{"AUTH": nel}},
-		{" AUTH=a\u0085b", map[string]string{"AUTH": "a\u0085b"}},
-		{" X=a b Y= ", map[string]string{"X": "a b", "Y": " "}},
-		{" X=1 Y=2", map[string]string{"X": "1 Y=2"}},
-		{" X=1\tY=2", map[string]string{"X": "1", "Y": "2"}},
-		{"  X=1", map[string]string{" X": "1"}},
+		{" AUTH=" + nel, map[string]esmtpArg{"AUTH": {nel, true}}},
+		{" AUTH=a\u0085b", map[string]esmtpArg{"AUTH": {"a\u0085b", true}}},
+		{" X=a b Y= ", map[string]esmtpArg{"X": {"a b", true}, "Y": {" ", true}}},
+		{" X=1 Y=2", map[string]esmtpArg{"X": {"1 Y=2", true}}},
+		{" X=1\tY=2", map[string]esmtpArg{"X": {"1", true}, "Y": {"2", true}}},
+		{"  X=1", map[string]esmtpArg{" X": {"1", true}}},
 	} {
 		args, err := parseArgs(tc.input)
 		if err != nil || !reflect.DeepEqual(args, tc.want) {
-			t.Errorf("parseArgs(%q) = (%q, %v), want (%q, nil)", tc.input, args, err, tc.want)
+			t.Errorf("parseArgs(%q) = (%+v, %v), want (%+v, nil)", tc.input, args, err, tc.want)
 		}
 	}
 }
