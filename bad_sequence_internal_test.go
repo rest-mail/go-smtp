@@ -12,7 +12,7 @@ import (
 // Each subtest exercises a distinct refusal on the wire, including both missing
 // prerequisites for DATA/BDAT and commands interleaved with non-LAST chunks.
 //
-// checklist: SMTP-ORD-05
+// checklist: SMTP-ORD-05 SMTP-AUTH-16
 func TestServerBadSequence(t *testing.T) {
 	const mail = "MAIL FROM:<a@example.org>"
 	const rcpt = "RCPT TO:<b@example.org>"

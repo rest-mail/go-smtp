@@ -403,12 +403,23 @@ func (c *Client) Auth(a sasl.Client) error {
 	} else if resp != nil {
 		resp64 = []byte{'='}
 	}
+	// RFC 4954 §4: keep AUTH within the SMTP 512-octet command limit.
+	// Send an oversized initial response only after the empty challenge.
+	var deferredResponse []byte
+	if len("AUTH ")+len(mech)+1+len(resp64)+2 > 512 {
+		deferredResponse = resp
+		resp64 = nil
+	}
 	code, msg64, err := c.cmd(0, "%s", strings.TrimSpace(fmt.Sprintf("AUTH %s %s", mech, resp64)))
 	for err == nil {
 		var msg []byte
 		switch code {
 		case 334:
-			msg, err = encoding.DecodeString(msg64)
+			if strings.ContainsAny(msg64, "\r\n") {
+				err = errors.New("smtp: invalid SASL base64 challenge")
+			} else {
+				msg, err = encoding.DecodeString(msg64)
+			}
 		case 235:
 			// the last message isn't base64 because it isn't a challenge
 			msg = []byte(msg64)
@@ -417,14 +428,25 @@ func (c *Client) Auth(a sasl.Client) error {
 		}
 		if err == nil {
 			if code == 334 {
-				resp, err = a.Next(msg)
+				if deferredResponse != nil {
+					if len(msg) != 0 {
+						err = errors.New("smtp: expected empty initial SASL challenge")
+					} else {
+						resp = deferredResponse
+						deferredResponse = nil
+					}
+				} else {
+					resp, err = a.Next(msg)
+				}
 			} else {
 				resp = nil
 			}
 		}
 		if err != nil {
-			// abort the AUTH
-			c.cmd(501, "*")
+			// Cancel only an active challenge, not an already completed failure.
+			if code == 334 {
+				c.cmd(501, "*")
+			}
 			break
 		}
 		if resp == nil {

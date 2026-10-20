@@ -153,11 +153,11 @@ func TestServerAuthUnicodeSpaceIsNotSeparator(t *testing.T) {
 		line, want string
 	}{
 		// The mechanism name is ASCII: one with a NEL or NBSP is unknown.
-		{"AUTH PLAIN\u0085", "504 5.7.4 "},
-		{"AUTH PLAIN " + ir, "504 5.7.4 "},
+		{"AUTH PLAIN\u0085", "504 5.5.4 "},
+		{"AUTH PLAIN " + ir, "504 5.5.4 "},
 		// The initial response is base64: a NEL or NBSP makes it invalid.
-		{"AUTH PLAIN " + ir + "\u0085", "454 4.7.0 "},
-		{"AUTH PLAIN AHVz ZXJuYW1lAHBhc3N3b3Jk", "454 4.7.0 "},
+		{"AUTH PLAIN " + ir + "\u0085", "501 5.5.2 "},
+		{"AUTH PLAIN AHVz ZXJuYW1lAHBhc3N3b3Jk", "501 5.5.2 "},
 		{"AUTH PLAIN\t" + ir, "235 "},
 	} {
 		t.Run(tc.line, func(t *testing.T) {

@@ -124,7 +124,7 @@ func TestAuthRejectsExtraTokens(t *testing.T) {
 // unprotected connection must use 530 5.7.0 (RFC 3207 §4), not the unassigned
 // 523.
 //
-// checklist: SMTP-EXT-07
+// checklist: SMTP-EXT-07 SMTP-AUTH-19
 // checklist: TLS-POLICY-03
 func TestAuthTLSRequiredCode(t *testing.T) {
 	_, c, br := newConformanceServer(t, nil) // AllowInsecureAuth stays false
