@@ -646,6 +646,15 @@ var _ io.WriteCloser = (*DataCommand)(nil)
 
 // Write implements io.Writer.
 func (cmd *DataCommand) Write(b []byte) (int, error) {
+	if cmd.closeErr != nil {
+		return 0, cmd.closeErr
+	}
+	if len(b) == 0 {
+		return 0, nil
+	}
+	if cmd.wc == nil {
+		cmd.wc = cmd.client.text.DotWriter()
+	}
 	return cmd.wc.Write(b)
 }
 
@@ -741,7 +750,16 @@ func (cmd *DataCommand) close() error {
 		defer func() { _ = cmd.client.conn.SetWriteDeadline(time.Time{}) }()
 	}
 
-	if err := cmd.wc.Close(); err != nil {
+	var err error
+	if cmd.wc == nil {
+		// RFC 2920 §3.1 recovery requires a single dot after DATA accepts
+		// an envelope with no recipients. textproto.DotWriter.Close adds
+		// an unwanted blank line when nothing has been written.
+		err = cmd.client.text.PrintfLine(".")
+	} else {
+		err = cmd.wc.Close()
+	}
+	if err != nil {
 		cmd.closeErr = err
 		return err
 	}
@@ -781,14 +799,15 @@ func (lmtpErr LMTPDataError) Unwrap() []error {
 
 // Data issues a DATA command to the server and returns a writer that
 // can be used to write the mail headers and body. The caller should
-// close the writer before calling any more methods on c. A call to
+// close the writer before calling any more methods on c. Closing without
+// writing sends an empty message (only the dot terminator). A call to
 // Data must be preceded by one or more calls to Rcpt.
 func (c *Client) Data() (*DataCommand, error) {
 	_, _, err := c.cmd(354, "DATA")
 	if err != nil {
 		return nil, err
 	}
-	return &DataCommand{client: c, wc: c.text.DotWriter()}, nil
+	return &DataCommand{client: c}, nil
 }
 
 // SendMail will use an existing connection to send an email from

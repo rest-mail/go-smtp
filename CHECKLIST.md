@@ -10,11 +10,11 @@ An item that does not apply, or is a known gap, says "n/a" and why. CI checks
 this file against the tests with `go run ./internal/checklist`; the format is
 described in the [README](README.md#the-rfc-checklist).
 
-Not covered yet: each extension (PIPELINING, 8BITMIME, DSN, CHUNKING,
+Not covered yet: each extension (8BITMIME, DSN, CHUNKING,
 SMTPUTF8, AUTH, LMTP, RRVS, DELIVERBY, MT-PRIORITY, XCLIENT) is one
 row in the extension summary, mapping its existing tests, and has not been checked
 clause by clause; later slots do that. STARTTLS (RFC 3207) is audited in
-its own section below, as is SIZE (RFC 1870). RFC 6409 (submission) is not in this
+its own section below, as are SIZE (RFC 1870) and PIPELINING (RFC 2920). RFC 6409 (submission) is not in this
 slot. Reply line lengths (§4.5.3.1.5) are checked by SMTP-LIM-06;
 SASL challenges retain the independent size rules of RFC 4954 §4.
 
@@ -124,7 +124,7 @@ SASL challenges retain the independent size rules of RFC 4954 §4.
 
 | ID | Section | Level | Requirement | Tests |
 |----|---------|-------|-------------|-------|
-| SMTP-EXT-01 | RFC 2920 | Normative | One row for the extension: PIPELINING: the replies to a batch of commands are sent in order and in one write; the client does not deadlock. The clauses of the RFC are not checked one by one yet. | `TestPipeline_NoRoundTripDeadlock`, `TestPipeline_Integration`, `TestPipeline_NotSupported`, `TestPipeline_LargeGroupDoesNotDeadlock`, `TestPipeline_LMTPSeesOnlyAcceptedRecipients`, `TestPipeline_StalledServerTimesOut`, `TestPipeline_ServerHangupMidGroup`, `TestPipelinedRepliesShareOneWrite`, `TestSingleCommandReplyIsPrompt`, `TestPartialPipelinedLineDoesNotHoldReplies` |
+| SMTP-EXT-01 | RFC 2920 | Normative | PIPELINING regression summary; the clause-by-clause RFC 2920 audit below records its fixed-window client limitation. | `TestPipeline_NoRoundTripDeadlock`, `TestPipeline_Integration`, `TestPipeline_NotSupported`, `TestPipeline_LargeGroupDoesNotDeadlock`, `TestPipeline_LMTPSeesOnlyAcceptedRecipients`, `TestPipeline_StalledServerTimesOut`, `TestPipeline_ServerHangupMidGroup`, `TestPipelinedRepliesShareOneWrite`, `TestSingleCommandReplyIsPrompt`, `TestPartialPipelinedLineDoesNotHoldReplies` |
 | SMTP-EXT-02 | RFC 6152 | Normative | One row for the extension: 8BITMIME: `BODY=8BITMIME` and `7BIT` are accepted, any other value is refused. The clauses of the RFC are not checked one by one yet. | `TestServer8BITMIME`, `TestServer_BODYInvalidValue` |
 | SMTP-EXT-03 | RFC 1870 | Normative | SIZE summary: declared and actual sizes are checked against `MaxMessageBytes` (inclusive); oversized content is drained with a bound. The RFC 1870 audit is below. | `TestServerBadSize`, `TestServerTooBig`, `TestServerSizeLimit_ExactlyMaxAccepted`, `TestServerSizeLimit_OverMaxRejected`, `TestServerSizeLimit_RejectWithinLimitKeepsConnection`, `TestServerSizeLimit_OversizedKeepsConnection`, `TestServerSizeLimit_OverLimitDrainBounded`, `TestServerSizeLimit_LMTP_OverLimitDrainBounded`, `TestServerSizeLimit_LMTP_Fallback_OverLimitDrainBounded` |
 | SMTP-EXT-04 | RFC 3461, xtext (RFC 3461 §4) | Normative | One row for the extension: DSN: `RET`, `ENVID`, `NOTIFY` and `ORCPT`, with xtext encoding both ways. The clauses of the RFC are not checked one by one yet. | `TestServerDSN`, `TestClientDSN`, `TestClientXtext`, `TestXtextRoundTrip`, `TestServer_xtextLiteralNonXchar`, `FuzzDecodeXtext`, `FuzzEncodeXtext` |
@@ -216,3 +216,45 @@ The §8 example is a protocol test with backend-supplied recipient failures.
 The size-counting tests also verify the §6.3 recommendation through the fixed
 limit path. A backend can still choose its own status code, including 552;
 it must apply that recommendation when rejecting for storage/size reasons.
+
+
+## PIPELINING (RFC 2920)
+
+Sections in this table are RFC 2920. The server and the three-command client
+pipeline are audited separately. An n/a gap below is not a conformance claim.
+The client API deliberately sends DATA synchronously after `Wait`; callers must
+check every result, and if every RCPT failed but DATA is accepted, close the
+unwritten data writer, check its result and reset the transaction. The library
+does not automatically choose that recovery or the host's retry policy.
+
+| ID | Section | Level | Requirement | Tests |
+|----|---------|-------|-------------|-------|
+| PIPE-EHLO-01 | 2, 3 | Normative | Advertise PIPELINING as a parameterless EHLO keyword; no new verbs or MAIL/RCPT parameters are introduced. | `TestRFC2920Examples` |
+| PIPE-EHLO-02 | 3 | Normative | Confirm successful EHLO and the PIPELINING keyword before using the extension. | `TestPipeline_NotSupported` |
+| PIPE-CLIENT-01 | 3, 3.1 | Normative | The client sends a pipelined group only after discovering server support. | `TestPipeline_NotSupported`, `TestRFC2920ClientResponseCorrelation` |
+| PIPE-CLIENT-02 | 3.1 | MUST | Check every command status, including statuses after an earlier rejection. | `TestPipeline_NoRoundTripDeadlock`, `TestRFC2920ClientResponseCorrelation` |
+| PIPE-CLIENT-03 | 3.1 | MUST | Correlate statuses by command/response count, never by code value or response text, and support multiline responses. | `TestRFC2920ClientResponseCorrelation` |
+| PIPE-CLIENT-04 | 3.1 | MUST NOT | Do not confuse a multiline response with responses to multiple commands. | `TestRFC2920ClientResponseCorrelation` |
+| PIPE-CLIENT-05 | 3.1 | Normative | Check DATA even when every RCPT failed; if DATA is accepted, recovery sends only a dot and checks the final response. | `TestRFC2920EmptyDataRecovery`, `TestRFC2920EmptyDataWriter` |
+| PIPE-CLIENT-06 | 3.1 | Normative | Only permitted commands occur inside a group; EHLO, DATA, VRFY, EXPN, TURN, QUIT and NOOP end a group. | `TestPipeline_Integration` |
+| PIPE-CLIENT-07 | 3.1 | MUST | A blocking client checks the actual TCP window and keeps each group within it, or processes replies while writing. | n/a: not supported yet; Pipeliner assumes a fixed 4096-byte window, does not discover the actual window and does not read concurrently. Existing congestion tests prove only that configured window, not arbitrary transports or oversized single commands. Tracked by rest-mail/rest-mail-server#374. |
+| PIPE-CLIENT-08 | 3.1 | Normative | Additional extension commands end a group unless their defining extension allows otherwise. | n/a: the client pipeline API exposes only RSET, MAIL and RCPT. Other commands use synchronous Client methods after Wait; extensions without client methods cannot be queued. |
+| PIPE-SERVER-01 | 3.2(1) | MUST | Respond to commands in received order. | `TestRFC2920SynchronizationFlush`, `TestRFC2920Examples`, `TestPipelinedRepliesShareOneWrite` |
+| PIPE-SERVER-02 | 3.2(2) | SHOULD | Buffer responses to grouped transaction commands for transmission together. | `TestPipelinedRepliesShareOneWrite` |
+| PIPE-SERVER-03 | 3.2(3) | SHOULD | Accept DATA if and only if at least one RCPT was accepted, even when the last RCPT failed. | `TestRFC2920Examples` |
+| PIPE-SERVER-04 | 3.2(4) | MUST NOT | Deliver nothing if an empty DATA transaction has no valid recipients. | `TestRFC2920Examples` |
+| PIPE-SERVER-05 | 3.2(5) | MUST NOT | Do not buffer responses to EHLO, DATA, VRFY, EXPN, TURN, QUIT or NOOP behind later commands. | `TestRFC2920SynchronizationFlush`, `TestDataReplySentBeforeBody`, `TestQuitReplySentBeforeClose` |
+| PIPE-SERVER-06 | 3.2(6) | MUST NOT | Do not buffer responses to unrecognized commands. | `TestRFC2920SynchronizationFlush` |
+| PIPE-SERVER-07 | 3.2(7) | MUST | Send pending replies when local input is exhausted; a partial next line must not hold replies. | `TestSingleCommandReplyIsPrompt`, `TestPartialPipelinedLineDoesNotHoldReplies` |
+| PIPE-SERVER-08 | 3.2(8) | MUST NOT | Do not assume future commands will arrive before responding to received commands. | `TestRFC2920Examples`, `TestSingleCommandReplyIsPrompt` |
+| PIPE-SERVER-09 | 3.2(9) | MUST NOT | Do not discard buffered input when a command fails; preserve later commands and body bytes. | `TestRFC2920SynchronizationFlush`, `TestRFC2920Examples` |
+| PIPE-SERVER-10 | 3.2(10) | SHOULD | Default response text identifies its command implicitly or explicitly. | `TestRFC2920ReplyText` |
+| PIPE-POLICY-01 | 3.2(10) | SHOULD | Custom backend reply text should identify the command it answers. | n/a: host responsibility; custom SMTPError diagnostics are supplied by backend code and cannot be semantically classified by the library. |
+| PIPE-EXAMPLE-01 | 4 | Normative | Exercise the RFC's successful multi-recipient and all-recipients-refused dialogues, including content followed by QUIT in one group. | `TestRFC2920Examples` |
+
+The all-recipients-refused example uses RFC 5321's 503 sequencing response in
+place of RFC 2920's illustrative 554. The server always refuses DATA without
+recipients, so the conditional path of §3.2(4) cannot reach backend delivery.
+`TestRFC2920EmptyDataRecovery` separately exercises the client against a peer
+that incorrectly accepts that DATA command. SEND/SOML/SAML, EXPN and TURN are
+not implemented; their refusal remains explicit (SMTP-CMD-07).

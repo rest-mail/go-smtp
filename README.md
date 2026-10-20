@@ -36,7 +36,8 @@ An ESMTP client and server library written in Go.
 ## The RFC checklist
 
 [CHECKLIST.md](CHECKLIST.md) lists the requirements of RFC 5321 (the SMTP
-server and client core), RFC 3207 (STARTTLS) and RFC 1870 (SIZE) item by item. The other
+server and client core), RFC 3207 (STARTTLS), RFC 1870 (SIZE) and
+RFC 2920 (PIPELINING) item by item. The other
 extensions still have one summary row each. A small program,
 [`internal/checklist`](internal/checklist/main.go), checks it against the tests
 in CI. It is the same program as
@@ -83,6 +84,20 @@ DATA; actual content is bounded by `MaxMessageBytes`. A client omits SIZE when
 `MailOptions.Size` is zero and rejects negative estimates. Storage reservation,
 recipient limits, retry queues and delivery notifications remain host policy;
 see the RFC 1870 checklist's explicit policy rows.
+
+PIPELINING replies retain command order. Only transaction-command replies
+(RSET/MAIL/RCPT) are held for batching; synchronization and unknown-command
+replies flush before later commands are processed. The client exposes those
+three queue operations and returns every status from `Wait`; DATA is sent
+synchronously afterwards. Inspect every result before sending message content.
+If every recipient failed but a peer nevertheless accepts DATA, close the
+unwritten writer to send only `.\r\n`, check the final response, and reset.
+An empty DATA writer now sends that terminator without an extra blank line.
+
+The client still assumes a 4096-byte transport window instead of checking the
+actual TCP window or reading responses concurrently. Its congestion tests prove
+that assumed window only; smaller windows and oversized individual commands
+remain a conformance gap (PIPE-CLIENT-07), bounded by `CommandTimeout`.
 
 ## Relationship with net/smtp
 

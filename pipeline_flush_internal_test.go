@@ -140,6 +140,7 @@ func writeFlushBatch(t *testing.T, c net.Conn, batch string) {
 }
 
 // checklist: SMTP-EXT-01
+// checklist: PIPE-SERVER-01 PIPE-SERVER-02
 func TestPipelinedRepliesShareOneWrite(t *testing.T) {
 	wc, c, br, _ := newFlushTestConn(t, func(s *Server) { s.MaxRecipients = 2 })
 
@@ -173,6 +174,7 @@ func TestPipelinedRepliesShareOneWrite(t *testing.T) {
 }
 
 // checklist: SMTP-EXT-01
+// checklist: PIPE-SERVER-07 PIPE-SERVER-08
 func TestSingleCommandReplyIsPrompt(t *testing.T) {
 	wc, c, br, _ := newFlushTestConn(t, nil)
 
@@ -188,6 +190,7 @@ func TestSingleCommandReplyIsPrompt(t *testing.T) {
 }
 
 // checklist: SMTP-EXT-01
+// checklist: PIPE-SERVER-07
 func TestPartialPipelinedLineDoesNotHoldReplies(t *testing.T) {
 	_, c, br, _ := newFlushTestConn(t, nil)
 
@@ -204,6 +207,7 @@ func TestPartialPipelinedLineDoesNotHoldReplies(t *testing.T) {
 }
 
 // checklist: SMTP-DATA-01
+// checklist: PIPE-SERVER-05
 func TestDataReplySentBeforeBody(t *testing.T) {
 	wc, c, br, _ := newFlushTestConn(t, nil)
 
@@ -280,6 +284,7 @@ func TestStartTLSReplySentBeforeHandshake(t *testing.T) {
 }
 
 // checklist: SMTP-CMD-06
+// checklist: PIPE-SERVER-05
 func TestQuitReplySentBeforeClose(t *testing.T) {
 	_, c, br, done := newFlushTestConn(t, nil)
 
