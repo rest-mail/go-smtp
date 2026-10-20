@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Checked RFC 7293 RRVS requirements: the EHLO keyword, the strict RCPT
+  parameter grammar and the client's sending rules. The ownership check,
+  relaying and the header field are explicit host responsibilities.
+
 - Checked RFC 6531 SMTPUTF8 envelope requirements: the EHLO keyword, the MAIL
   parameter, UTF-8 mailboxes, per-transaction state and ASCII VRFY/EXPN
   replies. Message headers, IDNA, downgrade and trace fields are explicit host
@@ -45,6 +49,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   unsupported enforcement modes are explicitly recorded.
 
 ### Fixed
+
+- RRVS: the server refuses a value with fractional seconds or a no-support
+  action other than `R` or `C` (it used to ignore anything after `;`), and
+  passes the action to the backend in `RcptOptions.RequireRecipientValidSinceAction`.
+  The client sends the action, sends the timestamp in UTC, and returns an error
+  instead of silently dropping RRVS when the server does not offer it, unless
+  the action is `C`.
 
 - Empty assignments such as `SMTPUTF8=` now receive 501 5.5.4, just like
   non-empty values. ESMTP parsing preserves the equals sign so the server can

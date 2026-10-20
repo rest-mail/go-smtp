@@ -10,13 +10,13 @@ An item that does not apply, or is a known gap, says "n/a" and why. CI checks
 this file against the tests with `go run ./internal/checklist`; the format is
 described in the [README](README.md#the-rfc-checklist).
 
-Not covered yet: each extension (LMTP, RRVS, DELIVERBY,
+Not covered yet: each extension (LMTP, DELIVERBY,
 MT-PRIORITY, XCLIENT) is one row in the extension summary, mapping its existing
 tests, and has not been checked clause by clause; later slots do that.
 STARTTLS (RFC 3207), SIZE (RFC 1870), PIPELINING (RFC 2920),
 CHUNKING/BINARYMIME (RFC 3030), 8BITMIME (RFC 6152), AUTH exchange rules
 (RFC 4954 §4), DSN parameter/protocol rules (RFC 3461 §§2–4, 5.1, 5.4)
-and the SMTPUTF8 envelope (RFC 6531) are audited below; the remaining AUTH and DSN lifecycle rules remain for later slices.
+the SMTPUTF8 envelope (RFC 6531) and the RRVS parameter (RFC 7293) are audited below; the remaining AUTH and DSN lifecycle rules remain for later slices.
 RFC 6409 (submission) is not in this slot. Reply line lengths (§4.5.3.1.5)
 are checked by SMTP-LIM-06;
 SASL challenges retain the independent size rules of RFC 4954 §4.
@@ -136,7 +136,7 @@ SASL challenges retain the independent size rules of RFC 4954 §4.
 | SMTP-EXT-07 | RFC 3207 | Normative | STARTTLS summary: parser, handshake, TLS state, close races and AUTH protection. The clause-by-clause audit is below. | `TestTLSClient`, `TestTLSConnState`, `TestStartTLSClosesOnHandshakeFailure`, `TestStartTLSCloseRace`, `TestStartTLSReplySentBeforeHandshake`, `TestParseCmdSTARTTLSExact`, `TestAuthTLSRequiredCode`, `TestNewClientStartTLS` |
 | SMTP-EXT-08 | RFC 4954 | Normative | One row for the extension: AUTH: mechanisms, initial response, cancellation, a second AUTH, anonymous access, and read timeouts. The exchange rules have individual rows below; other clauses remain unaudited. | `TestServerAuthTwice`, `TestServerCancelSASL`, `TestServer_authDisabled`, `TestServer_anonymousUserError`, `TestServer_anonymousUserOK`, `TestServer_authParam`, `TestAuthRejectsExtraTokens`, `TestAuthFailed`, `TestClientAuthTrimSpace`, `TestAuthChallengeSentBeforeReadingResponse`, `TestAuthClientCancelReturns501`, `TestAuthContinuationReadTimeoutClosesConnection`, `TestServerAuthUnicodeSpaceIsNotSeparator`, `TestRFC4954_LongChallengeNotTruncated` |
 | SMTP-EXT-09 | RFC 2033 | Normative | One row for the extension: LMTP: `LHLO`, one reply per recipient after the data, and the client side. The clauses of the RFC are not checked one by one yet. | `TestServer_LMTP`, `TestServer_LMTP_Early`, `TestServer_LMTP_Expand`, `TestServer_LMTP_DuplicatedRcpt`, `TestServer_Chunking_LMTP`, `TestLMTP`, `TestLMTPData`, `TestLMTPRcptLeakAcrossTransactions`, `TestLMTPDataErrorMessages` |
-| SMTP-EXT-10 | RFC 7293 | Normative | One row for the extension: RRVS: the `RRVS` parameter on RCPT. The clauses of the RFC are not checked one by one yet. | `TestServerRRVS`, `TestClientRRVS` |
+| SMTP-EXT-10 | RFC 7293 | Normative | RRVS summary: the `RRVS` parameter on RCPT. The RFC 7293 audit is below. | `TestServerRRVS`, `TestClientRRVS` |
 | SMTP-EXT-11 | RFC 2852 | Normative | One row for the extension: DELIVERBY: `BY` on MAIL only, in range. The clauses of the RFC are not checked one by one yet. | `TestServerDELIVERBY`, `TestClientDELIVERBY`, `TestClientDeliverByTruncatesToSeconds`, `TestParseDeliverByBoundaries`, `FuzzParseDeliverByArgument`, `TestServerDeliverByAndMTPriorityRejectedOnRcpt` |
 | SMTP-EXT-12 | RFC 6710 | Normative | One row for the extension: MT-PRIORITY: the `MT-PRIORITY` parameter on MAIL only, in range. The clauses of the RFC are not checked one by one yet. | `TestServerMTPRIORITY`, `TestClientMTPRIORITY` |
 | SMTP-EXT-13 | Postfix XCLIENT (not an IETF RFC) | Normative | One row for the extension: XCLIENT: a trusted peer may set the client's address and name; an untrusted one may not. The clauses of the RFC are not checked one by one yet. | `TestServerXClientTrusted`, `TestServerXClientUntrusted`, `TestServerXClientKeepsUnicodeSpaceInValue` |
@@ -438,3 +438,28 @@ UTF-8 `ORCPT` encoding of RFC 6533 stays in SMTP-EXT-06.
 | UTF8-EHLO-03 | 3.7.1 | MUST | EHLO domain names and the server's EHLO response use LDH labels or A-labels. | n/a: host configuration: `Client.Hello` and `Server.Domain` take the name the host supplies. |
 | UTF8-TRACE-01 | 3.7.3, 3.1 item 11 | Normative | Trace fields use the UTF8SMTP/UTF8SMTPA/UTF8SMTPS WITH keywords. | n/a: the library writes no Received fields; the host adds trace headers. |
 | UTF8-DSN-01 | 3.6; RFC 6533 | MUST | A server offering DSN with SMTPUTF8 implements RFC 6533's UTF-8 address type. | `TestServerDSNUTF8AddressORCPT`, `TestServerDSNwithSMTPUTF8`, `TestClientORCPTUTF8Encoding` |
+
+## RRVS (RFC 7293)
+
+Sections here refer to [RFC 7293](https://www.rfc-editor.org/rfc/rfc7293).
+This slice audits the SMTP extension: the EHLO keyword, the RCPT parameter's
+grammar and the client's sending rules. The ownership check, relaying and the
+`Require-Recipient-Valid-Since` header field belong to the host, which receives
+the timestamp and the no-support action in `RcptOptions`.
+
+| ID | Section | Level | Requirement | Tests |
+|----|---------|-------|-------------|-------|
+| RRVS-EHLO-01 | 3.1 | Normative | RRVS is advertised without parameters, and only when the host enables it. | `TestRFC7293Server` |
+| RRVS-SYN-01 | 3.1; RFC 3339 §5.6 | Normative | The value is an RFC 3339 date-time with seconds and an offset (`Z` or `±hh:mm`, case-insensitive `T`/`Z`, leap second 60); anything else gets 501 5.5.4. | `TestRFC7293ParseArgument`, `TestRFC7293Server`, `TestServerRRVS` |
+| RRVS-SYN-02 | 3.1 | MUST NOT | A value with time-secfrac is refused. | `TestRFC7293ParseArgument`, `TestRFC7293Server` |
+| RRVS-SYN-03 | 3.1 | Normative | The only no-support actions are `;R` and `;C`; any other suffix, including an empty one, gets 501 5.5.4. | `TestRFC7293ParseArgument`, `TestServerRRVS` |
+| RRVS-SRV-01 | 3.1, 5.1.1 | MUST | The timestamp (in UTC) and the action reach the backend, and an absent action stays absent, so a relay can preserve it as sent. | `TestRFC7293Server`, `TestServerRRVS` |
+| RRVS-SRV-02 | 3.1 | Normative | The parameter is refused with 504 5.5.4 when RRVS is not advertised. | `TestRFC7293Server` |
+| RRVS-LEN-01 | 3.1 | Normative | The RCPT command line may be 33 octets longer to carry the parameter. | n/a: the default command limit (`MaxLineLength` 2000) is above RFC 5321's 512 plus 33; a host lowering it below 545 owns that choice. |
+| RRVS-CLI-01 | 3.1 | MUST NOT | The client sends the timestamp in UTC without time-secfrac, and a no-support action only when the caller set one; an unknown action or a year outside 0000–9999 is refused before writing. | `TestRFC7293Client`, `TestClientRRVS` |
+| RRVS-CLI-02 | 5.1.1, 6 | MUST | To a server without RRVS, the client refuses a recipient whose action is reject or absent, without writing anything. | `TestRFC7293Client` |
+| RRVS-CLI-03 | 5.1.1, 6 | Normative | With the action `C`, the client sends the recipient to a server without RRVS without the parameter. | `TestRFC7293Client` |
+| RRVS-OWN-01 | 5, 5.1 | MUST | A receiver checks continuous ownership since the timestamp, ignores it for role accounts and returns 550 (X.7.17/X.7.18/X.7.19) when the check fails or cannot be done. | n/a: host responsibility: the library holds no mailbox history; the backend's `Rcpt` returns the `SMTPError`. |
+| RRVS-RELAY-01 | 5.1.1, 6 | MUST | A relay whose next hop lacks RRVS rejects (550 to DATA or a DSN) unless the action is `C`, and preserves the action when it relays. | n/a: host responsibility: the library has no queue; `RRVS-CLI-02` is the client half. |
+| RRVS-HDR-01 | 3.2, 4, 5.2, 6.1 | Normative | The `Require-Recipient-Valid-Since` header field is parsed, checked, removed and converted to or from the parameter. | n/a: host responsibility: Data does not inspect message content. |
+| RRVS-CLOCK-01 | 5.3 | MUST | Generators and receivers synchronise their clocks, for example with NTP. | n/a: the library has no clock policy; the host's system clock is used. |

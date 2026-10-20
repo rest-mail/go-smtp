@@ -684,8 +684,27 @@ func (c *Client) buildRcptCmd(to string, opts *RcptOptions) (string, error) {
 			fmt.Fprintf(&sb, " ORCPT=%s;%s", string(opts.OriginalRecipientType), enc)
 		}
 	}
-	if _, ok := c.ext["RRVS"]; ok && opts != nil && !opts.RequireRecipientValidSince.IsZero() {
-		sb.WriteString(fmt.Sprintf(" RRVS=%s", opts.RequireRecipientValidSince.Format(time.RFC3339)))
+	if opts != nil && !opts.RequireRecipientValidSince.IsZero() {
+		action := opts.RequireRecipientValidSinceAction
+		if action != "" && action != RRVSActionReject && action != RRVSActionContinue {
+			return "", errors.New("smtp: unknown RRVS no-support action")
+		}
+		// Seconds precision in UTC: RFC 7293 section 3.1 forbids
+		// time-secfrac, and UTC avoids an offset with seconds.
+		since := opts.RequireRecipientValidSince.UTC().Truncate(time.Second)
+		if since.Year() < 0 || since.Year() > 9999 {
+			return "", errors.New("smtp: RRVS time is out of range")
+		}
+		if _, ok := c.ext["RRVS"]; ok {
+			sb.WriteString(" RRVS=" + since.Format(time.RFC3339))
+			if action != "" {
+				sb.WriteString(";" + string(action))
+			}
+		} else if action != RRVSActionContinue {
+			// Only "C" lets a message lose the protection on the way
+			// (RFC 7293 sections 5.1.1 and 6).
+			return "", errors.New("smtp: server does not support RRVS")
+		}
 	}
 	return sb.String(), nil
 }

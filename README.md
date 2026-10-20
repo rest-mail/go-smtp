@@ -41,7 +41,8 @@ RFC 2920 (PIPELINING), RFC 3030 (CHUNKING/BINARYMIME) and
 RFC 6152 (8BITMIME) item by item, plus individual
 AUTH exchange requirements from RFC 4954 §4 and the DSN parameter/protocol
 rules from RFC 3461 §§2–4, 5.1 and 5.4, and the SMTPUTF8 envelope rules
-from RFC 6531 (including refusal of `SMTPUTF8=`). Other extensions retain summary
+from RFC 6531 (including refusal of `SMTPUTF8=`) and the RRVS parameter
+from RFC 7293. Other extensions retain summary
 rows. A small program,
 [`internal/checklist`](internal/checklist/main.go), checks it against the tests
 in CI. It is the same program as
