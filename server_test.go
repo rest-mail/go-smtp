@@ -183,13 +183,14 @@ func (s *session) LMTPData(r io.Reader, collector smtp.StatusCollector) error {
 }
 
 type failingListener struct {
-	c      chan error
-	closed bool
-	mu     sync.Mutex
+	c         chan error
+	accepting chan struct{}
+	closed    bool
+	mu        sync.Mutex
 }
 
 func newFailingListener() *failingListener {
-	return &failingListener{c: make(chan error)}
+	return &failingListener{c: make(chan error), accepting: make(chan struct{}, 1)}
 }
 
 func (l *failingListener) Send(err error) {
@@ -202,6 +203,7 @@ func (l *failingListener) Send(err error) {
 }
 
 func (l *failingListener) Accept() (net.Conn, error) {
+	l.accepting <- struct{}{}
 	err, ok := <-l.c
 	if !ok {
 		// Channel closed by Close(): report the listener as closed.
@@ -335,16 +337,29 @@ func TestServerAcceptErrorHandling(t *testing.T) {
 	s.ErrorLog = log.New(errorLog, "", 0)
 
 	l := newFailingListener()
+	defer s.Close()
 	done := make(chan error, 1)
 	go func() {
 		done <- s.Serve(l)
 		l.Close()
 	}()
+	waitForAccept := func() {
+		t.Helper()
+		select {
+		case <-l.accepting:
+		case <-time.After(5 * time.Second):
+			t.Fatal("Serve did not call Accept")
+		}
+	}
+	waitForAccept()
 
 	// An accept error is logged and retried rather than being fatal; only a
 	// closed listener ends Serve.
 	acceptError := newMockError("mock accept error", false)
 	l.Send(acceptError)
+	// Wait for the retry: Send only synchronizes delivery of the error, not
+	// its handling. Closing earlier can make Serve skip logging the error.
+	waitForAccept()
 
 	// Closing the server makes Serve return nil cleanly.
 	s.Close()
