@@ -8,6 +8,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Checked RFC 3030 CHUNKING/BINARYMIME transport requirements, the RFC's
+  single-chunk and pipelined binary examples, error/recovery and byte-preservation
+  tests, and a BDAT argument fuzzer using an independent grammar/integer oracle.
+  Host MIME/relay obligations and implementation limits are explicit.
+
 - RFC 3461 DSN parameter/protocol checklist, the six-recipient submission
   example, syntax/error/state/size tests and a NOTIFY list fuzz target checked
   against an independent ASCII grammar. Notification lifecycle, downgrade
@@ -35,6 +40,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   unsupported enforcement modes are explicitly recorded.
 
 ### Fixed
+
+- Failed and out-of-sequence BDAT chunks are fully consumed before replying;
+  already-pipelined rejected chunks cannot inject their payload as commands.
+  Oversized chunks now get their 552 only after the full payload, as RFC 3030
+  requires. Truncated chunks close the connection without partial delivery.
+- Command length limits are applied when parsing commands, preserving valid
+  opaque body bytes read ahead in the same packet and bounding command memory.
+- The BDAT LAST marker rejects Unicode look-alikes instead of case-folding
+  them into the ASCII keyword.
 
 - DSN NOTIFY now accepts repeated conditions and null list elements permitted
   by RFC 3461's RFC 822 list grammar, exposing unique conditions to the backend.

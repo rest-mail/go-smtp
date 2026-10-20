@@ -50,7 +50,6 @@ type Conn struct {
 	// stops: further responses cannot reach the peer.
 	writeErr error
 
-	lineLimitReader *lineLimitReader
 	// When > 0, the read deadline is re-armed to now+bodyReadDeadline before
 	// each underlying connection read (see deadlineReader). Set only while a
 	// DATA/BDAT message body is being read.
@@ -91,16 +90,12 @@ func newConn(c net.Conn, s *Server) *Conn {
 }
 
 func (c *Conn) init() {
-	c.lineLimitReader = &lineLimitReader{
-		R:         &deadlineReader{c: c, r: c.conn},
-		LineLimit: c.server.MaxLineLength,
-	}
 	rwc := struct {
 		io.Reader
 		io.Writer
 		io.Closer
 	}{
-		Reader: c.lineLimitReader,
+		Reader: &deadlineReader{c: c, r: c.conn},
 		Writer: c.conn,
 		Closer: c.conn,
 	}
@@ -1465,19 +1460,6 @@ func (c *Conn) handleData(arg string) {
 
 	defer c.reset()
 
-	// The DATA body is opaque and may contain lines longer than the command-line
-	// limit, so the per-line limit is disabled for the duration of the body read
-	// (and its drain), mirroring the BDAT chunk-copy path. This lets MaxLineLength
-	// bound only command lines — a server can cap pre-auth command input against
-	// memory exhaustion without limiting message body lines. The deferred restore
-	// runs before the next command line is read on every exit path, keeping
-	// commands bounded (the dot-reader already enforces end-of-data framing, and
-	// MaxMessageBytes still bounds total body size).
-	c.lineLimitReader.LineLimit = 0
-	defer func() {
-		c.lineLimitReader.LineLimit = c.server.MaxLineLength
-	}()
-
 	if c.server.LMTP {
 		c.handleDataLMTP()
 		return
@@ -1522,62 +1504,26 @@ func (c *Conn) handleData(arg string) {
 }
 
 func (c *Conn) handleBdat(arg string) {
-	args := splitWSP(arg)
-	if len(args) == 0 {
-		c.writeResponse(501, EnhancedCode{5, 5, 4}, "Missing chunk size argument")
-		return
-	}
-	if len(args) > 2 {
-		c.writeResponse(501, EnhancedCode{5, 5, 4}, "Too many arguments")
-		return
-	}
-
-	if !c.fromReceived || len(c.recipients) == 0 {
-		c.writeResponse(503, EnhancedCode{5, 5, 1}, "Missing RCPT TO command.")
-		return
-	}
-
-	last := false
-	if len(args) == 2 {
-		if !strings.EqualFold(args[1], "LAST") {
-			c.writeResponse(501, EnhancedCode{5, 5, 4}, "Unknown BDAT argument")
-			return
-		}
-		last = true
-	}
-
-	// ParseUint instead of Atoi so we will not accept negative values.
-	size, err := strconv.ParseUint(args[0], 10, 32)
+	size, last, err := parseBdatArgs(arg)
 	if err != nil {
-		c.writeResponse(501, EnhancedCode{5, 5, 4}, "Malformed size argument")
+		c.writeResponse(501, EnhancedCode{5, 5, 4}, err.Error())
 		return
 	}
 
-	if c.server.MaxMessageBytes != 0 && c.bytesReceived+int64(size) > c.server.MaxMessageBytes {
-		c.writeResponse(552, EnhancedCode{5, 3, 4}, "Max message size exceeded")
-		// Never wait on the client for chunk data while holding replies back.
-		c.flush()
-
-		// Discard the chunk itself without passing it to the backend. Chunk data
-		// is opaque and may contain lines longer than the command-line limit, so
-		// the per-line limit must be disabled while discarding (mirroring the
-		// normal chunk-copy path below); otherwise the discard trips
-		// ErrTooLongLine, whose sticky error then surfaces as a spurious "500 Too
-		// long line, closing connection" on the next command read right after the
-		// 552, reintroducing the ambiguous mid-stream drop fixed for DATA (#44).
-		// Restore the limit afterwards so the next command line stays bounded.
-		c.lineLimitReader.LineLimit = 0
-		_, derr := io.Copy(io.Discard, io.LimitReader(c.text.R, int64(size)))
-		c.lineLimitReader.LineLimit = c.server.MaxLineLength
-
-		// A failed discard means the chunk was not fully consumed, so the command
-		// stream is desynced; close deliberately instead of continuing (matching
-		// the DATA-path over-limit behavior of not reusing an unframed stream).
-		if derr != nil {
-			c.closeAfterReplies()
-			return
+	// Even an out-of-sequence chunk carries opaque data. Consume its full
+	// announced length before replying, including chunks already pipelined
+	// after a failed transaction or BDAT LAST (RFC 3030 §2).
+	if !c.fromReceived || len(c.recipients) == 0 {
+		if c.discardBdat(int64(size)) {
+			c.writeResponse(503, EnhancedCode{5, 5, 1}, "Missing RCPT TO command.")
 		}
+		return
+	}
 
+	if c.server.MaxMessageBytes > 0 && int64(size) > c.server.MaxMessageBytes-c.bytesReceived {
+		if c.discardBdat(int64(size)) {
+			c.writeResponse(552, EnhancedCode{5, 3, 4}, "Max message size exceeded")
+		}
 		c.reset()
 		return
 	}
@@ -1596,55 +1542,49 @@ func (c *Conn) handleBdat(arg string) {
 	c.locker.Unlock()
 
 	if r != nil {
-		c.dataResult = make(chan error, 1)
+		// RSET can start a new transaction before this backend returns. Keep
+		// its result channel and envelope tied to the original transfer.
+		result := make(chan error, 1)
+		c.dataResult = result
+		status := c.bdatStatus
+		recipients := append([]string(nil), c.recipients...)
+		session := c.Session()
 
 		go func() {
 			defer func() {
 				if err := recover(); err != nil {
-					c.handlePanic(err, c.bdatStatus)
+					c.handlePanic(err, status)
 
-					c.dataResult <- errPanic
+					result <- errPanic
 					r.CloseWithError(errPanic)
 				}
 			}()
 
 			var err error
 			if !c.server.LMTP {
-				err = c.Session().Data(r)
+				err = session.Data(r)
 			} else {
-				lmtpSession, ok := c.Session().(LMTPSession)
+				lmtpSession, ok := session.(LMTPSession)
 				if !ok {
-					err = c.Session().Data(r)
-					for _, rcpt := range c.recipients {
-						c.bdatStatus.SetStatus(rcpt, err)
+					err = session.Data(r)
+					for _, rcpt := range recipients {
+						status.SetStatus(rcpt, err)
 					}
 				} else {
-					err = lmtpSession.LMTPData(r, c.bdatStatus)
+					err = lmtpSession.LMTPData(r, status)
 				}
 			}
 
-			c.dataResult <- err
+			result <- err
 			r.CloseWithError(err)
 		}()
 	}
 
-	// Chunk data is opaque and may contain lines longer than the command-line
-	// limit, so the limit is disabled while the chunk is copied. It must be
-	// restored before the next command line is read on every exit path
-	// (successful non-LAST or LAST chunk, an error mid-chunk, or an early
-	// return); otherwise a peer could stream one unbounded line between chunks
-	// (RFC 3030 does not suspend the RFC 5321 §4.5.3.1.6 line limit between
-	// chunks). A deferred restore keeps that guarantee in one place, and runs
-	// only after the error branch has finished draining the rest of the chunk.
-	// Never wait on the client for chunk data while holding replies back.
+	// Flush prior envelope replies before waiting for the chunk's octets.
+	// Command limits are enforced by readLine, not on opaque body bytes.
 	c.flush()
 
-	c.lineLimitReader.LineLimit = 0
-	defer func() {
-		c.lineLimitReader.LineLimit = c.server.MaxLineLength
-	}()
-
-	chunk := io.LimitReader(c.text.R, int64(size))
+	chunk := &io.LimitedReader{R: c.text.R, N: int64(size)}
 	c.bodyReadDeadline = c.server.ReadTimeout
 	pipe := c.bdatWriter()
 	if pipe == nil {
@@ -1654,6 +1594,9 @@ func (c *Conn) handleBdat(arg string) {
 		return
 	}
 	_, err = io.Copy(pipe, chunk)
+	if err == nil && chunk.N != 0 {
+		err = io.ErrUnexpectedEOF
+	}
 	if err != nil {
 		// The copy can fail two ways. The backend may reject the chunk early via
 		// CloseWithError, in which case the write to the pipe fails but the read
@@ -1665,6 +1608,9 @@ func (c *Conn) handleBdat(arg string) {
 		// the connection must be closed rather than resumed. A non-nil drainErr is
 		// thus the signal that the stream is desynced.
 		_, drainErr := io.Copy(io.Discard, chunk)
+		if drainErr == nil && chunk.N != 0 {
+			drainErr = io.ErrUnexpectedEOF
+		}
 		c.bodyReadDeadline = 0
 
 		switch {
@@ -1731,6 +1677,27 @@ func (c *Conn) handleBdat(arg string) {
 	} else {
 		c.writeResponse(250, EnhancedCode{2, 0, 0}, "Continue")
 	}
+}
+
+// discardBdat preserves command framing when rejecting a syntactically valid
+// chunk. Flush prior envelope replies first, but send this chunk's failure only
+// after all its octets have arrived. Body deadlines and command limits apply as
+// on the normal transfer path; a partial discard makes the connection unusable.
+func (c *Conn) discardBdat(size int64) bool {
+	c.flush()
+	c.bodyReadDeadline = c.server.ReadTimeout
+	_, err := io.CopyN(io.Discard, c.text.R, size)
+	c.bodyReadDeadline = 0
+	if err != nil {
+		if isBodyReadTimeout(err) {
+			c.writeResponse(errBodyTimeout.Code, errBodyTimeout.EnhancedCode, errBodyTimeout.Message)
+		} else {
+			c.writeResponse(errBodyReadFailed.Code, errBodyReadFailed.EnhancedCode, errBodyReadFailed.Message)
+		}
+		c.closeAfterReplies()
+		return false
+	}
+	return true
 }
 
 // ErrDataReset is returned by Reader pased to Data function if client does not
@@ -2050,7 +2017,7 @@ func (c *Conn) readLine() (string, error) {
 	// Only <CRLF> ends a command line (RFC 5321 §2.3.8). textproto's ReadLine
 	// would also accept a bare LF and so run "NOOP\nMAIL ..." as two commands,
 	// which a relay that frames lines differently can exploit; refuse instead.
-	line, err := c.text.R.ReadString('\n')
+	line, err := c.readCommandLine()
 	if err != nil && !(err == io.EOF && line != "") {
 		return "", err
 	}
@@ -2061,6 +2028,37 @@ func (c *Conn) readLine() (string, error) {
 		line = line[:len(line)-2]
 	}
 	return line, nil
+}
+
+// readCommandLine bounds allocation while applying MaxLineLength only to
+// the command being parsed. A connection-level limiter also inspects read-ahead
+// body bytes, incorrectly rejecting a long BDAT payload sharing a TCP packet
+// with its command. Retain bufio's read-ahead for PIPELINING, but do not examine
+// those bytes until the command/body state machine consumes them.
+func (c *Conn) readCommandLine() (string, error) {
+	var line []byte
+	for {
+		// Peek one byte only when empty: ReadSlice would wait for its entire
+		// buffer (or a newline) even after a smaller limit was exceeded.
+		if c.text.R.Buffered() == 0 {
+			if _, err := c.text.R.Peek(1); err != nil {
+				return string(line), err
+			}
+		}
+		part, _ := c.text.R.Peek(c.text.R.Buffered())
+		end := bytes.IndexByte(part, '\n')
+		if end >= 0 {
+			part = part[:end+1]
+		}
+		if limit := c.server.MaxLineLength; limit > 0 && len(part) > limit-len(line) {
+			return "", ErrTooLongLine
+		}
+		line = append(line, part...)
+		c.text.R.Discard(len(part))
+		if end >= 0 {
+			return string(line), nil
+		}
+	}
 }
 
 // errBareLF is returned by readLine for a command line ended by a bare LF.
