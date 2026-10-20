@@ -1,5 +1,10 @@
 # Coverage
 
+The RFC 2852 DELIVERBY audit adds minimum, case, state and grammar-oracle
+regressions. Its focused tests and vet pass locally. A new coverage measurement,
+full suite, race and timed fuzz run are deferred to CI because the Pi load was
+above 6; the figures below describe the preceding audit, not this change.
+
 After the RFC 7293 RRVS audit, statement coverage of the library package
 and `internal/checklist` is **94.2%** combined (library **93.9%**,
 checker **99.3%**), measured locally

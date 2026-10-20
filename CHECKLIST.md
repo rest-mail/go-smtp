@@ -10,13 +10,13 @@ An item that does not apply, or is a known gap, says "n/a" and why. CI checks
 this file against the tests with `go run ./internal/checklist`; the format is
 described in the [README](README.md#the-rfc-checklist).
 
-Not covered yet: each extension (LMTP, DELIVERBY,
+Not covered yet: each extension (LMTP,
 MT-PRIORITY, XCLIENT) is one row in the extension summary, mapping its existing
 tests, and has not been checked clause by clause; later slots do that.
 STARTTLS (RFC 3207), SIZE (RFC 1870), PIPELINING (RFC 2920),
 CHUNKING/BINARYMIME (RFC 3030), 8BITMIME (RFC 6152), AUTH exchange rules
 (RFC 4954 §4), DSN parameter/protocol rules (RFC 3461 §§2–4, 5.1, 5.4)
-the SMTPUTF8 envelope (RFC 6531) and the RRVS parameter (RFC 7293) are audited below; the remaining AUTH and DSN lifecycle rules remain for later slices.
+the SMTPUTF8 envelope (RFC 6531) the RRVS parameter (RFC 7293) and DELIVERBY transport (RFC 2852) are audited below; the remaining AUTH and DSN lifecycle rules remain for later slices.
 RFC 6409 (submission) is not in this slot. Reply line lengths (§4.5.3.1.5)
 are checked by SMTP-LIM-06;
 SASL challenges retain the independent size rules of RFC 4954 §4.
@@ -137,7 +137,7 @@ SASL challenges retain the independent size rules of RFC 4954 §4.
 | SMTP-EXT-08 | RFC 4954 | Normative | One row for the extension: AUTH: mechanisms, initial response, cancellation, a second AUTH, anonymous access, and read timeouts. The exchange rules have individual rows below; other clauses remain unaudited. | `TestServerAuthTwice`, `TestServerCancelSASL`, `TestServer_authDisabled`, `TestServer_anonymousUserError`, `TestServer_anonymousUserOK`, `TestServer_authParam`, `TestAuthRejectsExtraTokens`, `TestAuthFailed`, `TestClientAuthTrimSpace`, `TestAuthChallengeSentBeforeReadingResponse`, `TestAuthClientCancelReturns501`, `TestAuthContinuationReadTimeoutClosesConnection`, `TestServerAuthUnicodeSpaceIsNotSeparator`, `TestRFC4954_LongChallengeNotTruncated` |
 | SMTP-EXT-09 | RFC 2033 | Normative | One row for the extension: LMTP: `LHLO`, one reply per recipient after the data, and the client side. The clauses of the RFC are not checked one by one yet. | `TestServer_LMTP`, `TestServer_LMTP_Early`, `TestServer_LMTP_Expand`, `TestServer_LMTP_DuplicatedRcpt`, `TestServer_Chunking_LMTP`, `TestLMTP`, `TestLMTPData`, `TestLMTPRcptLeakAcrossTransactions`, `TestLMTPDataErrorMessages` |
 | SMTP-EXT-10 | RFC 7293 | Normative | RRVS summary: the `RRVS` parameter on RCPT. The RFC 7293 audit is below. | `TestServerRRVS`, `TestClientRRVS` |
-| SMTP-EXT-11 | RFC 2852 | Normative | One row for the extension: DELIVERBY: `BY` on MAIL only, in range. The clauses of the RFC are not checked one by one yet. | `TestServerDELIVERBY`, `TestClientDELIVERBY`, `TestClientDeliverByTruncatesToSeconds`, `TestParseDeliverByBoundaries`, `FuzzParseDeliverByArgument`, `TestServerDeliverByAndMTPriorityRejectedOnRcpt` |
+| SMTP-EXT-11 | RFC 2852 | Normative | DELIVERBY summary: `BY` on MAIL only, in range; the detailed audit below separates transport from host delivery policy. | `TestServerDELIVERBY`, `TestClientDELIVERBY`, `TestClientDeliverByTruncatesToSeconds`, `TestParseDeliverByBoundaries`, `FuzzParseDeliverByArgument`, `TestServerDeliverByAndMTPriorityRejectedOnRcpt` |
 | SMTP-EXT-12 | RFC 6710 | Normative | One row for the extension: MT-PRIORITY: the `MT-PRIORITY` parameter on MAIL only, in range. The clauses of the RFC are not checked one by one yet. | `TestServerMTPRIORITY`, `TestClientMTPRIORITY` |
 | SMTP-EXT-13 | Postfix XCLIENT (not an IETF RFC) | Normative | One row for the extension: XCLIENT: a trusted peer may set the client's address and name; an untrusted one may not. The clauses of the RFC are not checked one by one yet. | `TestServerXClientTrusted`, `TestServerXClientUntrusted`, `TestServerXClientKeepsUnicodeSpaceInValue` |
 
@@ -463,3 +463,39 @@ the timestamp and the no-support action in `RcptOptions`.
 | RRVS-RELAY-01 | 5.1.1, 6 | MUST | A relay whose next hop lacks RRVS rejects (550 to DATA or a DSN) unless the action is `C`, and preserves the action when it relays. | n/a: host responsibility: the library has no queue; `RRVS-CLI-02` is the client half. |
 | RRVS-HDR-01 | 3.2, 4, 5.2, 6.1 | Normative | The `Require-Recipient-Valid-Since` header field is parsed, checked, removed and converted to or from the parameter. | n/a: host responsibility: Data does not inspect message content. |
 | RRVS-CLOCK-01 | 5.3 | MUST | Generators and receivers synchronise their clocks, for example with NTP. | n/a: the library has no clock policy; the host's system clock is used. |
+
+
+## DELIVERBY (RFC 2852)
+
+Sections refer to [RFC 2852](https://www.rfc-editor.org/rfc/rfc2852).
+This audits the SMTP transport and the envelope examples in §6. Enabling
+DELIVERBY promises the host implements the delivery and notification semantics;
+passing a relative duration to `Session.Mail` does not enforce a deadline.
+
+| ID | Section | Level | Requirement | Tests |
+|----|---------|-------|-------------|-------|
+| BY-EHLO-01 | 2, 3 | Normative | Advertise DELIVERBY only when enabled, with an optional fixed minimum for return mode. | `TestRFC2852Server` |
+| BY-SYN-01 | 4 | MUST | BY is a MAIL parameter with a required value, one optional sign and one to nine ASCII decimal digits in seconds. | `TestRFC2852Server`, `TestRFC2852CaseInsensitive`, `FuzzParseDeliverByArgument` |
+| BY-SYN-02 | 4 | Normative | Modes N and R and optional trace T are case-insensitive ABNF literals; other suffixes are refused. | `TestRFC2852Server`, `TestRFC2852CaseInsensitive`, `FuzzParseDeliverByArgument` |
+| BY-SYN-03 | 4 | SHOULD | Notify mode permits zero and negative times; return mode requires a positive time, otherwise 501 5.5.4. | `TestRFC2852Server`, `TestRFC2852CaseInsensitive`, `FuzzParseDeliverByArgument` |
+| BY-SRV-01 | 3, 4 | Normative | A valid return deadline below the fixed server minimum receives a 55z permanent failure (555); the minimum does not restrict notify mode. | `TestRFC2852Server` |
+| BY-SRV-02 | 2, 3, 4 | Normative | The message deadline, mode and trace reach Mail; BY is refused on RCPT and when disabled. | `TestRFC2852Server` |
+| BY-STATE-01 | 4 | Normative | Refused requests do not reach the backend; RSET and a new MAIL do not reuse an earlier deadline. | `TestRFC2852Server` |
+| BY-CLI-01 | 3, 4.1.4.1 | MUST NOT | Return-mode mail is not sent when its remaining time is below the next hop's advertised minimum. | `TestRFC2852ClientMinimum` |
+| BY-CLI-02 | 2, 4.1.4.1 | Normative | Parse the minimum before future comma-separated options; refuse malformed minima for return mode without writing MAIL. | `TestRFC2852ClientMinimum` |
+| BY-EXAMPLE-01 | 6 | Normative | Accept the 120-second original and 98-second relayed envelopes; refuse the 240-second next-hop minimum and accept 30. | `TestRFC2852Server`, `TestRFC2852ClientMinimum` |
+| BY-LEN-01 | 2(5) | Normative | Allow 17 extra octets on MAIL for BY. | n/a: default MaxLineLength is 2000, above 512 plus 17; hosts lowering it must budget all enabled extensions. |
+| BY-CLOCK-01 | 4 | Normative | Convert relative time to an absolute deadline on receipt, without extending ordinary retention or treating it as a delivery start time. | n/a: host owns the clock and queue; Mail receives only a duration and must capture receipt time. |
+| BY-DSN-01 | 4.1.1 | Normative | Successful delivery honors requested SUCCESS notifications. | n/a: host owns DSN generation and recipient notification options. |
+| BY-DSN-02 | 4.1.2 | MUST | Before expiry, permanent failure produces failed DSNs for recipients with default or FAILURE notification policy. | n/a: host owns delivery outcome and DSN generation. |
+| BY-RETRY-01 | 4.1.2 | SHOULD | Temporary failure before expiry follows site retry policy while preserving deadline rules. | n/a: library has no retry queue. |
+| BY-EXPIRE-01 | 4.1.3 | MUST | At return-mode expiry stop delivery and issue failed DSNs with 5.4.7, subject to recipient notification policy. | n/a: host must enforce expiry and generate reports; transport does neither. |
+| BY-EXPIRE-02 | 4.1.3 | MUST | At notify-mode expiry issue delayed DSNs with 4.4.7 for default or DELAY policy; delivery should continue. | n/a: host owns expiry, retries and reports. |
+| BY-RELAY-01 | 4.1.4 | MUST | Relay with time remaining recomputed near MAIL transmission, preserving mode and trace; expired relay is notify-only. | n/a: callers must compute remaining Time; client has no absolute deadline or queue. |
+| BY-TRACE-01 | 4.1.4 | SHOULD | Trace requests generate nonterminal relayed DSNs except for NEVER recipients. | n/a: host owns trace reports and notification policy. |
+| BY-RELAY-02 | 4.1.4.1 | MUST NOT | Return-mode mail cannot relay to a peer without DELIVERBY. | n/a: client refuses unadvertised BY, but host owns alternate-hop selection and failure DSNs. |
+| BY-RELAY-03 | 4.1.4.2 | MUST | Notify-mode fallback to an unextended peer generates relayed DSNs before expiry and adjusts DSN DELAY requests as specified. | n/a: explicit gap: client conservatively refuses all unadvertised BY; host must choose fallback and generate reports. |
+| BY-GATEWAY-01 | 4.1.5 | Normative | Foreign gateways preserve equivalent deadline semantics or apply unextended-peer rules. | n/a: no foreign gateway implementation in this library. |
+| BY-DSN-03 | 4.1, 5 | SHOULD | Deadline-related DSNs include Arrival-Date and Deliver-By-Date in the prescribed date format. | n/a: host supplies DSN messages; transport does not inspect their content. |
+| BY-MX-01 | 7 | SHOULD NOT | Clients avoid trying multiple MX hosts merely to discover DELIVERBY support. | n/a: host chooses MX routes; Client connects to one chosen peer. |
+| BY-MX-02 | 7 | Normative | MX minimum advertisements account for downstream minima and normal relay latency. | n/a: host configures MinimumDeliverByTime from its routing policy. |

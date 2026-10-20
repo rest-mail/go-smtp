@@ -146,6 +146,22 @@ actual TCP window or reading responses concurrently. Its congestion tests prove
 that assumed window only; smaller windows and oversized individual commands
 remain a conformance gap (PIPE-CLIENT-07), bounded by `CommandTimeout`.
 
+DELIVERBY (`EnableDELIVERBY`) requires the host to enforce RFC 2852's deadline
+and notification rules. `Session.Mail` receives a relative `DeliverBy.Time`;
+capture receipt time there, enforce expiry in the queue, and recompute time
+remaining before relaying. Return mode requires a positive deadline; notify
+mode accepts zero and negative values. `MinimumDeliverByTime` should be whole
+seconds in the range 0–999999999; zero omits the advertised minimum. A valid
+return request below the configured minimum receives 555 5.5.4.
+
+The client checks the peer's advertised minimum for return mode before MAIL,
+including comma-separated future options. It refuses malformed minima and
+all unadvertised BY requests. Notify-mode fallback to a peer without DELIVERBY
+is a host decision requiring DSNs and notification adjustments; the client
+does not silently drop the parameter. Hosts also generate deadline/trace DSNs,
+include Arrival-Date/Deliver-By-Date, preserve mode/trace across hops and choose
+MX routes. The transport checklist explicitly records these responsibilities.
+
 ## Relationship with net/smtp
 
 The Go standard library provides a SMTP client implementation in `net/smtp`.

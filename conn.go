@@ -664,7 +664,7 @@ func (c *Conn) handleMail(arg string) {
 			if c.server.MinimumDeliverByTime != 0 &&
 				deliverBy.Mode == DeliverByReturn &&
 				deliverBy.Time < c.server.MinimumDeliverByTime {
-				c.writeResponse(501, EnhancedCode{5, 5, 4}, "BY parameter is below server minimum")
+				c.writeResponse(555, EnhancedCode{5, 5, 4}, "BY parameter is below server minimum")
 				return
 			}
 			opts.DeliverBy = deliverBy

@@ -163,6 +163,8 @@ func parseDeliverByArgument(arg string) *DeliverByOptions {
 	if len(digits) < 1 || len(digits) > 9 {
 		return nil
 	}
+	// ABNF quoted literals are ASCII case-insensitive.
+	modeStr = strings.ToUpper(modeStr)
 	modeStr, traceValue := strings.CutSuffix(modeStr, "T")
 	if modeStr != string(DeliverByNotify) && modeStr != string(DeliverByReturn) {
 		return nil

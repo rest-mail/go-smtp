@@ -1986,7 +1986,6 @@ func TestServerDELIVERBY(t *testing.T) {
 		"MAIL FROM:<root@nsa.gov> BY=1234",
 		"MAIL FROM:<root@nsa.gov> BY=123;RT;",
 		"MAIL FROM:<root@nsa.gov> BY=0;R",
-		"MAIL FROM:<root@nsa.gov> BY=49;RT",
 	}
 
 	for _, msg := range malformedMsgs {

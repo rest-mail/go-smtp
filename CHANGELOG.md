@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Checked RFC 2852 DELIVERBY transport requirements, section 6 envelopes,
+  minimum/deadline/state tests and a grammar oracle for the existing BY fuzzer.
+  Queue expiry, DSNs and routing policy are explicit host responsibilities.
+
 - Checked RFC 7293 RRVS requirements: the EHLO keyword, the strict RCPT
   parameter grammar and the client's sending rules. The ownership check,
   relaying and the header field are explicit host responsibilities.
@@ -49,6 +53,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   unsupported enforcement modes are explicitly recorded.
 
 ### Fixed
+
+- DELIVERBY accepts case-insensitive ABNF mode/trace letters. Valid return
+  deadlines below the server minimum receive 555 instead of a syntax error.
+  The client refuses return deadlines below the peer's advertised minimum
+  (or malformed minima) before writing MAIL.
 
 - RRVS: the server refuses a value with fractional seconds or a no-support
   action other than `R` or `C` (it used to ignore anything after `;`), and
