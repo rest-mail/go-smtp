@@ -19,6 +19,12 @@ current stable Go (1.27.2 when this was measured) and gets 87.2% (measured befor
 on Go 1.27.1 on the Pi report 89.9% (the package alone 89.3%, no race detector
 there; measured locally after #88 landed). The floor leaves room for that difference.
 
+After the RFC 3207 STARTTLS audit, a local run on Go 1.27.1 (linux/arm64,
+without the race detector) reports **91.0%** combined: the library is 90.5%
+and `internal/checklist` is 99.3%. This includes handshake success, certificate
+rejection, handshake timeout and nested-upgrade refusal. The next CI run must
+supply the comparable CI figure; the 85% gate is unchanged.
+
 The other `go-*` libraries fail CI below 95%, through go-spf's shared
 `rfc-verification.yml`. go-smtp is not there yet, and this slot (the RFC 5321
 core) does not close the gap, so CI keeps its own steps and gates on a **floor

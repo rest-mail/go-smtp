@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- Clause-by-clause RFC 3207 STARTTLS checklist, with tests for the usage example,
+  TLS state, session replacement, plaintext local delivery, temporary refusal,
+  certificate verification and a stalled client handshake. Host policy and
+  unsupported enforcement modes are explicitly recorded.
+
+### Fixed
+
+- STARTTLS parameters are now refused with 501 instead of being discarded and
+  starting a handshake. Parsing and its fuzz oracle preserve the parameters.
+- STARTTLS client constructors now complete the handshake and certificate
+  verification before returning success. Negotiation uses CommandTimeout;
+  failures close the connection. Pre-TLS extensions and recipients are cleared,
+  and nested TLS upgrades are refused without disturbing the active session.
+- The server discards pre-TLS XCLIENT assertions after STARTTLS, alongside its
+  existing EHLO/authentication/session reset. Trusted proxies must reassert
+  that identity over the encrypted connection.
+
 ## [0.30.0] - 2026-10-19
 
 ### Added

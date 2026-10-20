@@ -125,6 +125,7 @@ func TestAuthRejectsExtraTokens(t *testing.T) {
 // 523.
 //
 // checklist: SMTP-EXT-07
+// checklist: TLS-POLICY-03
 func TestAuthTLSRequiredCode(t *testing.T) {
 	_, c, br := newConformanceServer(t, nil) // AllowInsecureAuth stays false
 	drainEHLO(t, c, br)

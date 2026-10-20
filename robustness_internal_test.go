@@ -30,6 +30,7 @@ func (nopSession) Data(io.Reader) error            { return nil }
 // the connection.
 //
 // checklist: SMTP-EXT-07
+// checklist: TLS-SERVER-01
 func TestStartTLSClosesOnHandshakeFailure(t *testing.T) {
 	cert, err := tls.X509KeyPair(localhostCert, localhostKey)
 	if err != nil {
