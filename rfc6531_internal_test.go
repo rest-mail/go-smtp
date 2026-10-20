@@ -112,6 +112,39 @@ func TestRFC6531ServerEnvelope(t *testing.T) {
 	expect("RCPT b@example.org")
 }
 
+// checklist: UTF8-MAIL-01 UTF8-MAIL-02 UTF8-MAIL-03 UTF8-STATE-01
+func TestRFC6531ServerParameterValue(t *testing.T) {
+	command, _, got := rfc6531Conn(t, true)
+	for _, parameter := range []string{
+		"SMTPUTF8=", "sMtPuTf8=", "SMTPUTF8=yes", "SMTPUTF8==",
+		"SIZE=0 SMTPUTF8=", "SMTPUTF8= BODY=8BITMIME",
+		"SMTPUTF8=\tSIZE=0", "SMTPUTF8= SMTPUTF8",
+	} {
+		command("MAIL FROM:<a@example.org> "+parameter, "501 5.5.4")
+		select {
+		case call := <-got:
+			t.Fatalf("refused parameter %q reached backend: %q", parameter, call)
+		default:
+		}
+		// A refused parameter must not begin a transaction or enable UTF-8.
+		command("RCPT TO:<b@example.org>", "503 ")
+		command("MAIL FROM:<élisa@example.org>", "550 5.6.7")
+	}
+
+	// Both bare spellings remain valid and start a usable UTF-8 transaction.
+	for _, parameter := range []string{"SMTPUTF8", "sMtPuTf8"} {
+		command("MAIL FROM:<élisa@example.org> "+parameter, "250 ")
+		if call := <-got; call != "MAIL élisa@example.org +SMTPUTF8" {
+			t.Fatalf("bare parameter reached backend as %q", call)
+		}
+		command("RCPT TO:<用户@example.org>", "250 ")
+		if call := <-got; call != "RCPT 用户@example.org" {
+			t.Fatalf("UTF-8 recipient reached backend as %q", call)
+		}
+		command("RSET", "250 ")
+	}
+}
+
 // checklist: UTF8-ADDR-02 UTF8-MAIL-02
 func TestRFC6531ServerDisabled(t *testing.T) {
 	command, _, _ := rfc6531Conn(t, false)

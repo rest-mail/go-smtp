@@ -552,7 +552,8 @@ func (c *Conn) handleMail(arg string) {
 	c.utf8 = false
 	// This is where the Conn may put BODY=8BITMIME, but we already
 	// read the DATA as bytes, so it does not effect our processing.
-	for key, value := range args {
+	for key, arg := range args {
+		value := arg.value
 		switch key {
 		case "SIZE":
 			if len(value) > 20 || !isDecimal(value) {
@@ -575,7 +576,7 @@ func (c *Conn) handleMail(arg string) {
 				return
 			}
 			// RFC 6531 §3.1 item 4: the parameter does not accept a value.
-			if value != "" {
+			if arg.hasValue {
 				c.writeResponse(501, EnhancedCode{5, 5, 4}, "SMTPUTF8 does not accept a value")
 				return
 			}
@@ -1052,7 +1053,8 @@ func (c *Conn) handleRcpt(arg string) {
 
 	opts := &RcptOptions{}
 
-	for key, value := range args {
+	for key, arg := range args {
+		value := arg.value
 		switch key {
 		case "NOTIFY":
 			if !c.server.EnableDSN {

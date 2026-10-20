@@ -418,14 +418,14 @@ UTF-8 `ORCPT` encoding of RFC 6533 stays in SMTP-EXT-06.
 |----|---------|-------|-------------|-------|
 | UTF8-EHLO-01 | 3.1 items 2–3 | MUST NOT | SMTPUTF8 is advertised without parameters, and only when the host enables it. | `TestRFC6531Advertisement` |
 | UTF8-EHLO-02 | 3.1 item 8 | MUST | A server offering SMTPUTF8 also announces 8BITMIME. | `TestRFC6531Advertisement` |
-| UTF8-MAIL-01 | 3.1 item 4, 3.4 | MUST | The MAIL parameter SMTPUTF8 does not accept a value; one is refused with 501 5.5.4. | `TestRFC6531ServerEnvelope` |
-| UTF8-MAIL-02 | 3.1 item 4 | Normative | The parameter is accepted case-insensitively and reaches the backend as `MailOptions.UTF8`; it is refused with 504 when not advertised. | `TestRFC6531ServerEnvelope`, `TestRFC6531ServerDisabled` |
-| UTF8-MAIL-03 | 3.1 item 4, 3.4 | MUST NOT | `SMTPUTF8=` with an empty value is refused. | n/a: gap: parseArgs maps `SMTPUTF8` and `SMTPUTF8=` to the same empty value, so the empty form is accepted as the bare parameter. |
+| UTF8-MAIL-01 | 3.1 item 4, 3.4 | MUST | The MAIL parameter SMTPUTF8 does not accept a value; one is refused with 501 5.5.4. | `TestRFC6531ServerEnvelope`, `TestRFC6531ServerParameterValue` |
+| UTF8-MAIL-02 | 3.1 item 4 | Normative | The parameter is accepted case-insensitively and reaches the backend as `MailOptions.UTF8`; it is refused with 504 when not advertised. | `TestRFC6531ServerEnvelope`, `TestRFC6531ServerDisabled`, `TestRFC6531ServerParameterValue` |
+| UTF8-MAIL-03 | 3.1 item 4, 3.4 | MUST NOT | `SMTPUTF8=` with an empty value is refused. | `TestRFC6531ServerParameterValue` |
 | UTF8-MAIL-04 | 3.1 item 5 | Normative | The MAIL command line may be 10 octets longer to carry the parameter. | n/a: the default command limit (`MaxLineLength` 2000) is above RFC 5321's 512 plus 10; a host lowering it below 522 owns that choice. |
 | UTF8-ADDR-01 | 3.2, 3.3 | MUST | A server announcing SMTPUTF8 accepts a UTF-8 string wherever a mailbox appears, and passes it to the backend unchanged. | `TestRFC6531ServerEnvelope` |
 | UTF8-ADDR-02 | 3.5 | Normative | Without SMTPUTF8 on MAIL, a non-ASCII reverse-path gets 550 5.6.7 and a non-ASCII forward-path gets 553 5.6.7, whether or not the extension is enabled. | `TestRFC6531ServerEnvelope`, `TestRFC6531ServerDisabled` |
 | UTF8-ADDR-03 | 3.2; RFC 3629 | MUST | Addresses are UTF-8 strings: a mailbox with invalid UTF-8 octets is refused with 501 5.5.2. | `TestRFC6531ServerEnvelope` |
-| UTF8-STATE-01 | 3.4 | Normative | SMTPUTF8 applies to its own transaction: RSET or a new MAIL without the parameter drops it, on server and client. | `TestRFC6531ServerEnvelope`, `TestRFC6531Client` |
+| UTF8-STATE-01 | 3.4 | Normative | SMTPUTF8 applies to its own transaction: RSET or a new MAIL without the parameter drops it, on server and client. | `TestRFC6531ServerEnvelope`, `TestRFC6531Client`, `TestRFC6531ServerParameterValue` |
 | UTF8-CLIENT-01 | 3.2, 3.4 | MUST | The client sends a non-ASCII sender only with SMTPUTF8, and a non-ASCII recipient only in a transaction whose MAIL carried it; otherwise it refuses without writing. | `TestRFC6531Client`, `TestSendMail_SMTPUTF8_Autodetect`, `TestSendMail_SMTPUTF8_NotAdvertised` |
 | UTF8-CLIENT-02 | 3.2 | MUST NOT | The client does not send SMTPUTF8 to a server that did not advertise it. | `TestSendMail_SMTPUTF8_NotAdvertised`, `TestRFC6531Client` |
 | UTF8-CLIENT-03 | 3.1 item 3 | MUST | The client ignores any parameters on the SMTPUTF8 keyword. | `TestRFC6531Client` |

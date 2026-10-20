@@ -1,13 +1,13 @@
 # Coverage
 
-After merging the RFC 3030 CHUNKING/BINARYMIME transport and RFC 3461
-DSN parameter/protocol audits, statement coverage of the library package
-and `internal/checklist` is **93.6%** combined (library **93.2%**,
+After the RFC 6531 SMTPUTF8 envelope audit and its empty-assignment
+regression fix, statement coverage of the library package
+and `internal/checklist` is **94.0%** combined (library **93.6%**,
 checker **99.3%**), measured locally
 on Go 1.27.1 linux/arm64 without the race detector. The local command was:
 
 ```
-go test -count=1 -covermode=atomic -coverprofile=coverage.out . ./internal/...
+go test -count=1 -coverprofile=coverage.out . ./internal/...
 go tool cover -func=coverage.out
 ```
 
