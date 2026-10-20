@@ -1707,7 +1707,7 @@ func TestServerDSN(t *testing.T) {
 // non-ASCII must be well-formed UTF-8 (RFC 3629), while HEXPOINT digits are
 // case-insensitive like all ABNF (RFC 5234 section 2.3).
 //
-// checklist: SMTP-EXT-06
+// checklist: SMTP-EXT-06 UTF8-DSN-01
 func TestServerDSNUTF8AddressORCPT(t *testing.T) {
 	be, s, c, scanner, _ := testServerEhlo(t,
 		func(s *smtp.Server) {
@@ -1754,7 +1754,7 @@ func TestServerDSNUTF8AddressORCPT(t *testing.T) {
 	}
 }
 
-// checklist: SMTP-EXT-06
+// checklist: SMTP-EXT-06 UTF8-DSN-01
 func TestServerDSNwithSMTPUTF8(t *testing.T) {
 	be, s, c, scanner, caps := testServerEhlo(t,
 		func(s *smtp.Server) {
@@ -1770,7 +1770,7 @@ func TestServerDSNwithSMTPUTF8(t *testing.T) {
 		}
 	}
 
-	io.WriteString(c, "MAIL FROM:<e=mc2@example.com> ENVID=e+3Dmc2 RET=HDRS\r\n")
+	io.WriteString(c, "MAIL FROM:<e=mc2@example.com> ENVID=e+3Dmc2 RET=HDRS SMTPUTF8\r\n")
 	scanner.Scan()
 	if !strings.HasPrefix(scanner.Text(), "250 ") {
 		t.Fatal("Invalid MAIL response:", scanner.Text())

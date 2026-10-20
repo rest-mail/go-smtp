@@ -624,7 +624,7 @@ SendMail is working for me.
 QUIT
 `
 
-// checklist: SMTP-EXT-06
+// checklist: SMTP-EXT-06 UTF8-CLIENT-01 UTF8-CLIENT-04
 func TestSendMail_SMTPUTF8_Autodetect(t *testing.T) {
 	buildServer := func(nRcpt int) string {
 		s := "220 hello world\r\n" +
@@ -700,7 +700,7 @@ func TestSendMail_SMTPUTF8_Autodetect(t *testing.T) {
 	}
 }
 
-// checklist: SMTP-EXT-06
+// checklist: SMTP-EXT-06 UTF8-CLIENT-01 UTF8-CLIENT-02
 func TestSendMail_SMTPUTF8_NotAdvertised(t *testing.T) {
 	const server = "220 hello world\r\n" +
 		"250-mx.example.com at your service\r\n" +
@@ -1224,6 +1224,7 @@ func TestClientDSN(t *testing.T) {
 		Notify:                []DSNNotify{DSNNotifyFailure, DSNNotifyDelayed},
 	})
 	c.ext["SMTPUTF8"] = ""
+	c.utf8 = true // as if MAIL carried SMTPUTF8 (RFC 6531 §3.4)
 	c.Rcpt(dsnEmailUTF8, &RcptOptions{
 		OriginalRecipientType: DSNAddressTypeUTF8,
 		OriginalRecipient:     dsnEmailUTF8,

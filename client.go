@@ -35,6 +35,7 @@ type Client struct {
 	didHello   bool              // whether we've said HELO/EHLO/LHLO
 	helloError error             // the error from the hello
 	rcpts      []string          // recipients accumulated for the current session
+	utf8       bool              // whether the current MAIL carries SMTPUTF8
 
 	// Time to wait for command responses (this includes 3xx reply to DATA).
 	CommandTimeout time.Duration
@@ -350,6 +351,7 @@ func (c *Client) startTLS(config *tls.Config) error {
 	// RFC 3207 §4.2: no pre-TLS SMTP knowledge survives the upgrade.
 	c.ext = nil
 	c.rcpts = nil
+	c.utf8 = false
 	c.didHello = false
 	c.helloError = nil
 	return nil
@@ -539,12 +541,16 @@ func (c *Client) buildMailCmd(from string, opts *MailOptions) (string, error) {
 			return "", errors.New("smtp: server does not support REQUIRETLS")
 		}
 	}
-	if opts != nil && opts.UTF8 {
+	utf8 := opts != nil && opts.UTF8
+	if utf8 {
 		if _, ok := c.ext["SMTPUTF8"]; ok {
 			sb.WriteString(" SMTPUTF8")
 		} else {
 			return "", errors.New("smtp: server does not support SMTPUTF8")
 		}
+	} else if !isASCII(from) {
+		// RFC 6531 §3.4: an internationalized envelope needs SMTPUTF8 on MAIL.
+		return "", errors.New("smtp: non-ASCII address requires SMTPUTF8")
 	}
 	if _, ok := c.ext["DSN"]; ok && opts != nil {
 		switch opts.Return {
@@ -602,6 +608,7 @@ func (c *Client) buildMailCmd(from string, opts *MailOptions) (string, error) {
 		}
 		fmt.Fprintf(&sb, " MT-PRIORITY=%d", *opts.MTPriority)
 	}
+	c.utf8 = utf8
 	return sb.String(), nil
 }
 
@@ -631,6 +638,9 @@ func (c *Client) Rcpt(to string, opts *RcptOptions) error {
 func (c *Client) buildRcptCmd(to string, opts *RcptOptions) (string, error) {
 	if err := validateLine(to); err != nil {
 		return "", err
+	}
+	if !c.utf8 && !isASCII(to) {
+		return "", errors.New("smtp: non-ASCII address requires SMTPUTF8")
 	}
 
 	var sb strings.Builder
@@ -1024,6 +1034,7 @@ func (c *Client) Reset() error {
 	c.helloError = nil
 
 	c.rcpts = nil
+	c.utf8 = false
 	return nil
 }
 
