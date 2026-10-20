@@ -10,12 +10,13 @@ An item that does not apply, or is a known gap, says "n/a" and why. CI checks
 this file against the tests with `go run ./internal/checklist`; the format is
 described in the [README](README.md#the-rfc-checklist).
 
-Not covered yet: each extension (DSN, CHUNKING,
+Not covered yet: each extension (CHUNKING,
 SMTPUTF8, LMTP, RRVS, DELIVERBY, MT-PRIORITY, XCLIENT) is one
 row in the extension summary, mapping its existing tests, and has not been checked
 clause by clause; later slots do that. STARTTLS (RFC 3207), SIZE (RFC 1870),
 PIPELINING (RFC 2920), 8BITMIME (RFC 6152) and AUTH exchange rules
-(RFC 4954 §4) are audited below; the rest of RFC 4954 remains for later slices.
+(RFC 4954 §4), plus DSN parameter/protocol rules (RFC 3461 §§2–4, 5.1, 5.4),
+are audited below; the rest of RFC 4954 remains for later slices.
 RFC 6409 (submission) is not in this slot. Reply line lengths (§4.5.3.1.5)
 are checked by SMTP-LIM-06;
 SASL challenges retain the independent size rules of RFC 4954 §4.
@@ -129,7 +130,7 @@ SASL challenges retain the independent size rules of RFC 4954 §4.
 | SMTP-EXT-01 | RFC 2920 | Normative | PIPELINING regression summary; the clause-by-clause RFC 2920 audit below records its fixed-window client limitation. | `TestPipeline_NoRoundTripDeadlock`, `TestPipeline_Integration`, `TestPipeline_NotSupported`, `TestPipeline_LargeGroupDoesNotDeadlock`, `TestPipeline_LMTPSeesOnlyAcceptedRecipients`, `TestPipeline_StalledServerTimesOut`, `TestPipeline_ServerHangupMidGroup`, `TestPipelinedRepliesShareOneWrite`, `TestSingleCommandReplyIsPrompt`, `TestPartialPipelinedLineDoesNotHoldReplies` |
 | SMTP-EXT-02 | RFC 6152 | Normative | 8BITMIME summary: `BODY=8BITMIME` and `7BIT` are accepted, other values are refused without BINARYMIME. Clause-by-clause transport checks and host responsibilities are below. | `TestServer8BITMIME`, `TestServer_BODYInvalidValue` |
 | SMTP-EXT-03 | RFC 1870 | Normative | SIZE summary: declared and actual sizes are checked against `MaxMessageBytes` (inclusive); oversized content is drained with a bound. The RFC 1870 audit is below. | `TestServerBadSize`, `TestServerTooBig`, `TestServerSizeLimit_ExactlyMaxAccepted`, `TestServerSizeLimit_OverMaxRejected`, `TestServerSizeLimit_RejectWithinLimitKeepsConnection`, `TestServerSizeLimit_OversizedKeepsConnection`, `TestServerSizeLimit_OverLimitDrainBounded`, `TestServerSizeLimit_LMTP_OverLimitDrainBounded`, `TestServerSizeLimit_LMTP_Fallback_OverLimitDrainBounded` |
-| SMTP-EXT-04 | RFC 3461, xtext (RFC 3461 §4) | Normative | One row for the extension: DSN: `RET`, `ENVID`, `NOTIFY` and `ORCPT`, with xtext encoding both ways. The clauses of the RFC are not checked one by one yet. | `TestServerDSN`, `TestClientDSN`, `TestClientXtext`, `TestXtextRoundTrip`, `TestServer_xtextLiteralNonXchar`, `FuzzDecodeXtext`, `FuzzEncodeXtext` |
+| SMTP-EXT-04 | RFC 3461, xtext (RFC 3461 §4) | Normative | DSN regression summary: `RET`, `ENVID`, `NOTIFY` and `ORCPT`, with xtext encoding both ways. The protocol audit below records scope and host responsibilities. | `TestServerDSN`, `TestClientDSN`, `TestClientXtext`, `TestXtextRoundTrip`, `TestServer_xtextLiteralNonXchar`, `FuzzDecodeXtext`, `FuzzEncodeXtext` |
 | SMTP-EXT-05 | RFC 3030 | Normative | One row for the extension: CHUNKING and BINARYMIME: BDAT chunks, reset, errors, size limits and shutdown. The clauses of the RFC are not checked one by one yet. | `TestServer_Chunking`, `TestServer_Chunking_LMTP`, `TestServer_Chunking_Reset`, `TestServer_Chunking_ClosedInTheMiddle`, `TestServer_Chunking_EarlyError`, `TestServer_Chunking_EarlyErrorDuringChunk`, `TestServer_Chunking_tooLongMessage`, `TestServer_Chunking_OverLimitDiscardKeepsConnection`, `TestServer_Chunking_Binarymime`, `TestServer_Chunking_LineLimitAfterNonLastBdat`, `TestBDATShutdownRace`, `TestBdatReadTimeoutClosesConnection`, `TestEODBDATChunksIgnoreDotSequences`, `TestServerBdatUnicodeSpaceIsNotSeparator` |
 | SMTP-EXT-06 | RFC 6531, 6533 | Normative | One row for the extension: SMTPUTF8: the parameter, UTF-8 addresses, `ORCPT` with UTF-8 (xtext and unitext), and the client's detection. The clauses of the RFC are not checked one by one yet. | `TestServerSMTPUTF8`, `TestServerSMTPUTF8_Disabled`, `TestServerDSNUTF8AddressORCPT`, `TestServerDSNwithSMTPUTF8`, `TestSendMail_SMTPUTF8_Autodetect`, `TestSendMail_SMTPUTF8_NotAdvertised`, `TestIsASCII`, `TestUTF8AddrOracleCatchesMutants`, `TestUTF8AddrRFC6533Regressions`, `TestClientORCPTUTF8Encoding`, `FuzzDecodeUTF8AddrXtext`, `FuzzEncodeUTF8AddrXtext`, `FuzzEncodeUTF8AddrUnitext` |
 | SMTP-EXT-07 | RFC 3207 | Normative | STARTTLS summary: parser, handshake, TLS state, close races and AUTH protection. The clause-by-clause audit is below. | `TestTLSClient`, `TestTLSConnState`, `TestStartTLSClosesOnHandshakeFailure`, `TestStartTLSCloseRace`, `TestStartTLSReplySentBeforeHandshake`, `TestParseCmdSTARTTLSExact`, `TestAuthTLSRequiredCode`, `TestNewClientStartTLS` |
@@ -326,3 +327,44 @@ recipients, so the conditional path of §3.2(4) cannot reach backend delivery.
 `TestRFC2920EmptyDataRecovery` separately exercises the client against a peer
 that incorrectly accepts that DATA command. SEND/SOML/SAML, EXPN and TURN are
 not implemented; their refusal remains explicit (SMTP-CMD-07).
+
+## DSN parameters and protocol (RFC 3461 §§2–4, 5.1, 5.4)
+
+This slice audits the SMTP parameters and their transport, not a complete MTA's
+notification lifecycle. Sections below refer to RFC 3461 unless stated otherwise.
+The §10.1 example tests its envelope and recipient requests; it does not claim
+that the host generates the reports in §§10.6–10.9. RFC 6533's UTF-8 address
+encoding remains in SMTP-EXT-06, not this RFC 3461 ASCII-address audit.
+
+| ID | Section | Level | Requirement | Tests |
+|----|---------|-------|-------------|-------|
+| DSN-EHLO-01 | 2–3 | Normative | DSN is advertised without arguments only when the host enables the capability. | `TestRFC3461Parameters`, `TestRFC3461Disabled` |
+| DSN-SYNTAX-01 | 4.1 | MUST | NOTIFY has a value containing only case-insensitive ASCII SUCCESS, FAILURE, DELAY, or standalone NEVER; unknown and non-ASCII conditions are refused. | `TestRFC3461Parameters`, `TestRFC3461ClientParameters`, `FuzzRFC3461Notify` |
+| DSN-SYNTAX-02 | 4.1; RFC 822 §2.7 | Normative | The 1# list permits repeated conditions and null elements but requires a non-null condition; NEVER cannot appear in any list. Backend conditions are unique and nonempty. | `TestRFC3461Parameters`, `TestRFC3461ClientParameters`, `FuzzRFC3461Notify` |
+| DSN-SYNTAX-03 | 4.3 | MUST | RET has the case-insensitive ASCII value FULL or HDRS; absent RET remains unset for host policy. | `TestRFC3461Parameters`, `TestRFC3461ClientParameters` |
+| DSN-SYNTAX-04 | 4.4 | MUST | ENVID has an xtext value decoding to printable US-ASCII, including spaces; its opaque value and absence reach the host unchanged. | `TestRFC3461Parameters`, `TestRFC3461ClientParameters` |
+| DSN-SYNTAX-05 | 4.2 | MUST | RFC822 ORCPT has an address type, semicolon and xtext address decoding to printable US-ASCII; it is not required to match mailbox syntax or the current recipient. | `TestRFC3461Parameters`, `TestRFC3461ClientParameters` |
+| DSN-SYNTAX-06 | 4.5 | MUST NOT | RET/ENVID cannot repeat within MAIL, nor NOTIFY/ORCPT within RCPT; repeats receive 501. | `TestRFC3461Parameters` |
+| DSN-REPLY-01 | 5.1 | MUST | Valid DSN parameters do not change the SMTP policy result; malformed or duplicate parameters receive 501, and a rejected command leaves the connection usable. | `TestRFC3461Parameters`, `TestRFC3461BackendStatus` |
+| DSN-REPLY-02 | 2–3 | Normative | A server with DSN disabled refuses its parameters without starting a MAIL transaction or accepting that recipient. | `TestRFC3461Disabled` |
+| DSN-STATE-01 | 3, 4.1–4.4 | Normative | MAIL metadata belongs to the transaction and each recipient retains its own NOTIFY/ORCPT; RSET and a completed transaction do not leak metadata into the next message. | `TestRFC3461Parameters`, `TestRFC3461SubmissionExample` |
+| DSN-CLIENT-01 | 2–4 | Normative | The client encodes printable identifiers/original addresses as xtext and never sends DSN parameters without advertised support; invalid API choices fail before any command is written. | `TestRFC3461ClientParameters` |
+| DSN-LIMIT-01 | 5.4 | MUST | The default server accepts the ENVID, NOTIFY, ORCPT and RET minimum parameter allowances (100, 28, 500 and 8 characters). | `TestRFC3461ParameterSizes` |
+| DSN-LIMIT-02 | 5.4 | MUST | The default server accepts a 1036-octet RCPT command including DSN parameters and CRLF. | `TestRFC3461ParameterSizes` |
+| DSN-EXAMPLE-01 | 10.1 | Normative | The submission example preserves Alice's ENVID/RET and six recipients' different notification requests through DATA. | `TestRFC3461SubmissionExample` |
+| DSN-SCOPE-01 | 4.2 | MUST | Registered address types beyond RFC822 must retain their defined printable representation. | n/a: not supported yet; decodeTypedAddress and the client accept only RFC822 and the separately tested RFC 6533 UTF-8 type. A registry/extensibility API is a future slice. |
+| DSN-HOST-01 | 4.1, 4.3 | Normative | Absent NOTIFY means FAILURE or FAILURE,DELAY; absent RET permits headers or full content, and no DELAY requests no delayed report. | n/a: the host interprets unset options and notification policy; the library preserves absence rather than choosing defaults. |
+| DSN-HOST-02 | 4.2, 5.4 | MUST | Initial submission and mailing-list redistribution use the current recipient as ORCPT. | n/a: callers distinguish new submission from relay and choose identifiers; the generic transport cannot infer that role or enforce equality during forwarding. |
+| DSN-LIMIT-03 | 5.4 | SHOULD NOT | Submitting user agents generate ENVID parameters longer than 38 characters. | n/a: the generic client also serves relays and preserves foreign identifiers; a submitting UA must choose short IDs. |
+| DSN-HOST-03 | 5.2, 5.2.1 | MUST | Preserve recipient requests and envelope metadata when relaying, and never issue a DSN for a null sender. | n/a: no relay queue or notification generator; host must carry options across inbound/outbound sessions and suppress report loops. |
+| DSN-HOST-04 | 5.2.2–5.2.6 | MUST | Honor delivery, delay, failure, foreign gateway and non-DSN next-hop reporting rules. | n/a: the host owns delivery/retries/reporting; a client omits DSN options for a non-DSN peer without reporting that downgrade, so callers must inspect Extension("DSN") and implement fallback policy. |
+| DSN-HOST-05 | 5.2.7–5.3 | MUST | Apply mailing-list, alias, confidential-forwarding and multi-recipient report rules; translate local/gateway requests and strip local control headers. | n/a: no alias/list expansion, gateway conversion or message-header processing in this transport library; host lifecycle audit remains. |
+| DSN-HOST-06 | 5.4 | MUST | Accept command lines large enough for all enabled extension combinations. | n/a: default 2000-octet command budget covers the tested DSN minima; hosts overriding MaxLineLength or adding capabilities must budget their combined maximum. No universal extension-combination audit is claimed. |
+| DSN-HOST-07 | 6.1 | MUST | Reports use a null sender, the original envelope sender as recipient, no RET, and only NEVER if NOTIFY is specified. | n/a: a caller constructing a DSN owns its envelope; generic MAIL/RCPT cannot distinguish reports from ordinary messages. |
+| DSN-HOST-08 | 6.2–6.3 | MUST | Generate multipart delivery-status reports with the requested content and required envelope/recipient fields. | n/a: no report MIME generator in this library; host must implement and test report content, confidentiality and field requirements. |
+
+The existing xtext fuzz targets use independent grammar/encoding references and
+remain in SMTP-EXT-04. FuzzRFC3461Notify checks the new list parser against an
+ASCII grammar oracle. Reports, fallback behavior, other registered address types
+and the remaining lifecycle clauses are explicit scope/gap rows, not proof of
+complete RFC 3461 conformance.

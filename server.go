@@ -54,8 +54,9 @@ type Server struct {
 	// Should be used only if backend supports it.
 	EnableBINARYMIME bool
 
-	// Advertise DSN (RFC 3461) capability.
-	// Should be used only if backend supports it.
+	// Advertise DSN (RFC 3461) capability. Enable only when the backend honors
+	// notification requests, generates reports and preserves options on relay.
+	// The transport parses options but does not implement the DSN lifecycle.
 	EnableDSN bool
 
 	// Advertise RRVS (RFC 7293) capability.

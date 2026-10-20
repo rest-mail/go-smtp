@@ -44,6 +44,7 @@ jobs:
         env:
           GOMAXPROCS: '1'
         run: |
+          go test -run='^$' -fuzz='^FuzzRFC3461Notify$' -fuzztime=10s -parallel=1 .
           go test -run='^$' -fuzz='^FuzzDecodeSASLResponse$' -fuzztime=10s -parallel=1 .
           go test -run='^$' -fuzz='^FuzzParseCmd$' -fuzztime=10s -parallel=1 .
           go test -run='^$' -fuzz='^FuzzParseArgs$' -fuzztime=10s -parallel=1 .
