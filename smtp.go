@@ -66,7 +66,7 @@ type MailOptions struct {
 	// Value of RET= argument, FULL or HDRS.
 	Return DSNReturn
 
-	// Envelope identifier set by the client.
+	// Opaque decoded envelope identifier set by the client (printable ASCII).
 	EnvelopeID string
 
 	// The authorization identity asserted by the message sender in decoded
@@ -132,7 +132,9 @@ const (
 // RcptOptions contains parameters for the RCPT command.
 type RcptOptions struct {
 	// Value of NOTIFY= argument, NEVER or a combination of either of
-	// DELAY, FAILURE, SUCCESS.
+	// DELAY, FAILURE, SUCCESS. The server removes null/repeated list elements
+	// and preserves first-occurrence order. An empty slice leaves host defaults
+	// unspecified; the transport does not generate notifications.
 	Notify []DSNNotify
 
 	// Original recipient set by client.

@@ -39,7 +39,8 @@ An ESMTP client and server library written in Go.
 server and client core), RFC 3207 (STARTTLS), RFC 1870 (SIZE),
 RFC 2920 (PIPELINING), RFC 3030 (CHUNKING/BINARYMIME) and
 RFC 6152 (8BITMIME) item by item, plus individual
-AUTH exchange requirements from RFC 4954 §4. Other extensions retain summary
+AUTH exchange requirements from RFC 4954 §4 and the DSN parameter/protocol
+rules from RFC 3461 §§2–4, 5.1 and 5.4. Other extensions retain summary
 rows. A small program,
 [`internal/checklist`](internal/checklist/main.go), checks it against the tests
 in CI. It is the same program as
@@ -110,6 +111,24 @@ DATA; actual content is bounded by `MaxMessageBytes`. A client omits SIZE when
 `MailOptions.Size` is zero and rejects negative estimates. Storage reservation,
 recipient limits, retry queues and delivery notifications remain host policy;
 see the RFC 1870 checklist's explicit policy rows.
+
+DSN (`EnableDSN`) is an opt-in promise by the host to honor notification
+requests, not just to parse the parameters. The transport exposes decoded
+`MailOptions.Return`/`EnvelopeID` and each recipient's `Notify`/original address.
+NOTIFY accepts repeated conditions and null list elements as RFC 3461's RFC 822
+list grammar permits; the server passes unique conditions to the backend in
+first-occurrence order. NEVER must be standalone. RET and NOTIFY keywords are
+ASCII and case-insensitive; Unicode look-alikes are refused.
+
+The host owns report generation, retries, alias/list policy and preservation
+of these options when relaying. With no DSN capability the client silently
+omits the options; inspect `Extension("DSN")` before choosing fallback policy.
+No DSN may be generated for a null sender. Unset NOTIFY/RET values remain unset
+for host defaults. RFC822 original addresses are opaque printable ASCII, not
+revalidated mailbox syntax. Other registered address types besides RFC822 and
+RFC 6533 UTF-8 remain unsupported; the checklist records this conformance gap.
+The default command limit covers the tested DSN size allowances, but hosts
+changing `MaxLineLength` must budget all enabled extension combinations.
 
 PIPELINING replies retain command order. Only transaction-command replies
 (RSET/MAIL/RCPT) are held for batching; synchronization and unknown-command

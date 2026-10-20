@@ -599,6 +599,10 @@ func (c *Conn) handleMail(arg string) {
 				c.writeResponse(504, EnhancedCode{5, 5, 4}, "RET is not implemented")
 				return
 			}
+			if !isASCII(value) {
+				c.writeResponse(501, EnhancedCode{5, 5, 4}, "Unknown RET value")
+				return
+			}
 			value = strings.ToUpper(value)
 			switch DSNReturn(value) {
 			case DSNReturnFull, DSNReturnHeaders:
@@ -1025,11 +1029,8 @@ func (c *Conn) handleRcpt(arg string) {
 				c.writeResponse(504, EnhancedCode{5, 5, 4}, "NOTIFY is not implemented")
 				return
 			}
-			notify := []DSNNotify{}
-			for _, val := range strings.Split(value, ",") {
-				notify = append(notify, DSNNotify(strings.ToUpper(val)))
-			}
-			if err := checkNotifySet(notify); err != nil {
+			notify, err := parseDSNNotify(value)
+			if err != nil {
 				c.writeResponse(501, EnhancedCode{5, 5, 4}, "Malformed NOTIFY parameter value")
 				return
 			}
@@ -1084,27 +1085,56 @@ func (c *Conn) handleRcpt(arg string) {
 	c.writeResponse(250, EnhancedCode{2, 0, 0}, fmt.Sprintf("I'll make sure <%v> gets this", recipient))
 }
 
+// parseDSNNotify implements RFC 3461 section 4.1's RFC 822 1# list.
+// Null elements and repeated conditions are valid; expose each condition once
+// to the backend, in first-occurrence order. NEVER is not a list element.
+func parseDSNNotify(value string) ([]DSNNotify, error) {
+	if !isASCII(value) {
+		return nil, errors.New("Malformed NOTIFY parameter value")
+	}
+	value = strings.ToUpper(value)
+	if value == string(DSNNotifyNever) {
+		return []DSNNotify{DSNNotifyNever}, nil
+	}
+	var notify []DSNNotify
+	seen := make(map[DSNNotify]bool)
+	for _, part := range strings.Split(value, ",") {
+		if part == "" {
+			continue
+		}
+		flag := DSNNotify(part)
+		switch flag {
+		case DSNNotifySuccess, DSNNotifyFailure, DSNNotifyDelayed:
+		default:
+			return nil, errors.New("Malformed NOTIFY parameter value")
+		}
+		if !seen[flag] {
+			notify = append(notify, flag)
+			seen[flag] = true
+		}
+	}
+	if len(notify) == 0 {
+		return nil, errors.New("Malformed NOTIFY parameter value")
+	}
+	return notify, nil
+}
+
 func checkNotifySet(values []DSNNotify) error {
 	if len(values) == 0 {
 		return errors.New("Malformed NOTIFY parameter value")
 	}
-
-	seen := map[DSNNotify]struct{}{}
 	for _, val := range values {
 		switch val {
-		case DSNNotifyNever, DSNNotifyDelayed, DSNNotifyFailure, DSNNotifySuccess:
-			if _, ok := seen[val]; ok {
+		case DSNNotifyNever:
+			if len(values) != 1 {
 				return errors.New("Malformed NOTIFY parameter value")
 			}
+		case DSNNotifyDelayed, DSNNotifyFailure, DSNNotifySuccess:
+			// RFC 3461 does not prohibit repeated list elements.
 		default:
 			return errors.New("Malformed NOTIFY parameter value")
 		}
-		seen[val] = struct{}{}
 	}
-	if _, ok := seen[DSNNotifyNever]; ok && len(seen) > 1 {
-		return errors.New("Malformed NOTIFY parameter value")
-	}
-
 	return nil
 }
 

@@ -1,8 +1,9 @@
 # Coverage
 
-After the RFC 3030 CHUNKING/BINARYMIME transport audit,
-statement coverage of the library package and `internal/checklist` is
-**92.6%** combined (library **92.2%**, checker **99.3%**), measured locally
+After merging the RFC 3030 CHUNKING/BINARYMIME transport and RFC 3461
+DSN parameter/protocol audits, statement coverage of the library package
+and `internal/checklist` is **93.6%** combined (library **93.2%**,
+checker **99.3%**), measured locally
 on Go 1.27.1 linux/arm64 without the race detector. The local command was:
 
 ```
@@ -85,6 +86,15 @@ read-ahead framing. The BDAT argument parser and the bounded command reader
 are 100% covered in this local run; timed argument fuzzing uses a regexp and
 arbitrary-precision integer reference. The existing 85% floor is unchanged.
 This is a transport slice, not full MIME/relay conformance or the 95% target.
+
+The DSN audit adds the RFC 3461 §10.1 submission envelope, per-recipient
+metadata and RSET isolation, invalid/duplicate parameter refusals, backend
+status preservation, default size allowances and client validation. The new
+NOTIFY parser accepts RFC 822 lists (including repeated/null list elements),
+normalizes backend flags, and refuses non-ASCII look-alikes; its fuzz target
+uses an independent ASCII grammar. No notification generator or queue is
+covered or supplied by this transport. Host responsibilities and unsupported
+address types remain explicit in the checklist; the 85% CI floor is unchanged.
 
 ## Left uncovered on purpose
 
