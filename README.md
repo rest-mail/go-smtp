@@ -50,7 +50,7 @@ exactly:
 | ID | Section | Level | Requirement | Tests |
 |----|---------|-------|-------------|-------|
 | SMTP-RSET-01 | 4.1.1.5 | MUST | RSET clears the sender, the recipients and the data. | `TestRFC5321_RsetAndSecondEhloClearTransaction` |
-| SMTP-LIM-06 | 4.5.3.1.5 | MUST | A reply line is at most 512 octets, CRLF included. | n/a: a gap, not asserted yet. |
+| SMTP-LIM-06 | 4.5.3.1.5 | MUST | A reply line is at most 512 octets, CRLF included (SASL challenges excepted). | `TestRFC5321_ReplyLine512`, `TestRFC5321_MultilineReplyLine512`, `TestRFC5321_BackendReplyLine512`, `TestRFC4954_LongChallengeNotTruncated` |
 ```
 
 Each test names the items it covers in its doc comment:
@@ -64,6 +64,15 @@ func TestRFC5321_RsetAndSecondEhloClearTransaction(t *testing.T) {
 an ID is used twice, an item names no test and is not `n/a`, an item and a test
 disagree about each other, or a `Test` or `Fuzz` function names no item.
 Coverage is in [COVERAGE.md](COVERAGE.md).
+
+The server limits each ordinary reply line to 512 octets, including its reply
+code, enhanced status (if present), and CRLF. Overlong text is truncated at a
+UTF-8 character boundary; the status and existing multiline framing are kept.
+Backends can use newline-separated text to supply longer diagnostics across
+multiple lines. This also bounds greetings and backend-supplied EHLO lines;
+keep domain names, capabilities and other protocol tokens within the budget.
+SASL `334` challenges are sent intact because RFC 4954 §4 makes their size
+independent of ordinary SMTP line limits.
 
 ## Relationship with net/smtp
 
