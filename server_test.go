@@ -1892,7 +1892,7 @@ func TestServer_xtextLiteralNonXchar(t *testing.T) {
 	}
 }
 
-// checklist: SMTP-EXT-10
+// checklist: SMTP-EXT-10 RRVS-SYN-01 RRVS-SYN-03 RRVS-SRV-01
 func TestServerRRVS(t *testing.T) {
 	be, s, c, scanner, caps := testServerEhlo(t,
 		func(s *smtp.Server) {
@@ -1930,6 +1930,13 @@ func TestServerRRVS(t *testing.T) {
 	}
 
 	io.WriteString(c, "RCPT TO:<root@bnd.bund.de> RRVS=2020-03-19T11:13:00Z;ign0r3.th1s;othr_stuff\r\n")
+	scanner.Scan()
+
+	if !strings.HasPrefix(scanner.Text(), "501 5.5.4 ") {
+		t.Fatal("Unexpected res on malformed RRVS no-support action:", scanner.Text())
+	}
+
+	io.WriteString(c, "RCPT TO:<root@bnd.bund.de> RRVS=2020-03-19T11:13:00Z;C\r\n")
 	scanner.Scan()
 
 	if !strings.HasPrefix(scanner.Text(), "250 ") {

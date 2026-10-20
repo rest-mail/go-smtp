@@ -1,8 +1,7 @@
 # Coverage
 
-After the RFC 6531 SMTPUTF8 envelope audit and its empty-assignment
-regression fix, statement coverage of the library package
-and `internal/checklist` is **94.0%** combined (library **93.6%**,
+After the RFC 7293 RRVS audit, statement coverage of the library package
+and `internal/checklist` is **94.2%** combined (library **93.9%**,
 checker **99.3%**), measured locally
 on Go 1.27.1 linux/arm64 without the race detector. The local command was:
 

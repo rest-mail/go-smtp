@@ -3,6 +3,7 @@ package smtp
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -183,6 +184,58 @@ func parseDeliverByArgument(arg string) *DeliverByOptions {
 		Mode:  modeValue,
 		Trace: traceValue,
 	}
+}
+
+// rrvsDateTime is RFC 3339 section 5.6 date-time without time-secfrac, as
+// RFC 7293 section 3.1 requires. ABNF literals are case-insensitive, so "t"
+// and "z" are accepted too.
+var rrvsDateTime = regexp.MustCompile(`^([0-9]{4}-[0-9]{2}-[0-9]{2})[Tt]([0-9]{2}:[0-9]{2}):([0-9]{2})(?:[Zz]|([+-])([0-9]{2}):([0-9]{2}))$`)
+
+// parseRRVSArgument parses the value of the RRVS parameter defined in
+// RFC 7293 section 3.1: date-time [ ";" ( "C" / "R" ) ]. The action is
+// returned upper case, or empty if absent. ok is false if arg is malformed.
+func parseRRVSArgument(arg string) (since time.Time, action RRVSAction, ok bool) {
+	dateTime, actionStr, hasAction := strings.Cut(arg, ";")
+	if hasAction {
+		switch strings.ToUpper(actionStr) {
+		case string(RRVSActionReject), string(RRVSActionContinue):
+			action = RRVSAction(strings.ToUpper(actionStr))
+		default:
+			return time.Time{}, "", false
+		}
+	}
+	m := rrvsDateTime.FindStringSubmatch(dateTime)
+	if m == nil {
+		return time.Time{}, "", false
+	}
+	offset := 0
+	if m[4] != "" {
+		// RFC 3339 time-numoffset: time-hour (00-23) ":" time-minute (00-59).
+		hh, _ := strconv.Atoi(m[5])
+		mm, _ := strconv.Atoi(m[6])
+		if hh > 23 || mm > 59 {
+			return time.Time{}, "", false
+		}
+		offset = hh*3600 + mm*60
+		if m[4] == "-" {
+			offset = -offset
+		}
+	}
+	// RFC 3339 allows second 60 for a leap second; time.Parse does not, so
+	// it is read as second 59 plus one second.
+	sec, leap := m[3], m[3] == "60"
+	if leap {
+		sec = "59"
+	}
+	t, err := time.Parse("2006-01-02T15:04:05", m[1]+"T"+m[2]+":"+sec)
+	if err != nil {
+		return time.Time{}, "", false
+	}
+	t = t.Add(-time.Duration(offset) * time.Second).UTC()
+	if leap {
+		t = t.Add(time.Second)
+	}
+	return t, action, true
 }
 
 // parser parses command arguments defined in RFC 5321 section 4.1.2.

@@ -1244,7 +1244,7 @@ var rrvsClient = `RCPT TO:<root@nsa.gov> RRVS=2014-04-03T23:01:00Z
 RCPT TO:<root@gchq.gov.uk>
 `
 
-// checklist: SMTP-EXT-10
+// checklist: SMTP-EXT-10 RRVS-CLI-01
 func TestClientRRVS(t *testing.T) {
 	server := strings.Join(strings.Split(rrvsServer, "\n"), "\r\n")
 	client := strings.Join(strings.Split(rrvsClient, "\n"), "\r\n")

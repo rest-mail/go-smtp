@@ -120,6 +120,18 @@ type DeliverByOptions struct {
 	Trace bool
 }
 
+// RRVSAction is the no-support action of an RRVS parameter (RFC 7293
+// section 3.1): what a relay does when the next hop does not offer RRVS.
+type RRVSAction string
+
+const (
+	// RRVSActionReject refuses the message. It is also the meaning of an
+	// RRVS parameter that names no action.
+	RRVSActionReject RRVSAction = "R"
+	// RRVSActionContinue relays the message without the RRVS protection.
+	RRVSActionContinue RRVSAction = "C"
+)
+
 type PriorityProfile string
 
 const (
@@ -144,4 +156,8 @@ type RcptOptions struct {
 	// Time value of the RRVS= argument
 	// or the zero time if unset.
 	RequireRecipientValidSince time.Time
+	// No-support action of the RRVS= argument, or empty if the parameter
+	// named none (which means reject). A relay preserves it as given
+	// (RFC 7293 section 5.1.1).
+	RequireRecipientValidSinceAction RRVSAction
 }

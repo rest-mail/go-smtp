@@ -1084,13 +1084,13 @@ func (c *Conn) handleRcpt(arg string) {
 				c.writeResponse(504, EnhancedCode{5, 5, 4}, "RRVS is not implemented")
 				return
 			}
-			value, _, _ = strings.Cut(value, ";") // discard the no-support action
-			rrvsTime, err := time.Parse(time.RFC3339, value)
-			if err != nil {
+			rrvsTime, action, ok := parseRRVSArgument(value)
+			if !ok {
 				c.writeResponse(501, EnhancedCode{5, 5, 4}, "Malformed RRVS parameter value")
 				return
 			}
 			opts.RequireRecipientValidSince = rrvsTime
+			opts.RequireRecipientValidSinceAction = action
 		default:
 			c.writeResponse(500, EnhancedCode{5, 5, 4}, "Unknown RCPT TO argument")
 			return
