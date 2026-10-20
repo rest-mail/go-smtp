@@ -1,10 +1,10 @@
 # Coverage
 
-After the RFC 6710 MT-PRIORITY transport audit, statement coverage of the
-library package and `internal/checklist` is **94.3%** combined (library
-**94.0%**, checker **99.3%**), measured locally on Go 1.27.1 linux/arm64
-without the race detector. This includes the preceding RFC 2852 DELIVERBY
-audit. The local command was:
+After the RFC 2033 LMTP audit, statement coverage of the library package
+and `internal/checklist` is **95.1%** combined (library **94.8%**, checker
+**99.3%**), measured locally on Go 1.27.1 linux/arm64 without the race
+detector. This includes the preceding RFC 6710 MT-PRIORITY audit. The local
+command was:
 
 ```
 go test -count=1 -coverprofile=coverage.out . ./internal/...
@@ -20,8 +20,9 @@ go tool cover -func=coverage.out
 
 `cmd/smtp-debug-server`, a demo program, is left out of the figure because
 the package list does not name it. The 85% CI floor is unchanged; the merged
-suite's CI figure may differ by Go version. These local figures do not claim
-the 95% target.
+suite's CI figure may differ by Go version. The combined local figure now
+exceeds 95%, but library-only coverage remains below it. Raising the gate and
+moving to the shared workflow remain a separate slice after CI validation.
 
 Earlier CI runs reported 87.2% combined (library 86.2%, checker 99.3%) on
 Go 1.27.2 before the 503 tests of #87 landed. Local and CI statement counts
@@ -131,3 +132,13 @@ clause by clause, are where most of them get tests.
   backend transaction tests for reply lengths. SASL challenges are tested to
   retain their independent RFC 4954 size rules. This does not complete the
   extension audits or reach the 95% coverage target.
+
+
+The RFC 2033 audit adds mixed/duplicate/multiline per-recipient DATA and BDAT
+outcomes, fallback backend success/failure expansion, unset statuses,
+post-delivery transaction isolation, greeting/command checks and partial
+client responses on disconnect. The regression test proves that refused LHLO
+must not fall back to SMTP HELO. The checklist records unresolved BDAT reply
+count/flushing/error paths, client streaming/temporary-failure/duplicate-map
+limits, positive-reply classification and mandatory host durability/deployment
+duties. No new parser is introduced, so existing shared parser fuzzers apply.

@@ -88,6 +88,7 @@ func TestServer_LMTP(t *testing.T) {
 }
 
 // checklist: SMTP-EXT-09
+// checklist: LMTP-FLUSH-01
 func TestServer_LMTP_Early(t *testing.T) {
 	// This test confirms responses are sent as early as possible
 	// e.g. right after SetStatus is called.

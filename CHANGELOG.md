@@ -8,6 +8,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Checked RFC 2033 LMTP requirements, the RFC's mixed-recipient example,
+  ordered/duplicate/multiline DATA and BDAT replies, fallback backend results,
+  transaction isolation and client partial-disconnect results. Host durability
+  and deployment duties and remaining client/BDAT gaps are explicit.
+
 - Checked RFC 6710 MT-PRIORITY transport requirements, submission/relay
   envelopes, all 19 values, SMTP/LMTP advertisement, transaction state and
   backend policy status tests. A priority parser fuzz target uses the RFC's
@@ -59,6 +64,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   unsupported enforcement modes are explicitly recorded.
 
 ### Fixed
+
+- The LMTP client no longer falls back to SMTP HELO after LHLO is refused
+  with 500 or 502, preserving protocol-misconfiguration errors.
 
 - MT-PRIORITY rejects `+1`, `-0`, leading zeroes and other spellings outside
   RFC 6710's grammar instead of accepting them as integers. Malformed values
