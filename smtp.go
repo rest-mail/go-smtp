@@ -114,6 +114,9 @@ const (
 	DeliverByReturn DeliverByMode = "R"
 )
 
+// DeliverByOptions carries RFC 2852 message deadline metadata. The host must
+// capture receipt time, enforce expiry and generate delivery notifications; the
+// transport does not schedule delivery or decrement Time between hops.
 type DeliverByOptions struct {
 	Time  time.Duration
 	Mode  DeliverByMode

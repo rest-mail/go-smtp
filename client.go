@@ -594,6 +594,20 @@ func (c *Client) buildMailCmd(from string, opts *MailOptions) (string, error) {
 		if by > maxDeliverBySeconds || by < -maxDeliverBySeconds {
 			return "", errors.New("smtp: DELIVERBY time is out of range")
 		}
+		if opts.DeliverBy.Mode == DeliverByReturn {
+			// RFC 2852 section 4.1.4.1 forbids relaying return-mode mail
+			// when the next hop's fixed minimum exceeds the time remaining.
+			minimum, _, _ := strings.Cut(c.ext["DELIVERBY"], ",")
+			if minimum != "" {
+				if len(minimum) > 9 || strings.Trim(minimum, "0123456789") != "" {
+					return "", errors.New("smtp: invalid DELIVERBY minimum")
+				}
+				seconds, err := strconv.ParseInt(minimum, 10, 64)
+				if err != nil || by < seconds {
+					return "", errors.New("smtp: DELIVERBY time is below server minimum")
+				}
+			}
+		}
 		fmt.Fprintf(&sb, " BY=%d;%s", by, opts.DeliverBy.Mode)
 		if opts.DeliverBy.Trace {
 			sb.WriteString("T")

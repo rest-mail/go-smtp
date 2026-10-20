@@ -2,6 +2,7 @@ package smtp
 
 import (
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -155,7 +156,9 @@ func FuzzParseArgs(f *testing.F) {
 	})
 }
 
-// checklist: SMTP-EXT-11
+var byGrammar = regexp.MustCompile(`^([+-]?[0-9]{1,9});([NnRr])([Tt]?)$`)
+
+// checklist: SMTP-EXT-11 BY-SYN-01 BY-SYN-02 BY-SYN-03
 func FuzzParseDeliverByArgument(f *testing.F) {
 	for _, seed := range []string{
 		"", "1", ";N", "+;N", "0;N", "-0;NT", "1;R", "+1;RT", "-1;N", "0;R", "-1;R",
@@ -193,22 +196,22 @@ func FuzzParseDeliverByArgument(f *testing.F) {
 		if len(input) > maxParserFuzzInput {
 			t.Skip()
 		}
-		if got := parseDeliverByArgument(input); got != nil {
-			number, suffix, ok := strings.Cut(input, ";")
-			digits := strings.TrimPrefix(strings.TrimPrefix(number, "+"), "-")
-			if !ok || len(digits) < 1 || len(digits) > 9 || strings.Trim(digits, "0123456789") != "" {
-				t.Fatalf("invalid BY time accepted: %q", input)
+		// A separate grammar oracle catches false rejection as well as acceptance.
+		parts := byGrammar.FindStringSubmatch(input)
+		var want *DeliverByOptions
+		if parts != nil {
+			seconds, err := strconv.ParseInt(parts[1], 10, 64)
+			if err != nil {
+				t.Fatal(err)
 			}
-			if suffix != "N" && suffix != "NT" && suffix != "R" && suffix != "RT" {
-				t.Fatalf("invalid BY mode/trace accepted: %q", input)
+			mode := DeliverByMode(strings.ToUpper(parts[2]))
+			if mode != DeliverByReturn || seconds > 0 {
+				want = &DeliverByOptions{Time: time.Duration(seconds) * time.Second, Mode: mode, Trace: parts[3] != ""}
 			}
-			seconds, err := strconv.ParseInt(number, 10, 64)
-			if err != nil || seconds < -999999999 || seconds > 999999999 ||
-				got.Time != time.Duration(seconds)*time.Second ||
-				string(got.Mode) != suffix[:1] || got.Trace != (len(suffix) == 2) ||
-				(got.Mode == DeliverByReturn && seconds <= 0) {
-				t.Fatalf("invalid BY result: %q => %+v", input, got)
-			}
+		}
+		got := parseDeliverByArgument(input)
+		if (got == nil) != (want == nil) || (got != nil && *got != *want) {
+			t.Fatalf("BY %q = %+v, grammar oracle wants %+v", input, got, want)
 		}
 	})
 }
