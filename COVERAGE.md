@@ -1,23 +1,30 @@
 # Coverage
 
-Statement coverage of the library package and `internal/checklist` is **87.2%**
-as CI measures it, which is the number the gate compares with its floor. CI runs
+After merging the RFC 4954 AUTH exchange and RFC 6152 8BITMIME audits,
+statement coverage of the library package and `internal/checklist` is
+**92.3%** combined (library **91.8%**, checker **99.3%**), measured locally
+on Go 1.27.1 linux/arm64 without the race detector. The local command was:
+
+```
+go test -count=1 -covermode=atomic -coverprofile=coverage.out . ./internal/...
+go tool cover -func=coverage.out
+```
+
+CI uses the same package list with `-race` and the current stable Go:
 
 ```
 go test -race -count=1 -covermode=atomic -coverprofile=coverage.out . ./internal/...
 go tool cover -func=coverage.out
 ```
 
-(the package alone 86.2%, `internal/checklist` 99.3%). `cmd/smtp-debug-server`,
-a demo program, is left out of the figure because the package list does not
-name it.
+`cmd/smtp-debug-server`, a demo program, is left out of the figure because
+the package list does not name it. The 85% CI floor is unchanged; the merged
+suite's CI figure is pending. These local figures do not claim the 95% target.
 
-The local and CI figures differ by about a point. Both runs leave the same
-blocks uncovered; only the statement count of some blocks differs (a
-composite literal counts as 3 statements locally and 1 in CI). CI uses the
-current stable Go (1.27.2 when this was measured) and gets 87.2% (measured before the 503 tests of #87 landed, so the next run reads higher); the same tests
-on Go 1.27.1 on the Pi report 89.9% (the package alone 89.3%, no race detector
-there; measured locally after #88 landed). The floor leaves room for that difference.
+Earlier CI runs reported 87.2% combined (library 86.2%, checker 99.3%) on
+Go 1.27.2 before the 503 tests of #87 landed. Local and CI statement counts
+can differ between Go versions, so that historical result is not a measurement
+of the merged suite. The per-audit measurements below are historical too.
 
 After the RFC 3207 STARTTLS audit, a local run on Go 1.27.1 (linux/arm64,
 without the race detector) reports **91.0%** combined: the library is 90.5%
@@ -62,6 +69,13 @@ The other `go-*` libraries fail CI below 95%, through go-spf's shared
 core) does not close the gap, so CI keeps its own steps and gates on a **floor
 of 85%**, to be raised as the figure grows. The shared workflow replaces them
 once coverage reaches 95%.
+
+After the RFC 4954 AUTH exchange slice, a local Go 1.27.1 run of the same
+package list without `-race` reports **91.2%** combined (library **90.7%**,
+checker **99.3%**). This includes the new SASL decoder's fuzz seeds, the AUTH
+wire examples, invalid response/error paths and oversized initial responses.
+The 85% CI floor is unchanged; this is not a claim that the 95% target or all
+RFC 4954 requirements are met.
 
 ## Left uncovered on purpose
 

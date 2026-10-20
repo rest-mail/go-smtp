@@ -233,7 +233,7 @@ func TestDataReplySentBeforeBody(t *testing.T) {
 	}
 }
 
-// checklist: SMTP-EXT-08
+// checklist: SMTP-EXT-08 SMTP-AUTH-18
 func TestAuthChallengeSentBeforeReadingResponse(t *testing.T) {
 	_, c, br, _ := newFlushTestConn(t, nil)
 

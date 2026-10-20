@@ -37,8 +37,9 @@ An ESMTP client and server library written in Go.
 
 [CHECKLIST.md](CHECKLIST.md) lists the requirements of RFC 5321 (the SMTP
 server and client core), RFC 3207 (STARTTLS), RFC 1870 (SIZE),
-RFC 2920 (PIPELINING) and RFC 6152 (8BITMIME) item by item. The other
-extensions still have one summary row each. A small program,
+RFC 2920 (PIPELINING) and RFC 6152 (8BITMIME) item by item, plus individual
+AUTH exchange requirements from RFC 4954 §4. Other extensions retain summary
+rows. A small program,
 [`internal/checklist`](internal/checklist/main.go), checks it against the tests
 in CI. It is the same program as
 [go-spf](https://github.com/rest-mail/go-spf)'s and the other `go-*`

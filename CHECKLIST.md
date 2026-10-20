@@ -11,12 +11,13 @@ this file against the tests with `go run ./internal/checklist`; the format is
 described in the [README](README.md#the-rfc-checklist).
 
 Not covered yet: each extension (DSN, CHUNKING,
-SMTPUTF8, AUTH, LMTP, RRVS, DELIVERBY, MT-PRIORITY, XCLIENT) is one
+SMTPUTF8, LMTP, RRVS, DELIVERBY, MT-PRIORITY, XCLIENT) is one
 row in the extension summary, mapping its existing tests, and has not been checked
-clause by clause; later slots do that. STARTTLS (RFC 3207) is audited in
-its own section below, as are SIZE (RFC 1870), PIPELINING (RFC 2920) and
-8BITMIME (RFC 6152). RFC 6409 (submission) is not in this
-slot. Reply line lengths (§4.5.3.1.5) are checked by SMTP-LIM-06;
+clause by clause; later slots do that. STARTTLS (RFC 3207), SIZE (RFC 1870),
+PIPELINING (RFC 2920), 8BITMIME (RFC 6152) and AUTH exchange rules
+(RFC 4954 §4) are audited below; the rest of RFC 4954 remains for later slices.
+RFC 6409 (submission) is not in this slot. Reply line lengths (§4.5.3.1.5)
+are checked by SMTP-LIM-06;
 SASL challenges retain the independent size rules of RFC 4954 §4.
 
 
@@ -132,12 +133,50 @@ SASL challenges retain the independent size rules of RFC 4954 §4.
 | SMTP-EXT-05 | RFC 3030 | Normative | One row for the extension: CHUNKING and BINARYMIME: BDAT chunks, reset, errors, size limits and shutdown. The clauses of the RFC are not checked one by one yet. | `TestServer_Chunking`, `TestServer_Chunking_LMTP`, `TestServer_Chunking_Reset`, `TestServer_Chunking_ClosedInTheMiddle`, `TestServer_Chunking_EarlyError`, `TestServer_Chunking_EarlyErrorDuringChunk`, `TestServer_Chunking_tooLongMessage`, `TestServer_Chunking_OverLimitDiscardKeepsConnection`, `TestServer_Chunking_Binarymime`, `TestServer_Chunking_LineLimitAfterNonLastBdat`, `TestBDATShutdownRace`, `TestBdatReadTimeoutClosesConnection`, `TestEODBDATChunksIgnoreDotSequences`, `TestServerBdatUnicodeSpaceIsNotSeparator` |
 | SMTP-EXT-06 | RFC 6531, 6533 | Normative | One row for the extension: SMTPUTF8: the parameter, UTF-8 addresses, `ORCPT` with UTF-8 (xtext and unitext), and the client's detection. The clauses of the RFC are not checked one by one yet. | `TestServerSMTPUTF8`, `TestServerSMTPUTF8_Disabled`, `TestServerDSNUTF8AddressORCPT`, `TestServerDSNwithSMTPUTF8`, `TestSendMail_SMTPUTF8_Autodetect`, `TestSendMail_SMTPUTF8_NotAdvertised`, `TestIsASCII`, `TestUTF8AddrOracleCatchesMutants`, `TestUTF8AddrRFC6533Regressions`, `TestClientORCPTUTF8Encoding`, `FuzzDecodeUTF8AddrXtext`, `FuzzEncodeUTF8AddrXtext`, `FuzzEncodeUTF8AddrUnitext` |
 | SMTP-EXT-07 | RFC 3207 | Normative | STARTTLS summary: parser, handshake, TLS state, close races and AUTH protection. The clause-by-clause audit is below. | `TestTLSClient`, `TestTLSConnState`, `TestStartTLSClosesOnHandshakeFailure`, `TestStartTLSCloseRace`, `TestStartTLSReplySentBeforeHandshake`, `TestParseCmdSTARTTLSExact`, `TestAuthTLSRequiredCode`, `TestNewClientStartTLS` |
-| SMTP-EXT-08 | RFC 4954 | Normative | One row for the extension: AUTH: mechanisms, initial response, cancellation, a second AUTH, anonymous access, and read timeouts. The clauses of the RFC are not checked one by one yet. | `TestServerAuthTwice`, `TestServerCancelSASL`, `TestServer_authDisabled`, `TestServer_anonymousUserError`, `TestServer_anonymousUserOK`, `TestServer_authParam`, `TestAuthRejectsExtraTokens`, `TestAuthFailed`, `TestClientAuthTrimSpace`, `TestAuthChallengeSentBeforeReadingResponse`, `TestAuthClientCancelReturns501`, `TestAuthContinuationReadTimeoutClosesConnection`, `TestServerAuthUnicodeSpaceIsNotSeparator`, `TestRFC4954_LongChallengeNotTruncated` |
+| SMTP-EXT-08 | RFC 4954 | Normative | One row for the extension: AUTH: mechanisms, initial response, cancellation, a second AUTH, anonymous access, and read timeouts. The exchange rules have individual rows below; other clauses remain unaudited. | `TestServerAuthTwice`, `TestServerCancelSASL`, `TestServer_authDisabled`, `TestServer_anonymousUserError`, `TestServer_anonymousUserOK`, `TestServer_authParam`, `TestAuthRejectsExtraTokens`, `TestAuthFailed`, `TestClientAuthTrimSpace`, `TestAuthChallengeSentBeforeReadingResponse`, `TestAuthClientCancelReturns501`, `TestAuthContinuationReadTimeoutClosesConnection`, `TestServerAuthUnicodeSpaceIsNotSeparator`, `TestRFC4954_LongChallengeNotTruncated` |
 | SMTP-EXT-09 | RFC 2033 | Normative | One row for the extension: LMTP: `LHLO`, one reply per recipient after the data, and the client side. The clauses of the RFC are not checked one by one yet. | `TestServer_LMTP`, `TestServer_LMTP_Early`, `TestServer_LMTP_Expand`, `TestServer_LMTP_DuplicatedRcpt`, `TestServer_Chunking_LMTP`, `TestLMTP`, `TestLMTPData`, `TestLMTPRcptLeakAcrossTransactions`, `TestLMTPDataErrorMessages` |
 | SMTP-EXT-10 | RFC 7293 | Normative | One row for the extension: RRVS: the `RRVS` parameter on RCPT. The clauses of the RFC are not checked one by one yet. | `TestServerRRVS`, `TestClientRRVS` |
 | SMTP-EXT-11 | RFC 2852 | Normative | One row for the extension: DELIVERBY: `BY` on MAIL only, in range. The clauses of the RFC are not checked one by one yet. | `TestServerDELIVERBY`, `TestClientDELIVERBY`, `TestClientDeliverByTruncatesToSeconds`, `TestParseDeliverByBoundaries`, `FuzzParseDeliverByArgument`, `TestServerDeliverByAndMTPriorityRejectedOnRcpt` |
 | SMTP-EXT-12 | RFC 6710 | Normative | One row for the extension: MT-PRIORITY: the `MT-PRIORITY` parameter on MAIL only, in range. The clauses of the RFC are not checked one by one yet. | `TestServerMTPRIORITY`, `TestClientMTPRIORITY` |
 | SMTP-EXT-13 | Postfix XCLIENT (not an IETF RFC) | Normative | One row for the extension: XCLIENT: a trusted peer may set the client's address and name; an untrusted one may not. The clauses of the RFC are not checked one by one yet. | `TestServerXClientTrusted`, `TestServerXClientUntrusted`, `TestServerXClientKeepsUnicodeSpaceInValue` |
+
+
+## AUTH exchange (RFC 4954 §3, §4 and §8)
+
+This slice checks command framing and the SASL challenge/response exchange,
+including the PLAIN and empty EXTERNAL wire examples of §4.1. It does **not**
+claim a complete RFC 4954 audit. The §5 MAIL AUTH trust/relay rules, §6 policy,
+§7 trace headers and §14 TLS identity requirements remain unaudited. Existing
+MAIL AUTH tests remain in SMTP-EXT-08. The host supplies the actual SASL
+mechanisms and credential/identity policy through AuthSession.
+
+| ID | Section | Level | Requirement | Tests |
+|----|---------|-------|-------------|-------|
+| SMTP-AUTH-01 | RFC 4954 §3 | Normative | EHLO advertises AUTH followed by the available mechanisms separated by spaces. | `TestRFC4954_Examples` |
+| SMTP-AUTH-02 | RFC 4954 §4 | MUST | A successful AUTH prevents another AUTH in the session, including after RSET, with reply 503. | `TestRFC4954_Examples` |
+| SMTP-AUTH-03 | RFC 4954 §4, §4.1 | Normative | The PLAIN example authenticates with an initial Base64 response or after an empty 334 challenge. | `TestRFC4954_Examples` |
+| SMTP-AUTH-04 | RFC 4954 §4, §6 | Normative | Successful authentication returns 235 2.7.0. | `TestRFC4954_Examples` |
+| SMTP-AUTH-05 | RFC 4954 §8 | MUST | AUTH and SASL mechanism names are case-insensitive. | `TestRFC4954_Examples` |
+| SMTP-AUTH-06 | RFC 4954 §4, §8 | Normative | AUTH requires a mechanism argument; missing arguments receive a syntax error. | `TestRFC4954_ServerFailuresAndRetry` |
+| SMTP-AUTH-07 | RFC 4954 §4 | SHOULD | Unsupported mechanisms receive 504 with enhanced status 5.5.4. | `TestRFC4954_ServerFailuresAndRetry` |
+| SMTP-AUTH-08 | RFC 4954 §4 | MUST | Server Base64 decoding rejects non-alphabet bytes and misplaced padding in initial responses and continuations. | `TestRFC4954_ServerFailuresAndRetry`, `FuzzDecodeSASLResponse` |
+| SMTP-AUTH-09 | RFC 4954 §4 | MUST | Malformed Base64 responses receive 501 with enhanced status 5.5.2. | `TestRFC4954_ServerFailuresAndRetry` |
+| SMTP-AUTH-10 | RFC 4954 §4, §6 | SHOULD | Invalid credentials reported by the host as ErrAuthFailed produce 535 5.7.8; a failed AUTH permits retry. | `TestRFC4954_ServerFailuresAndRetry` |
+| SMTP-AUTH-11 | RFC 4954 §4, §4.1 | MUST | An equals sign denotes a present, zero-length initial response; the EXTERNAL example succeeds without a challenge. | `TestRFC4954_EmptyInitialResponse`, `TestRFC4954_ClientInitialResponseLimit` |
+| SMTP-AUTH-12 | RFC 4954 §4 | MUST NOT | The client omits an initial response that would make AUTH exceed 512 octets, then sends it after the empty challenge. | `TestRFC4954_ClientInitialResponseLimit` |
+| SMTP-AUTH-13 | RFC 4954 §4 | MUST | A client cancels with an asterisk if a challenge is not valid Base64, including non-alphabet bytes and misplaced padding. | `TestRFC4954_ClientCancelAndFailure` |
+| SMTP-AUTH-14 | RFC 4954 §4 | Normative | Cancellation is sent during a challenge; a terminal AUTH failure ends the exchange without another SASL response. | `TestRFC4954_ClientCancelAndFailure` |
+| SMTP-AUTH-15 | RFC 4954 §4, §6 | SHOULD | A continuation exceeding the configured authentication buffer receives 500 5.5.6; the connection closes to preserve framing. | `TestRFC4954_ContinuationTooLong` |
+| SMTP-AUTH-16 | RFC 4954 §4 | MUST | AUTH during a mail transaction receives 503. | `TestServerBadSequence` |
+| SMTP-AUTH-17 | RFC 4954 §4 | MUST | A client asterisk cancels the exchange and receives 501. | `TestAuthClientCancelReturns501`, `TestRFC4954_ChallengeAndCancel` |
+| SMTP-AUTH-18 | RFC 4954 §4 | MUST NOT | A 334 challenge contains only Base64, with a trailing space and no text for an empty challenge, and is flushed before reading the response. | `TestAuthChallengeSentBeforeReadingResponse`, `TestRFC4954_ChallengeAndCancel` |
+| SMTP-AUTH-19 | RFC 4954 §4, §6 | MUST | A configuration prevents plaintext password mechanisms on unprotected sessions and does not advertise them. | `TestAuthTLSRequiredCode`, `TestRFC4954_NoPlaintextAdvertisement` |
+| SMTP-AUTH-20 | RFC 4954 §4 | MUST | A mechanism where the server speaks first refuses a client initial response with 501 (5.7.0 recommended). | n/a: delegated to the host's sasl.Server.Next; AuthSession exposes no server-first metadata, so the transport cannot enforce it independently. |
+| SMTP-AUTH-21 | RFC 4954 §4 | MUST | SASL security layers reset SMTP knowledge on both sides and TLS wraps SASL when both layers are active. | n/a: not supported; the go-sasl interface supplies authentication exchanges only, without a connection security-layer adapter. |
+| SMTP-AUTH-22 | RFC 4954 §4 | MUST | Supported mechanism challenge/response sizes are accepted independently of SMTP command line limits. | n/a: known gap; server continuations still share MaxLineLength (default 2000), and client challenges share its reply limit. A separate bounded SASL buffer is needed. |
+| SMTP-AUTH-23 | RFC 4954 §4 | SHOULD | Authorization identities use SASLprep; failed preparation or an unexpectedly empty prepared identity must fail authentication. | n/a: host responsibility; the transport receives opaque SASL bytes and no authorization identity. Hosts must implement preparation and return a SASL error on failure. |
+| SMTP-AUTH-24 | RFC 4954 §4 | MUST | PLAIN over TLS is available for interoperability. | n/a: host responsibility; applications must install a PLAIN AuthSession and a TLS configuration, and clients must supply a PLAIN sasl.Client. This exchange slice tests framing separately from TLS, not a complete PLAIN/TLS deployment. |
+| SMTP-AUTH-25 | RFC 4954 §4 | MUST | AUTH is last in a pipelined group except for eligible one-round-trip mechanisms with an initial response. | n/a: client Auth is synchronous, outside the Pipeliner API; the raw server cannot distinguish a group boundary from buffered continuation bytes. Host-provided mechanisms must not negotiate unsupported security layers. |
 
 
 ## STARTTLS (RFC 3207)

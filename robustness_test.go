@@ -579,7 +579,7 @@ func TestAuthContinuationReadTimeoutClosesConnection(t *testing.T) {
 // successfully, stays distinct from a transport read error: it yields 501 and
 // the exchange ends, rather than being conflated with the read-error path.
 //
-// checklist: SMTP-EXT-08
+// checklist: SMTP-EXT-08 SMTP-AUTH-17
 func TestAuthClientCancelReturns501(t *testing.T) {
 	_, s, c, scanner, caps := testServerEhlo(t)
 	defer s.Close()

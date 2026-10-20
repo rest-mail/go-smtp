@@ -41,7 +41,7 @@ func TestClientAuthTrimSpace(t *testing.T) {
 	c.didHello = true
 	c.Auth(toServerNoRespAuth{})
 	c.Close()
-	if got, want := wrote.String(), "AUTH FOOAUTH\r\n*\r\n"; got != want {
+	if got, want := wrote.String(), "AUTH FOOAUTH\r\n"; got != want {
 		t.Errorf("wrote %q; want %q", got, want)
 	}
 }
@@ -789,7 +789,6 @@ var authFailedServer = `220 hello world
 
 var authFailedClient = `EHLO localhost
 AUTH PLAIN AHVzZXIAcGFzcw==
-*
 `
 
 // checklist: SMTP-EXT-07

@@ -24,7 +24,7 @@ var (
 	}
 	ErrAuthUnknownMechanism = &SMTPError{
 		Code:         504,
-		EnhancedCode: EnhancedCode{5, 7, 4},
+		EnhancedCode: EnhancedCode{5, 5, 4},
 		Message:      "Unsupported authentication mechanism",
 	}
 )
