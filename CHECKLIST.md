@@ -10,11 +10,12 @@ An item that does not apply, or is a known gap, says "n/a" and why. CI checks
 this file against the tests with `go run ./internal/checklist`; the format is
 described in the [README](README.md#the-rfc-checklist).
 
-Not covered yet: each extension (DSN, CHUNKING,
+Not covered yet: each extension (DSN,
 SMTPUTF8, LMTP, RRVS, DELIVERBY, MT-PRIORITY, XCLIENT) is one
 row in the extension summary, mapping its existing tests, and has not been checked
 clause by clause; later slots do that. STARTTLS (RFC 3207), SIZE (RFC 1870),
-PIPELINING (RFC 2920), 8BITMIME (RFC 6152) and AUTH exchange rules
+PIPELINING (RFC 2920), CHUNKING/BINARYMIME (RFC 3030),
+8BITMIME (RFC 6152) and AUTH exchange rules
 (RFC 4954 §4) are audited below; the rest of RFC 4954 remains for later slices.
 RFC 6409 (submission) is not in this slot. Reply line lengths (§4.5.3.1.5)
 are checked by SMTP-LIM-06;
@@ -130,7 +131,7 @@ SASL challenges retain the independent size rules of RFC 4954 §4.
 | SMTP-EXT-02 | RFC 6152 | Normative | 8BITMIME summary: `BODY=8BITMIME` and `7BIT` are accepted, other values are refused without BINARYMIME. Clause-by-clause transport checks and host responsibilities are below. | `TestServer8BITMIME`, `TestServer_BODYInvalidValue` |
 | SMTP-EXT-03 | RFC 1870 | Normative | SIZE summary: declared and actual sizes are checked against `MaxMessageBytes` (inclusive); oversized content is drained with a bound. The RFC 1870 audit is below. | `TestServerBadSize`, `TestServerTooBig`, `TestServerSizeLimit_ExactlyMaxAccepted`, `TestServerSizeLimit_OverMaxRejected`, `TestServerSizeLimit_RejectWithinLimitKeepsConnection`, `TestServerSizeLimit_OversizedKeepsConnection`, `TestServerSizeLimit_OverLimitDrainBounded`, `TestServerSizeLimit_LMTP_OverLimitDrainBounded`, `TestServerSizeLimit_LMTP_Fallback_OverLimitDrainBounded` |
 | SMTP-EXT-04 | RFC 3461, xtext (RFC 3461 §4) | Normative | One row for the extension: DSN: `RET`, `ENVID`, `NOTIFY` and `ORCPT`, with xtext encoding both ways. The clauses of the RFC are not checked one by one yet. | `TestServerDSN`, `TestClientDSN`, `TestClientXtext`, `TestXtextRoundTrip`, `TestServer_xtextLiteralNonXchar`, `FuzzDecodeXtext`, `FuzzEncodeXtext` |
-| SMTP-EXT-05 | RFC 3030 | Normative | One row for the extension: CHUNKING and BINARYMIME: BDAT chunks, reset, errors, size limits and shutdown. The clauses of the RFC are not checked one by one yet. | `TestServer_Chunking`, `TestServer_Chunking_LMTP`, `TestServer_Chunking_Reset`, `TestServer_Chunking_ClosedInTheMiddle`, `TestServer_Chunking_EarlyError`, `TestServer_Chunking_EarlyErrorDuringChunk`, `TestServer_Chunking_tooLongMessage`, `TestServer_Chunking_OverLimitDiscardKeepsConnection`, `TestServer_Chunking_Binarymime`, `TestServer_Chunking_LineLimitAfterNonLastBdat`, `TestBDATShutdownRace`, `TestBdatReadTimeoutClosesConnection`, `TestEODBDATChunksIgnoreDotSequences`, `TestServerBdatUnicodeSpaceIsNotSeparator` |
+| SMTP-EXT-05 | RFC 3030 | Normative | CHUNKING and BINARYMIME summary: existing BDAT, reset, errors, size and shutdown regressions. RFC 3030 transport clauses and explicit scope limits are audited below. | `TestServer_Chunking`, `TestServer_Chunking_LMTP`, `TestServer_Chunking_Reset`, `TestServer_Chunking_ClosedInTheMiddle`, `TestServer_Chunking_EarlyError`, `TestServer_Chunking_EarlyErrorDuringChunk`, `TestServer_Chunking_tooLongMessage`, `TestServer_Chunking_OverLimitDiscardKeepsConnection`, `TestServer_Chunking_Binarymime`, `TestServer_Chunking_LineLimitAfterNonLastBdat`, `TestBDATShutdownRace`, `TestBdatReadTimeoutClosesConnection`, `TestEODBDATChunksIgnoreDotSequences`, `TestServerBdatUnicodeSpaceIsNotSeparator` |
 | SMTP-EXT-06 | RFC 6531, 6533 | Normative | One row for the extension: SMTPUTF8: the parameter, UTF-8 addresses, `ORCPT` with UTF-8 (xtext and unitext), and the client's detection. The clauses of the RFC are not checked one by one yet. | `TestServerSMTPUTF8`, `TestServerSMTPUTF8_Disabled`, `TestServerDSNUTF8AddressORCPT`, `TestServerDSNwithSMTPUTF8`, `TestSendMail_SMTPUTF8_Autodetect`, `TestSendMail_SMTPUTF8_NotAdvertised`, `TestIsASCII`, `TestUTF8AddrOracleCatchesMutants`, `TestUTF8AddrRFC6533Regressions`, `TestClientORCPTUTF8Encoding`, `FuzzDecodeUTF8AddrXtext`, `FuzzEncodeUTF8AddrXtext`, `FuzzEncodeUTF8AddrUnitext` |
 | SMTP-EXT-07 | RFC 3207 | Normative | STARTTLS summary: parser, handshake, TLS state, close races and AUTH protection. The clause-by-clause audit is below. | `TestTLSClient`, `TestTLSConnState`, `TestStartTLSClosesOnHandshakeFailure`, `TestStartTLSCloseRace`, `TestStartTLSReplySentBeforeHandshake`, `TestParseCmdSTARTTLSExact`, `TestAuthTLSRequiredCode`, `TestNewClientStartTLS` |
 | SMTP-EXT-08 | RFC 4954 | Normative | One row for the extension: AUTH: mechanisms, initial response, cancellation, a second AUTH, anonymous access, and read timeouts. The exchange rules have individual rows below; other clauses remain unaudited. | `TestServerAuthTwice`, `TestServerCancelSASL`, `TestServer_authDisabled`, `TestServer_anonymousUserError`, `TestServer_anonymousUserOK`, `TestServer_authParam`, `TestAuthRejectsExtraTokens`, `TestAuthFailed`, `TestClientAuthTrimSpace`, `TestAuthChallengeSentBeforeReadingResponse`, `TestAuthClientCancelReturns501`, `TestAuthContinuationReadTimeoutClosesConnection`, `TestServerAuthUnicodeSpaceIsNotSeparator`, `TestRFC4954_LongChallengeNotTruncated` |
@@ -326,3 +327,40 @@ recipients, so the conditional path of §3.2(4) cannot reach backend delivery.
 `TestRFC2920EmptyDataRecovery` separately exercises the client against a peer
 that incorrectly accepts that DATA command. SEND/SOML/SAML, EXPN and TURN are
 not implemented; their refusal remains explicit (SMTP-CMD-07).
+
+
+## CHUNKING and BINARYMIME transport (RFC 3030)
+
+Sections below refer to RFC 3030. The server implements BDAT; the client has no
+BDAT sender. These rows audit transport, not a host's MIME processing or relay
+and notification lifecycle. Protocol tests supply synthetic binary octets;
+validating the enclosed MIME object remains the caller's responsibility.
+
+| ID | Section | Level | Requirement | Tests |
+|----|---------|-------|-------------|-------|
+| CHUNK-EHLO-01 | 2 | Normative | Advertise parameterless CHUNKING and continue supporting DATA for suitable content. | `TestRFC3030Examples` |
+| CHUNK-EHLO-02 | 3 | Normative | Advertise parameterless BINARYMIME only when enabled, together with CHUNKING. | `TestRFC3030Examples` |
+| CHUNK-SYNTAX-01 | 2 | Normative | BDAT has a decimal octet count and at most one optional LAST argument; signs, nondecimal counts and extra arguments are rejected. SP/HTAB are accepted separators. | `TestRFC3030Arguments`, `FuzzRFC3030Arguments` |
+| CHUNK-SYNTAX-02 | 2 | Normative | LAST is ASCII and case-insensitive; Unicode look-alikes are not valid markers. | `TestRFC3030Arguments`, `FuzzRFC3030Arguments` |
+| CHUNK-DATA-01 | 2 | MUST | Consume the declared octets immediately after the command and acknowledge each successful chunk with 250. | `TestRFC3030Examples` |
+| CHUNK-DATA-02 | 2, 3 | Normative | Chunk framing counts octets, without dot transparency, line-ending conversion or command-line length restrictions on body bytes. | `TestRFC3030Examples`, `TestRFC3030ReadAheadLimits` |
+| CHUNK-DATA-03 | 2 | Normative | LAST completes one delivery; a zero-length LAST is valid and earlier chunks do not trigger delivery. | `TestRFC3030Examples`, `TestRFC3030NonLastDoesNotDeliver` |
+| CHUNK-DATA-04 | 2 | MUST | Commands between/after chunks remain subject to command line limits, even if a valid body shares the same read buffer. | `TestRFC3030ReadAheadLimits` |
+| CHUNK-STATE-01 | 2 | MUST | BDAT following LAST without a new envelope gets 503 and its payload is consumed as data. | `TestRFC3030RejectedChunksAreOpaque` |
+| CHUNK-STATE-02 | 2 | MUST | DATA during an unfinished BDAT transaction gets 503; DATA and BDAT may be used in different transactions of the same session. | `TestRFC3030BinaryAndResetRules`, `TestRFC3030Examples` |
+| CHUNK-STATE-03 | 2 | MUST | RSET between chunks abandons the accumulated body and permits a fresh transaction. | `TestRFC3030BinaryAndResetRules` |
+| CHUNK-ERROR-01 | 2 | MUST | Consume a failed chunk before sending its error, including oversized and out-of-sequence chunks; payload is never interpreted as commands. | `TestRFC3030RejectedChunksAreOpaque`, `TestRFC3030DiscardBeforeReply` |
+| CHUNK-ERROR-02 | 2 | MUST | Accept and discard chunks already pipelined after a failed chunk; RSET recovers the transaction. | `TestRFC3030RejectedChunksAreOpaque` |
+| CHUNK-ERROR-03 | 2 | Normative | A truncated chunk is not delivered or acknowledged as complete; an incomplete discard cannot leave a reusable command stream. | `TestRFC3030TruncatedChunkNotDelivered`, `TestRFC3030DiscardBeforeReply`, `TestRFC3030DiscardTimeoutClosesConnection` |
+| BINARY-BODY-01 | 3 | Normative | Accept BODY=BINARYMIME only when enabled; CHUNKING can also carry 7BIT and 8BITMIME messages. | `TestRFC3030BinaryAndResetRules` |
+| BINARY-BODY-02 | 3 | MUST | DATA after BODY=BINARYMIME receives 503; the sender must reset that transaction. | `TestRFC3030BinaryAndResetRules` |
+| BINARY-DATA-01 | 3 | MUST | Preserve all bits in each received BDAT octet through the backend reader, including NUL, high-bit bytes and dot sequences. | `TestRFC3030Examples` |
+| CHUNK-EXAMPLE-01 | 4.1 | Normative | Transfer the RFC's 86-octet bodyless message in one LAST chunk. | `TestRFC3030Examples` |
+| CHUNK-EXAMPLE-02 | 4.2 | Normative | Transfer the binary example's two chunk lengths (100000 and 324), two recipients and zero-length LAST; placeholder content is deterministic binary data. | `TestRFC3030Examples` |
+| CHUNK-LIMIT-01 | 2 | Normative | The count grammar has no specified maximum. | n/a: current implementation accepts at most 2^32-1 octets per chunk; larger messages must use multiple chunks. Counts beyond that range receive 501. This is a documented implementation limitation, not full grammar conformance. |
+| CHUNK-CLIENT-01 | 2, 3 | MUST | Send BDAT only after CHUNKING; stop sending after a failed chunk and issue RSET after failure, DATA mixing or a command after LAST. | n/a: no BDAT client API; external senders own these rules. The server drains already-pipelined chunks, but does not enforce a mandatory RSET latch. |
+| BINARY-CLIENT-01 | 3 | MUST | Never send binary material without BINARYMIME negotiation and BODY=BINARYMIME. | n/a: no binary client sender; Client.Mail refuses BodyBinaryMIME even when advertised, as tested by MIME-CLIENT-03. External BDAT senders must negotiate. |
+| BINARY-HOST-01 | 2, 3 | MUST | Canonicalize text MIME parts to CRLF and use the canonical representation for their content type. | n/a: transport treats bytes as opaque; the sender prepares valid MIME, including text charset rules. |
+| BINARY-HOST-02 | 3 | MUST | Storage, delivery and relay preserve every bit of accepted binary messages. | n/a: backend reader preservation is tested; storage and next-hop transport are host responsibilities. EnableBINARYMIME must reflect those capabilities. |
+| BINARY-HOST-03 | 3 | MUST | When the next hop lacks BINARYMIME, any MIME conversion must be lossless and produce valid 7bit/8bit MIME without nested transfer encodings, or use delivery-failure policy. | n/a: the library has no MIME converter, queue or binary client sender; host routing and notification policy remain unaudited. |
+| BINARY-HOST-04 | 3 | Normative | Accept binary MIME content lacking the BINARYMIME body declaration and normally return it to the sender with a suitable DSN. | n/a: no MIME inspection or DSN generation; the transport accepts opaque content and leaves post-acceptance notification policy to the host. |

@@ -37,7 +37,8 @@ An ESMTP client and server library written in Go.
 
 [CHECKLIST.md](CHECKLIST.md) lists the requirements of RFC 5321 (the SMTP
 server and client core), RFC 3207 (STARTTLS), RFC 1870 (SIZE),
-RFC 2920 (PIPELINING) and RFC 6152 (8BITMIME) item by item, plus individual
+RFC 2920 (PIPELINING), RFC 3030 (CHUNKING/BINARYMIME) and
+RFC 6152 (8BITMIME) item by item, plus individual
 AUTH exchange requirements from RFC 4954 §4. Other extensions retain summary
 rows. A small program,
 [`internal/checklist`](internal/checklist/main.go), checks it against the tests
@@ -86,6 +87,19 @@ storage/delivery and negotiate, convert losslessly, or fail at the next hop.
 Those responsibilities and the automatic API's validation gap are explicit in
 the checklist. The DATA fuzz target compares transparency against Go's
 `net/textproto` reader, accounting for that reader's CRLF-to-LF conversion.
+
+CHUNKING is always advertised; `EnableBINARYMIME` additionally advertises
+BINARYMIME. BDAT payloads reach the backend unchanged, even when binary bytes
+share a read buffer with the command. Every failed, syntactically valid chunk
+is consumed before its reply, including chunks already pipelined after an
+error; incomplete chunks close the connection and are never delivered.
+Senders must issue RSET after a failed chunk or illegal DATA/BDAT mixing.
+The current per-chunk count limit is 2^32-1 octets; larger messages can use
+multiple chunks. The client has no BDAT sender. MIME canonicalization,
+lossless storage/relay, next-hop conversion and delivery notifications remain
+host responsibilities; enabling BINARYMIME promises those capabilities.
+The argument parser has a fuzz target with an independent grammar/integer
+oracle. The RFC 3030 checklist records these limitations explicitly.
 
 SIZE declarations are whole-message octet estimates (headers and CRLF included,
 SMTP transparency dots and the DATA terminator excluded). The server accepts

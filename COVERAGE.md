@@ -1,8 +1,8 @@
 # Coverage
 
-After merging the RFC 4954 AUTH exchange and RFC 6152 8BITMIME audits,
+After the RFC 3030 CHUNKING/BINARYMIME transport audit,
 statement coverage of the library package and `internal/checklist` is
-**92.3%** combined (library **91.8%**, checker **99.3%**), measured locally
+**92.6%** combined (library **92.2%**, checker **99.3%**), measured locally
 on Go 1.27.1 linux/arm64 without the race detector. The local command was:
 
 ```
@@ -76,6 +76,15 @@ checker **99.3%**). This includes the new SASL decoder's fuzz seeds, the AUTH
 wire examples, invalid response/error paths and oversized initial responses.
 The 85% CI floor is unchanged; this is not a claim that the 95% target or all
 RFC 4954 requirements are met.
+
+The RFC 3030 audit adds the RFC's 86-octet single-chunk example and its
+100000/324/zero-LAST pipelined example with synthetic binary content, all 256
+octet values, rejection-before-reply ordering, failed pipeline draining,
+truncated transfers, discard timeouts, RSET isolation, and command/body
+read-ahead framing. The BDAT argument parser and the bounded command reader
+are 100% covered in this local run; timed argument fuzzing uses a regexp and
+arbitrary-precision integer reference. The existing 85% floor is unchanged.
+This is a transport slice, not full MIME/relay conformance or the 95% target.
 
 ## Left uncovered on purpose
 

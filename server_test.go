@@ -1390,24 +1390,20 @@ func TestServer_Chunking_OverLimitDiscardKeepsConnection(t *testing.T) {
 		t.Fatal("Invalid RCPT response:", scanner.Text())
 	}
 
-	// Announce a chunk that is both over MaxMessageBytes (50) and, once its
-	// single line is sent, longer than MaxLineLength (100). Send only the
-	// command line first so the server rejects it and blocks in the discard,
-	// guaranteeing the 552 is flushed before any chunk byte exists.
+	// Over-limit data remains opaque even when it exceeds the command-line
+	// limit. RFC 3030 requires the complete chunk before the failure reply.
 	const chunkSize = 200
 	io.WriteString(c, fmt.Sprintf("BDAT %d LAST\r\n", chunkSize))
+	io.WriteString(c, strings.Repeat("x", chunkSize))
 	scanner.Scan()
 	if !strings.HasPrefix(scanner.Text(), "552 ") {
 		t.Fatalf("expected 552 for the over-limit chunk, got: %q", scanner.Text())
 	}
-
-	// Now stream the over-limit chunk (a single line with no CRLF, longer than
-	// MaxLineLength) and immediately issue a fresh command. On the fixed server
-	// the whole chunk is discarded with the line limit disabled and the
-	// connection stays framed, so the MAIL FROM is accepted. On the buggy server
-	// the discard trips ErrTooLongLine, the server emits a spurious 500 and
-	// closes, so this read gets the 500 instead of a 250.
-	io.WriteString(c, strings.Repeat("x", chunkSize))
+	io.WriteString(c, "RSET\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatalf("RSET after discard: %q", scanner.Text())
+	}
 	io.WriteString(c, "MAIL FROM:<c@example.com>\r\n")
 	scanner.Scan()
 	if !strings.HasPrefix(scanner.Text(), "250 ") {

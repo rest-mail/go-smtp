@@ -1,6 +1,7 @@
 package smtp
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -385,4 +386,26 @@ func isDecimal(s string) bool {
 		}
 	}
 	return true
+}
+
+// parseBdatArgs parses RFC 3030's byte count and optional ASCII LAST marker.
+// The current per-chunk implementation limit is 2^32-1 octets; larger messages
+// can be split into multiple chunks. See CHUNK-LIMIT-01 in CHECKLIST.md.
+func parseBdatArgs(arg string) (uint64, bool, error) {
+	args := splitWSP(arg)
+	if len(args) == 0 {
+		return 0, false, errors.New("Missing chunk size argument")
+	}
+	if len(args) > 2 {
+		return 0, false, errors.New("Too many arguments")
+	}
+	last := len(args) == 2
+	if last && (len(args[1]) != 4 || !strings.EqualFold(args[1], "LAST")) {
+		return 0, false, errors.New("Unknown BDAT argument")
+	}
+	size, err := strconv.ParseUint(args[0], 10, 32)
+	if err != nil {
+		return 0, false, errors.New("Malformed size argument")
+	}
+	return size, last, nil
 }

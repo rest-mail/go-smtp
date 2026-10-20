@@ -51,7 +51,8 @@ type Server struct {
 	EnableREQUIRETLS bool
 
 	// Advertise BINARYMIME (RFC 3030) capability.
-	// Should be used only if backend supports it.
+	// Enable only when storage, delivery and relay preserve all binary octets.
+	// MIME validation, canonicalization and next-hop conversion are host policy.
 	EnableBINARYMIME bool
 
 	// Advertise DSN (RFC 3461) capability.

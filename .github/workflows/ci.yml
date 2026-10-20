@@ -25,7 +25,7 @@ jobs:
         run: go build ./...
       # The shared RFC proof (go-spf's rfc-verification.yml, used by the other
       # go-* libraries) fails below 95% statement coverage. The merged AUTH
-      # and 8BITMIME audits measure 92.3% locally; CI figures can differ by Go
+      # and 8BITMIME audits plus RFC 3030 measure 92.6% locally; CI can differ by Go
       # version. Keep the existing floor, raised as coverage grows; COVERAGE.md says
       # what is uncovered. cmd/smtp-debug-server is a demo program and is left
       # out of the figure.
@@ -44,6 +44,7 @@ jobs:
         env:
           GOMAXPROCS: '1'
         run: |
+          go test -run='^$' -fuzz='^FuzzRFC3030Arguments$' -fuzztime=10s -parallel=1 .
           go test -run='^$' -fuzz='^FuzzDecodeSASLResponse$' -fuzztime=10s -parallel=1 .
           go test -run='^$' -fuzz='^FuzzParseCmd$' -fuzztime=10s -parallel=1 .
           go test -run='^$' -fuzz='^FuzzParseArgs$' -fuzztime=10s -parallel=1 .
