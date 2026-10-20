@@ -10,11 +10,11 @@ An item that does not apply, or is a known gap, says "n/a" and why. CI checks
 this file against the tests with `go run ./internal/checklist`; the format is
 described in the [README](README.md#the-rfc-checklist).
 
-Not covered yet: each extension (PIPELINING, 8BITMIME, SIZE, DSN, CHUNKING,
+Not covered yet: each extension (PIPELINING, 8BITMIME, DSN, CHUNKING,
 SMTPUTF8, AUTH, LMTP, RRVS, DELIVERBY, MT-PRIORITY, XCLIENT) is one
 row in the extension summary, mapping its existing tests, and has not been checked
 clause by clause; later slots do that. STARTTLS (RFC 3207) is audited in
-its own section below. RFC 6409 (submission) is not in this
+its own section below, as is SIZE (RFC 1870). RFC 6409 (submission) is not in this
 slot. Reply line lengths (§4.5.3.1.5) are checked by SMTP-LIM-06;
 SASL challenges retain the independent size rules of RFC 4954 §4.
 
@@ -126,7 +126,7 @@ SASL challenges retain the independent size rules of RFC 4954 §4.
 |----|---------|-------|-------------|-------|
 | SMTP-EXT-01 | RFC 2920 | Normative | One row for the extension: PIPELINING: the replies to a batch of commands are sent in order and in one write; the client does not deadlock. The clauses of the RFC are not checked one by one yet. | `TestPipeline_NoRoundTripDeadlock`, `TestPipeline_Integration`, `TestPipeline_NotSupported`, `TestPipeline_LargeGroupDoesNotDeadlock`, `TestPipeline_LMTPSeesOnlyAcceptedRecipients`, `TestPipeline_StalledServerTimesOut`, `TestPipeline_ServerHangupMidGroup`, `TestPipelinedRepliesShareOneWrite`, `TestSingleCommandReplyIsPrompt`, `TestPartialPipelinedLineDoesNotHoldReplies` |
 | SMTP-EXT-02 | RFC 6152 | Normative | One row for the extension: 8BITMIME: `BODY=8BITMIME` and `7BIT` are accepted, any other value is refused. The clauses of the RFC are not checked one by one yet. | `TestServer8BITMIME`, `TestServer_BODYInvalidValue` |
-| SMTP-EXT-03 | RFC 1870 | Normative | One row for the extension: SIZE: the declared size and the message size are checked against `MaxMessageBytes` (inclusive), and an oversize message is drained and the connection kept. The clauses of the RFC are not checked one by one yet. | `TestServerBadSize`, `TestServerTooBig`, `TestServerSizeLimit_ExactlyMaxAccepted`, `TestServerSizeLimit_OverMaxRejected`, `TestServerSizeLimit_RejectWithinLimitKeepsConnection`, `TestServerSizeLimit_OversizedKeepsConnection`, `TestServerSizeLimit_OverLimitDrainBounded`, `TestServerSizeLimit_LMTP_OverLimitDrainBounded`, `TestServerSizeLimit_LMTP_Fallback_OverLimitDrainBounded` |
+| SMTP-EXT-03 | RFC 1870 | Normative | SIZE summary: declared and actual sizes are checked against `MaxMessageBytes` (inclusive); oversized content is drained with a bound. The RFC 1870 audit is below. | `TestServerBadSize`, `TestServerTooBig`, `TestServerSizeLimit_ExactlyMaxAccepted`, `TestServerSizeLimit_OverMaxRejected`, `TestServerSizeLimit_RejectWithinLimitKeepsConnection`, `TestServerSizeLimit_OversizedKeepsConnection`, `TestServerSizeLimit_OverLimitDrainBounded`, `TestServerSizeLimit_LMTP_OverLimitDrainBounded`, `TestServerSizeLimit_LMTP_Fallback_OverLimitDrainBounded` |
 | SMTP-EXT-04 | RFC 3461, xtext (RFC 3461 §4) | Normative | One row for the extension: DSN: `RET`, `ENVID`, `NOTIFY` and `ORCPT`, with xtext encoding both ways. The clauses of the RFC are not checked one by one yet. | `TestServerDSN`, `TestClientDSN`, `TestClientXtext`, `TestXtextRoundTrip`, `TestServer_xtextLiteralNonXchar`, `FuzzDecodeXtext`, `FuzzEncodeXtext` |
 | SMTP-EXT-05 | RFC 3030 | Normative | One row for the extension: CHUNKING and BINARYMIME: BDAT chunks, reset, errors, size limits and shutdown. The clauses of the RFC are not checked one by one yet. | `TestServer_Chunking`, `TestServer_Chunking_LMTP`, `TestServer_Chunking_Reset`, `TestServer_Chunking_ClosedInTheMiddle`, `TestServer_Chunking_EarlyError`, `TestServer_Chunking_EarlyErrorDuringChunk`, `TestServer_Chunking_tooLongMessage`, `TestServer_Chunking_OverLimitDiscardKeepsConnection`, `TestServer_Chunking_Binarymime`, `TestServer_Chunking_LineLimitAfterNonLastBdat`, `TestBDATShutdownRace`, `TestBdatReadTimeoutClosesConnection`, `TestEODBDATChunksIgnoreDotSequences`, `TestServerBdatUnicodeSpaceIsNotSeparator` |
 | SMTP-EXT-06 | RFC 6531, 6533 | Normative | One row for the extension: SMTPUTF8: the parameter, UTF-8 addresses, `ORCPT` with UTF-8 (xtext and unitext), and the client's detection. The clauses of the RFC are not checked one by one yet. | `TestServerSMTPUTF8`, `TestServerSMTPUTF8_Disabled`, `TestServerDSNUTF8AddressORCPT`, `TestServerDSNwithSMTPUTF8`, `TestSendMail_SMTPUTF8_Autodetect`, `TestSendMail_SMTPUTF8_NotAdvertised`, `TestIsASCII`, `TestUTF8AddrOracleCatchesMutants`, `TestUTF8AddrRFC6533Regressions`, `TestClientORCPTUTF8Encoding`, `FuzzDecodeUTF8AddrXtext`, `FuzzEncodeUTF8AddrXtext`, `FuzzEncodeUTF8AddrUnitext` |
@@ -175,3 +175,44 @@ commands; a host's relay and submission policy remains outside this library.
 | TLS-EXAMPLE-01 | 5 | Normative | The usage example's EHLO, STARTTLS, handshake and encrypted EHLO sequence changes the advertised capabilities. | `TestRFC3207ClientUpgrade`, `TestRFC3207ServerDiscardsKnowledge` |
 | TLS-SEC-01 | 6 | MUST | Selected hosts can require successful TLS negotiation meeting the configured cipher and authentication policy before message transfer. | n/a: client TLS-required constructors enforce negotiation using tls.Config; server per-host enforcement is host backend policy, not a built-in library-wide gate (TLS-POLICY-02). |
 | TLS-SEC-02 | 6 | SHOULD | Opportunistic TLS is also available as a local policy. | n/a: host transport choice; select DialStartTLS or Dial before transferring mail, with retry and downgrade policy outside the library. |
+
+
+## Message size declaration (RFC 1870)
+
+Sections below refer to [RFC 1870](https://www.rfc-editor.org/rfc/rfc1870).
+This is the minimal server model of §7: the library enforces its fixed limit,
+while a backend owns storage availability and recipient policy. An unlimited
+server advertises `SIZE 0`, rather than the bare keyword whose §7 semantics
+require a resource check. Values beyond the signed 64-bit API range receive
+552 even when no administrator limit is configured. The client exposes SIZE
+and SMTP errors; queueing, notifications and retry policy belong to its host.
+The §8 example is a protocol test with backend-supplied recipient failures.
+
+| ID | Section | Level | Requirement | Tests |
+|----|---------|-------|-------------|-------|
+| SIZE-EHLO-01 | 3, 4 | Normative | Advertise SIZE and the fixed inclusive maximum as a decimal octet count. | `TestRFC1870Advertisement` |
+| SIZE-EHLO-02 | 3, 7 | Normative | SIZE 0 means no configured fixed maximum; a bare SIZE does not convey a maximum. | `TestRFC1870Advertisement` |
+| SIZE-EHLO-03 | 3, 7 | Normative | The client distinguishes a numeric maximum (including unlimited zero) from an absent or unusable maximum; only ASCII decimal digits are valid. | `TestRFC1870ClientLimits`, `FuzzRFC1870SizeValues` |
+| SIZE-MAIL-01 | 3, 6 | Normative | A SIZE value is 1–20 ASCII decimal digits, with no sign; leading zeroes are valid. | `TestRFC1870Declarations` |
+| SIZE-MAIL-02 | 6 | Normative | A MAIL command has at most one SIZE parameter. | `TestRFC1870Declarations` |
+| SIZE-MAIL-03 | 3, 6 | Normative | Pass the declared octet estimate to the backend without a 32-bit cap; values outside the implementation's int64 range are refused as too large. | `TestRFC1870Declarations` |
+| SIZE-LINE-01 | 3 | Normative | SIZE extends the base MAIL command line allowance by 26 octets (538 total under the default server limit). | `TestRFC1870ExtendedMailLine` |
+| SIZE-CLIENT-01 | 4, 6 | Normative | Send a SIZE declaration only when the extension was advertised, using a non-negative decimal estimate. | `TestRFC1870ClientDeclarations` |
+| SIZE-CLIENT-02 | 7 | MAY | A minimal client may omit SIZE even when advertised; zero in MailOptions selects omission. | `TestRFC1870ClientDeclarations` |
+| SIZE-DATA-01 | 5, 6 | Normative | Actual size counts headers, body and CRLF, excluding transparency dots and the DATA terminator. | `TestRFC1870DataOctets` |
+| SIZE-DATA-02 | 6 | MUST NOT | Never use the declared SIZE to delimit DATA. | `TestRFC1870DataOctets` |
+| SIZE-DATA-03 | 6.1, 6.3 | MAY | An underestimate may be accepted if the actual message still fits the server's fixed maximum. | `TestRFC1870DataOctets` |
+| SIZE-REPLY-01 | 4, 6.1, 7 | Normative | Refuse a declaration above the fixed maximum with 552 before DATA; equality is accepted. | `TestRFC1870Declarations` |
+| SIZE-REPLY-02 | 6.4 | MAY | A backend may refuse individual recipients with temporary 452 or permanent 552 without discarding other accepted recipients. | `TestRFC1870Example` |
+| SIZE-REPLY-03 | 6.1 | MAY | Temporary storage shortage may be refused with 452 at MAIL time. | n/a: backend storage policy; Session.Mail can return SMTPError 452. The library has no storage allocator. |
+| SIZE-REPLY-04 | 6.3 | SHOULD NOT | After accepting an estimate, do not issue a size-based 552 for content no larger than that estimate. | `TestRFC1870DataOctets` |
+| SIZE-CLIENT-03 | 6.2, 6.4 | Normative | Preserve temporary and permanent errors from MAIL, RCPT, DATA and the final content response for host policy. | `TestRFC1870ClientFailures` |
+| SIZE-POLICY-01 | 6.2 | SHOULD | After MAIL 452, reset or quit and retry later. | n/a: host queue and retry policy; the client returns SMTPError and exposes Reset/Quit. |
+| SIZE-POLICY-02 | 6.2 | SHOULD | After MAIL 552, reset or quit and notify the sender of permanent failure. | n/a: host notification policy; no queue or delivery notification generator in this library. |
+| SIZE-POLICY-03 | 6.4 | Normative | Recipient 452 may be retried; recipient 552 must not be requeued for that recipient. | n/a: host queue policy; the API returns each RCPT error to its caller. |
+| SIZE-POLICY-04 | 7 | Normative | Before accepting a declaration with bare SIZE, check resources and if possible reserve storage. | n/a: server advertises SIZE 0 or a numeric fixed limit, never bare SIZE; actual storage reservations belong to the backend. |
+| SIZE-EXAMPLE-01 | 8 | Normative | The example's 500000-octet estimate, successful recipient, permanent/temporary recipient refusals and successful DATA exchange are exercised. | `TestRFC1870Example` |
+
+The size-counting tests also verify the §6.3 recommendation through the fixed
+limit path. A backend can still choose its own status code, including 552;
+it must apply that recommendation when rejecting for storage/size reasons.
