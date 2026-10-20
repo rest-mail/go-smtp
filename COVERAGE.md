@@ -25,6 +25,13 @@ core) does not close the gap, so CI keeps its own steps and gates on a **floor
 of 85%**, to be raised as the figure grows. The shared workflow replaces them
 once coverage reaches 95%.
 
+After the RFC 4954 AUTH exchange slice, a local Go 1.27.1 run of the same
+package list without `-race` reports **91.2%** combined (library **90.7%**,
+checker **99.3%**). This includes the new SASL decoder's fuzz seeds, the AUTH
+wire examples, invalid response/error paths and oversized initial responses.
+The 85% CI floor is unchanged; this is not a claim that the 95% target or all
+RFC 4954 requirements are met.
+
 ## Left uncovered on purpose
 
 | File | Function | Reason |

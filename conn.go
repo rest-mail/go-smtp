@@ -1122,7 +1122,7 @@ func (c *Conn) handleAuth(arg string) {
 
 	parts := splitWSP(arg)
 	if len(parts) == 0 {
-		c.writeResponse(502, EnhancedCode{5, 5, 4}, "Missing parameter")
+		c.writeResponse(501, EnhancedCode{5, 5, 4}, "Missing parameter")
 		return
 	}
 	// RFC 4954 §4: the AUTH command carries a mechanism and at most one optional
@@ -1148,7 +1148,7 @@ func (c *Conn) handleAuth(arg string) {
 		var err error
 		ir, err = decodeSASLResponse(parts[1])
 		if err != nil {
-			c.writeResponse(454, EnhancedCode{4, 7, 0}, "Invalid base64 data")
+			c.writeResponse(501, EnhancedCode{5, 5, 2}, "Invalid base64 data")
 			return
 		}
 	}
@@ -1214,12 +1214,12 @@ func (c *Conn) handleAuth(arg string) {
 
 		response, err = decodeSASLResponse(encoded)
 		if err != nil {
-			c.writeResponse(454, EnhancedCode{4, 7, 0}, "Invalid base64 data")
+			c.writeResponse(501, EnhancedCode{5, 5, 2}, "Invalid base64 data")
 			return
 		}
 	}
 
-	c.writeResponse(235, EnhancedCode{2, 0, 0}, "Authentication succeeded")
+	c.writeResponse(235, EnhancedCode{2, 7, 0}, "Authentication succeeded")
 	c.didAuth = true
 }
 
@@ -1235,7 +1235,7 @@ func (c *Conn) handleAuthReadError(err error) {
 	case err == io.EOF || errors.Is(err, net.ErrClosed):
 		// Peer is gone; there is nothing to send.
 	case err == ErrTooLongLine:
-		c.writeResponse(500, EnhancedCode{5, 4, 0}, "Too long line, closing connection")
+		c.writeResponse(500, EnhancedCode{5, 5, 6}, "Too long line, closing connection")
 	case err == errBareLF:
 		c.writeResponse(500, EnhancedCode{5, 5, 2}, "Bare LF is not a line ending, closing connection")
 	default:
@@ -1251,6 +1251,10 @@ func (c *Conn) handleAuthReadError(err error) {
 func decodeSASLResponse(s string) ([]byte, error) {
 	if s == "=" {
 		return []byte{}, nil
+	}
+	// encoding/base64 ignores CR and LF; SASL forbids every non-alphabet byte.
+	if strings.ContainsAny(s, "\r\n") {
+		return nil, errors.New("smtp: invalid SASL base64")
 	}
 	return base64.StdEncoding.DecodeString(s)
 }

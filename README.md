@@ -36,8 +36,9 @@ An ESMTP client and server library written in Go.
 ## The RFC checklist
 
 [CHECKLIST.md](CHECKLIST.md) lists the requirements of RFC 5321 (the SMTP
-server and client core) item by item, with the extensions as one row each, and
-a small program, [`internal/checklist`](internal/checklist/main.go), checks it
+server and client core) item by item, plus individual AUTH exchange requirements
+from RFC 4954 §4. Other extensions retain summary rows.
+A small program, [`internal/checklist`](internal/checklist/main.go), checks it
 against the tests in CI. It is the same program as
 [go-spf](https://github.com/rest-mail/go-spf)'s and the other `go-*`
 libraries', without package `slices`, since this module still declares go 1.13.

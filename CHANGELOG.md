@@ -6,6 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- RFC 4954 AUTH exchange checklist rows, wire tests for the RFC's PLAIN and
+  empty EXTERNAL examples, malformed Base64, retries and response sizes; a
+  SASL response decoder fuzz target runs in CI. Remaining authentication
+  policy and SASL buffer/security-layer limitations are recorded explicitly.
+
+### Fixed
+
+- Malformed Base64 in AUTH now returns `501 5.5.2` instead of `454 4.7.0`;
+  a missing mechanism returns `501`, successful authentication uses `235 2.7.0`,
+  unknown mechanisms use `504 5.5.4`, and oversized continuations use `500 5.5.6`.
+  SASL decoding rejects CR/LF rather than silently discarding them.
+- The client defers an initial SASL response that would exceed the 512-octet
+  AUTH command limit until the server's empty challenge. Invalid Base64
+  challenges trigger cancellation; terminal AUTH failures no longer send a
+  stray asterisk as a new SMTP command.
+
 ## [0.30.0] - 2026-10-19
 
 ### Added
