@@ -6,7 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- Invalid enabled MT-PRIORITY policy names now receive EHLO/LHLO
+  `451 4.3.5` before backend session creation, instead of advertising values
+  outside RFC 6710's ASCII grammar or its 20-octet limit. An empty name still
+  omits the policy; a disabled extension ignores the unused configuration.
+
 ### Added
+
+- Five previously unmapped transport requirements now have wire proofs:
+  MT-PRIORITY profile grammar and independent DELIVERBY negotiation,
+  STARTTLS at a pipeline boundary, AUTH between completed pipeline groups,
+  and combined DSN commands at the default 2000-octet budget. Host scheduling,
+  content classification and notification responsibilities remain explicit. An
+  additional binary-refusal wire test strengthens the existing body-option
+  safeguard; binary sending remains unsupported.
 
 - README badges for CI, the enforced coverage floor and the checklist
   (276/387 mapped), checked against CHECKLIST.md and the CI `FLOOR` by
