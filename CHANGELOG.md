@@ -8,12 +8,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- Multiline server replies repeat the enhanced status code on every line, as
+  RFC 2034 §4 requires; it used to appear on the last line only, so a client
+  reading the first line (including this package's) found no status code.
+
 - LMTP BDAT LAST flushes each recipient reply in RCPT order as soon as its
   status is available, without waiting for later deliveries or `LMTPData` to
   return. Unset statuses still use the backend's final result; transaction
   reset and subsequent commands wait for the backend to finish.
 
 ### Added
+
+- RFC 2034 (ENHANCEDSTATUSCODES) checklist section: nine rows, seven mapped
+  to new wire tests.
 
 - README badges for CI, the enforced coverage floor and the checklist
   (276/387 mapped), checked against CHECKLIST.md and the CI `FLOOR` by

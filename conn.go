@@ -1961,14 +1961,17 @@ func (c *Conn) writeResponse(code int, enhCode EnhancedCode, text ...string) {
 	// transform each single line with \n, into separate lines
 	text = strings.Split(strings.Join(text, "\n"), "\n")
 
+	// RFC 2034 §4: the same status code begins the text of every line of a
+	// multiline reply, not only the last.
+	status := ""
+	if enhCode != NoEnhancedCode {
+		status = fmt.Sprintf("%d.%d.%d ", enhCode[0], enhCode[1], enhCode[2])
+	}
 	lastLineIndex := len(text) - 1
 	for i, line := range text {
-		prefix := fmt.Sprintf("%d-", code)
+		prefix := fmt.Sprintf("%d-%s", code, status)
 		if i == lastLineIndex {
-			prefix = fmt.Sprintf("%d ", code)
-			if enhCode != NoEnhancedCode {
-				prefix += fmt.Sprintf("%d.%d.%d ", enhCode[0], enhCode[1], enhCode[2])
-			}
+			prefix = fmt.Sprintf("%d %s", code, status)
 		}
 
 		// RFC 5321 §4.5.3.1.5: count the prefix and CRLF in the 512-octet
