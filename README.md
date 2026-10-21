@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/rest-mail/go-smtp/actions/workflows/ci.yml/badge.svg)](https://github.com/rest-mail/go-smtp/actions/workflows/ci.yml)
 [![Coverage gate: >=94.5%](https://img.shields.io/badge/coverage%20gate-%3E%3D94.5%25-yellowgreen)](COVERAGE.md)
-[![Checklist: 276/387 mapped](https://img.shields.io/badge/checklist-276%2F387%20mapped-blue)](CHECKLIST.md)
+[![Checklist: 277/387 mapped](https://img.shields.io/badge/checklist-277%2F387%20mapped-blue)](CHECKLIST.md)
 [![Go Reference](https://pkg.go.dev/badge/github.com/rest-mail/go-smtp.svg)](https://pkg.go.dev/github.com/rest-mail/go-smtp)
 
 An ESMTP client and server library written in Go.
@@ -198,7 +198,10 @@ LMTP uses LHLO and refuses SMTP HELO/EHLO. `NewClientLMTP` preserves an LHLO
 refusal instead of falling back to HELO. `LMTPSession.LMTPData` can supply
 one status per accepted RCPT, including duplicate paths; unset statuses use
 the method's returned error. A plain `Session.Data` result applies to all
-recipients. DATA replies are flushed individually in RCPT order.
+recipients. DATA and BDAT LAST replies are flushed individually in RCPT order
+as statuses become available, including before `LMTPData` returns. The server
+waits for the method to return before resetting the transaction or processing
+the next command.
 
 A successful status promises durable delivery or relay responsibility: the
 host must persist the message before reporting success. Deploy LMTP only by
@@ -210,8 +213,7 @@ alongside transport errors. Treat every unanswered recipient as a temporary fail
 there are no synthetic per-recipient 4xx entries or streaming callbacks. Its
 address-keyed maps cannot preserve separate duplicate-path outcomes. The
 checklist also records BDAT gaps: no-recipient LAST returns 503 instead
-of zero replies, LAST statuses wait for the backend to finish rather than
-being flushed individually, and early failures use a single SMTP reply.
+of zero replies, and early failures use a single SMTP reply.
 
 XCLIENT is restricted to connections approved by `TrustXCLIENT`. A successful
 assertion logs out the old backend session, clears SMTP greeting/authentication
