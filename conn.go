@@ -315,6 +315,9 @@ type XClientAttrs struct {
 
 // XClient returns the client identity a trusted proxy asserted via XCLIENT, or
 // nil if none was asserted on this connection. See Server.EnableXCLIENT.
+// Treat the returned attributes as read-only. Each successful XCLIENT command
+// creates a new snapshot; pointers retained by earlier Sessions stay unchanged.
+// HELO, PROTO and LOGIN are metadata for the host, not protocol/auth state.
 func (c *Conn) XClient() *XClientAttrs {
 	return c.xclient
 }
@@ -333,16 +336,23 @@ func (c *Conn) handleXClient(arg string) {
 		c.writeResponse(550, EnhancedCode{5, 7, 1}, "XCLIENT not allowed")
 		return
 	}
-	if c.bdatWriter() != nil {
-		c.writeResponse(503, EnhancedCode{5, 5, 1}, "XCLIENT not allowed during message transfer")
+	if c.fromReceived || c.bdatWriter() != nil {
+		c.writeResponse(503, EnhancedCode{5, 5, 1}, "XCLIENT not allowed during mail transaction")
 		return
 	}
 
-	attrs := c.xclient
-	if attrs == nil {
-		attrs = &XClientAttrs{}
+	fields := splitWSP(arg)
+	if len(fields) == 0 {
+		c.writeResponse(501, EnhancedCode{5, 5, 4}, "XCLIENT requires an attribute")
+		return
 	}
-	for _, field := range splitWSP(arg) {
+	// Validate into a copy: a rejected command must not partly replace the
+	// current identity, nor mutate an identity retained by an old Session.
+	attrs := XClientAttrs{}
+	if c.xclient != nil {
+		attrs = *c.xclient
+	}
+	for _, field := range fields {
 		key, value, ok := strings.Cut(field, "=")
 		if !ok {
 			c.writeResponse(501, EnhancedCode{5, 5, 4}, "Malformed XCLIENT attribute: "+field)
@@ -357,7 +367,6 @@ func (c *Conn) handleXClient(arg string) {
 			attrs.Proto = value
 		case "HELO":
 			attrs.Helo = value
-			c.helo = value
 		case "LOGIN":
 			attrs.Login = value
 		case "PORT", "DESTADDR", "DESTPORT":
@@ -367,7 +376,16 @@ func (c *Conn) handleXClient(arg string) {
 			return
 		}
 	}
-	c.xclient = attrs
+	// XCLIENT starts a new SMTP session on the same transport. Backend state
+	// (including authentication and access decisions) belongs to the previous
+	// identity. TLS and accumulated proxy attributes survive this reset.
+	if session := c.Session(); session != nil {
+		session.Logout()
+		c.setSession(nil)
+	}
+	c.helo = ""
+	c.didAuth = false
+	c.xclient = &attrs
 
 	c.reset()
 	c.greet()

@@ -10,8 +10,9 @@ An item that does not apply, or is a known gap, says "n/a" and why. CI checks
 this file against the tests with `go run ./internal/checklist`; the format is
 described in the [README](README.md#the-rfc-checklist).
 
-Not covered yet: XCLIENT has an extension summary row mapping existing tests;
-its full clause-by-clause audit remains for a later slice.
+Postfix XCLIENT (a non-IETF extension) is audited below for session state and
+trust boundaries; its remaining syntax and metadata-only compatibility gaps
+are explicit.
 STARTTLS (RFC 3207), SIZE (RFC 1870), PIPELINING (RFC 2920),
 CHUNKING/BINARYMIME (RFC 3030), 8BITMIME (RFC 6152), AUTH exchange rules
 (RFC 4954 §4), DSN parameter/protocol rules (RFC 3461 §§2–4, 5.1, 5.4),
@@ -141,7 +142,7 @@ SASL challenges retain the independent size rules of RFC 4954 §4.
 | SMTP-EXT-10 | RFC 7293 | Normative | RRVS summary: the `RRVS` parameter on RCPT. The RFC 7293 audit is below. | `TestServerRRVS`, `TestClientRRVS` |
 | SMTP-EXT-11 | RFC 2852 | Normative | DELIVERBY summary: `BY` on MAIL only, in range; the detailed audit below separates transport from host delivery policy. | `TestServerDELIVERBY`, `TestClientDELIVERBY`, `TestClientDeliverByTruncatesToSeconds`, `TestParseDeliverByBoundaries`, `FuzzParseDeliverByArgument`, `TestServerDeliverByAndMTPriorityRejectedOnRcpt` |
 | SMTP-EXT-12 | RFC 6710 | Normative | MT-PRIORITY summary: the MAIL parameter; the detailed RFC 6710 transport audit below separates syntax from host authorization and queue policy. | `TestServerMTPRIORITY`, `TestClientMTPRIORITY` |
-| SMTP-EXT-13 | Postfix XCLIENT (not an IETF RFC) | Normative | One row for the extension: XCLIENT: a trusted peer may set the client's address and name; an untrusted one may not. The clauses of the RFC are not checked one by one yet. | `TestServerXClientTrusted`, `TestServerXClientUntrusted`, `TestServerXClientKeepsUnicodeSpaceInValue` |
+| SMTP-EXT-13 | Postfix XCLIENT (not an IETF RFC) | Normative | XCLIENT lets trusted peers assert client identity; see the separate Postfix XCLIENT audit below for session state, host duties and syntax gaps. | `TestServerXClientTrusted`, `TestServerXClientUntrusted`, `TestServerXClientKeepsUnicodeSpaceInValue` |
 
 
 ## AUTH exchange (RFC 4954 §3, §4 and §8)
@@ -588,3 +589,51 @@ when CloseWithLMTPResponse finishes; it does not expose a streaming callback.
 | LMTP-DEFAULT-01 | 5 | Normative | LMTP listen helpers default to a Unix-domain socket rather than the SMTP TCP network. | `TestRFC2033DefaultNetwork` |
 | LMTP-DEPLOY-01 | 1, 5 | MUST NOT | Do not use LMTP on TCP port 25. | n/a: host must enforce this on supplied listeners and explicit Network/Addr; the default network is unix, tested by TestRFC2033DefaultNetwork. |
 | LMTP-DEPLOY-02 | 1, 5 | SHOULD | Use LMTP only by prior arrangement, avoid wide-area networks and prefer SMTP for fast queueing receivers capable of notifications. | n/a: host deployment/topology decision; the library supports both protocols without choosing the receiver role. |
+
+
+## Postfix XCLIENT: session state and trust boundaries
+
+Source: [Postfix XCLIENT specification](https://www.postfix.org/XCLIENT_README.html)
+([upstream source mirror](https://github.com/vdukhovni/postfix/blob/master/postfix/proto/XCLIENT_README.html)),
+audited 2026-10-21. XCLIENT is **not an IETF RFC**. Section names below refer
+to headings in that document. This slice verifies session/transaction state,
+trust, pipelining and the published conversation. Attribute-value validation
+and xtext decoding are still incomplete; HELO/PROTO are retained as metadata
+rather than effective protocol state. The rows below record those gaps
+rather than claiming complete Postfix compatibility. Existing acceptance of
+legacy unencoded values (including Unicode whitespace as value content) is
+unchanged. The shared SMTP token parsers and their fuzz targets are unchanged.
+Rows marked "Library integration" or "Library safeguard" describe this API
+and its safety guarantees, rather than extra Postfix protocol requirements.
+
+| ID | Section | Level | Requirement | Tests |
+|----|---------|-------|-------------|-------|
+| XC-EHLO-01 | Command syntax | Normative | EHLO advertises XCLIENT with the supported identity fields ADDR, NAME, PROTO, HELO and LOGIN only to authorized peers. | `TestXClientTrustConfiguration` |
+| XC-SYNTAX-01 | Command syntax | Normative | Commands/attribute names are case-insensitive and at least one name=value pair is required. | `TestXClientRejectedCommandIsAtomic`, `TestXClientReplacesSession` |
+| XC-SYNTAX-02 | Command syntax; reply codes | Normative | Malformed fields and unknown attributes receive 501. | `TestXClientRejectedCommandIsAtomic` |
+| XC-SYNTAX-03 | Command syntax | Normative | Attribute values use RFC 1891 xtext encoding. | n/a: not supported yet: values remain literal, so +HH is not decoded; legacy unencoded values are accepted as before. A separate syntax/parser slice must add decoding and fuzz coverage. |
+| XC-SYNTAX-04 | Command syntax (NAME) | Normative | NAME denotes a hostname, [UNAVAILABLE] or [TEMPUNAVAIL]. | n/a: not supported yet: NAME is exposed literally without hostname/sentinel validation; sentinel spellings and meaning are the host's responsibility. |
+| XC-SYNTAX-05 | Command syntax (ADDR) | Normative | ADDR is IPv4, IPv6 prefixed IPV6:, or [UNAVAILABLE], without surrounding address brackets. | n/a: not supported yet: ADDR is exposed literally without address validation or prefix/sentinel normalization; the host must validate before use. |
+| XC-SYNTAX-06 | Command syntax (PROTO) | Normative | PROTO specifies SMTP or ESMTP. | n/a: not supported yet: the value is exposed literally without restricting its grammar; it does not switch this connection's SMTP/LMTP mode. |
+| XC-SYNTAX-07 | Command syntax (HELO) | Normative | HELO carries the original client's HELO argument or [UNAVAILABLE]. | n/a: not supported yet: the value is retained as metadata without argument/sentinel validation or normalization. |
+| XC-SYNTAX-08 | Command syntax (LOGIN) | Normative | LOGIN carries a SASL login or [UNAVAILABLE]. | n/a: host defines the identity mapping and unavailable sentinel policy; XClient().Login is metadata and does not authenticate a Session automatically. |
+| XC-SYNTAX-09 | Command syntax (PORT, DESTADDR, DESTPORT) | Normative | Port and destination attributes carry their specified address/decimal/sentinel values. | n/a: not supported yet: accepted for legacy compatibility but neither advertised nor surfaced; full validation and API support remain future work. |
+| XC-SYNTAX-10 | Command syntax, notes 1-2 | Normative | NAME/HELO allow 255 characters; sentinel and IPV6: spellings are case-insensitive. | n/a: not supported yet: no per-attribute length validation or sentinel normalization; callers interpret literal fields. |
+| XC-SYNTAX-11 | Command syntax, note 1 | MUST NOT | The sender must not exceed the 512-character SMTP command limit and should split assertions across commands. | n/a: no XCLIENT client API; external proxy must observe 512 octets including CRLF. Server uses its configurable MaxLineLength (default 2000), not a specific XCLIENT 512-octet limit. |
+| XC-ORDER-01 | Command syntax; reply codes | MUST NOT | XCLIENT is refused with 503 between successful MAIL and completion or RSET, including after RCPT and between BDAT chunks; refusal leaves delivery intact. | `TestXClientRefusedDuringTransaction` |
+| XC-ORDER-02 | Command syntax | MAY | XCLIENT can be pipelined with PIPELINING; responses retain command order and the client should put XCLIENT last in a group. | `TestXClientPipelinedExample` |
+| XC-STATE-01 | Server response | Normative | A successful XCLIENT returns a fresh 220 and resets the protocol to the initial greeting stage (see XC-STATE-07 for the effective HELO/PROTO gap). | `TestXClientReplacesSession`, `TestXClientPipelinedExample` |
+| XC-STATE-02 | Library integration | Normative | Backend session/authentication state belongs to the old identity: close that session and create a new one on the next greeting. | `TestXClientReplacesSession`, `TestXClientPreservesTLS` |
+| XC-STATE-03 | Server response | MUST NOT | Keep the most recent asserted attributes, including HELO and PROTO, across the protocol reset. | `TestXClientReplacesSession`, `TestXClientRefusedDuringTransaction`, `TestXClientPipelinedExample` |
+| XC-STATE-04 | Library integration | Normative | Old SMTP authentication must not authenticate a newly asserted client; it can authenticate after a new greeting. | `TestXClientReplacesSession` |
+| XC-STATE-05 | Library safeguard | Normative | Deliver accumulated identity attributes to the new backend; preserve identity snapshots already given to previous sessions. | `TestXClientReplacesSession` |
+| XC-STATE-06 | Library safeguard | Normative | A command refused with 501 does not partially update identity, greeting, authentication or backend session state. | `TestXClientRejectedCommandIsAtomic` |
+| XC-STATE-07 | Server response | MUST NOT | Preserve the effective HELO/PROTO attributes supplied with XCLIENT. | n/a: partial support: XClient().Helo/Proto survive as metadata, but Hostname is cleared and a fresh HELO/EHLO is required to create the replacement backend. Unlike Postfix, an asserted HELO does not itself satisfy the greeting requirement and PROTO does not select effective protocol state. |
+| XC-TLS-01 | Server response | MUST NOT | Keep the negotiated TLS session and do not advertise STARTTLS over an already encrypted connection. | `TestXClientPreservesTLS` |
+| XC-TLS-02 | Server response | MAY | Client-certificate information can affect access decisions after XCLIENT. | n/a: host policy via TrustXCLIENT and Backend.NewSession using TLSConnectionState; this slice verifies TLS retention rather than certificate access rules. |
+| XC-SEC-01 | Security; reply codes | MUST | Only authorized peers may assert identity; disabled extension, missing callback and trust refusal get 550. | `TestXClientTrustConfiguration`, `TestXClientTrustRechecked` |
+| XC-SEC-02 | Command syntax, note 1; Security | Normative | Re-evaluate authorization when advertising or accepting XCLIENT; host policy can revoke access after identity is asserted. | `TestXClientTrustRechecked` |
+| XC-SEC-03 | Purpose; Security | Normative | Asserted attributes can change access permissions, logging and audit trails. | n/a: host must implement those decisions in TrustXCLIENT and the replacement Backend.NewSession; RemoteAddr remains the real transport peer, and enabling XCLIENT alone does not change relay permissions or trust policy. |
+| XC-REPLY-01 | Server response; reply codes | Normative | Connection-level access policy may reject the asserted identity with an appropriate code, including 421/disconnect when unable to continue. | n/a: no immediate per-XCLIENT backend rejection hook; the fresh Backend.NewSession runs after HELO/EHLO and may return an SMTPError (including a terminating 421), so pre-220 access rejection is not supported yet. |
+| XC-CACHE-01 | SMTP connection caching | Normative | Attributes persist across deliveries, ordinary RSET and EHLO; cached-connection users must reset them when changing clients. | `TestXClientReplacesSession`, `TestXClientPipelinedExample` |
+| XC-EXAMPLE-01 | XCLIENT Example | Normative | The published EHLO, NAME/ADDR assertion, fresh greeting, EHLO, MAIL, RCPT, DATA and QUIT conversation succeeds. | `TestXClientRefusedDuringTransaction`, `TestXClientPipelinedExample` |
