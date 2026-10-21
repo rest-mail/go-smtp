@@ -8,7 +8,7 @@ An ESMTP client and server library written in Go.
 
 ### Protocol
 
-* ESMTP **client and server** implementing [RFC 5321], plus [LMTP] server support
+* ESMTP **client and server** implementing [RFC 5321], plus [LMTP] client and server support
 * **TLS** — implicit TLS and [STARTTLS]
 * **SASL authentication** via [go-sasl], with pluggable mechanisms
 * **PIPELINING** and enhanced status codes
@@ -182,6 +182,25 @@ a priority below the current minimum (450/550 X.7.15), or priority-specific size
 limits (552 5.7.16). Client.Mail refuses an explicit priority when the peer does
 not advertise MT-PRIORITY; a relay must explicitly choose fallback and omit the
 option for such a peer. These policy boundaries are recorded in the checklist.
+
+LMTP uses LHLO and refuses SMTP HELO/EHLO. `NewClientLMTP` preserves an LHLO
+refusal instead of falling back to HELO. `LMTPSession.LMTPData` can supply
+one status per accepted RCPT, including duplicate paths; unset statuses use
+the method's returned error. A plain `Session.Data` result applies to all
+recipients. DATA replies are flushed individually in RCPT order.
+
+A successful status promises durable delivery or relay responsibility: the
+host must persist the message before reporting success. Deploy LMTP only by
+prior arrangement on local transports, never TCP port 25; explicit listeners
+and addresses are not validated (the default network is Unix sockets).
+`CloseWithLMTPResponse` returns partial successes and known failures alongside
+transport errors. Treat every unanswered recipient as a temporary failure;
+there are no synthetic per-recipient 4xx entries or streaming callbacks. Its
+address-keyed maps cannot preserve separate duplicate-path outcomes. The
+checklist also records BDAT gaps: no-recipient LAST returns 503 instead
+of zero replies, LAST statuses wait for the backend to finish rather than
+being flushed individually, and early failures use a single SMTP reply.
+The client also expects exactly 250 for each final positive reply. These are explicit limits, not full conformance.
 
 ## Relationship with net/smtp
 

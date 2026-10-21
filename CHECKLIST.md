@@ -10,13 +10,14 @@ An item that does not apply, or is a known gap, says "n/a" and why. CI checks
 this file against the tests with `go run ./internal/checklist`; the format is
 described in the [README](README.md#the-rfc-checklist).
 
-Not covered yet: LMTP and XCLIENT each have an extension summary row mapping
-existing tests; their full clause-by-clause audits remain for later slices.
+Not covered yet: XCLIENT has an extension summary row mapping existing tests;
+its full clause-by-clause audit remains for a later slice.
 STARTTLS (RFC 3207), SIZE (RFC 1870), PIPELINING (RFC 2920),
 CHUNKING/BINARYMIME (RFC 3030), 8BITMIME (RFC 6152), AUTH exchange rules
 (RFC 4954 §4), DSN parameter/protocol rules (RFC 3461 §§2–4, 5.1, 5.4),
 the SMTPUTF8 envelope (RFC 6531), the RRVS parameter (RFC 7293), DELIVERBY
-transport (RFC 2852) and MT-PRIORITY transport (RFC 6710) are audited below.
+transport (RFC 2852), MT-PRIORITY transport (RFC 6710) and LMTP
+(RFC 2033) are audited below.
 The remaining AUTH and DSN lifecycle rules remain for later slices.
 RFC 6409 (submission) is not in this slot. Reply line lengths (§4.5.3.1.5)
 are checked by SMTP-LIM-06;
@@ -543,3 +544,47 @@ to the backend. These host duties and configuration gaps are explicit below.
 | PRI-TIME-01 | 5.2 | Normative | DELIVERBY and priority can be combined without requiring either extension to enable the other. | n/a: host selects deadlines per priority; the example tests only verify combined parameter transport. |
 | PRI-MX-01 | 9.1 | Normative | Configure MX peers consistently or disable priority service to avoid inconsistent delivery. | n/a: DNS and multi-server deployment configuration are outside this library. |
 | PRI-POLICY-01 | 9.2, 10.1–10.2, Apps. A–C | Normative | Document and consistently deploy the assignment policy, its levels, retry/expiry/size limits and trust rules; register additional policies as appropriate. | n/a: host deployment and policy-registration duties; the built-in constants name policies without implementing their schedulers. |
+
+
+## LMTP (RFC 2033)
+
+Sections refer to [RFC 2033](https://datatracker.ietf.org/doc/html/rfc2033).
+This audits the LMTP differences from ESMTP, including the §4.2 example
+addresses, message and mixed results. Existing SMTP, PIPELINING, DATA and
+CHUNKING parser tests/fuzzers apply to the shared machinery. LMTP introduces
+no separate parser. Successful delivery is a host promise: transport success
+alone does not prove durable storage. The client API returns collected results
+when CloseWithLMTPResponse finishes; it does not expose a streaming callback.
+
+| ID | Section | Level | Requirement | Tests |
+|----|---------|-------|-------------|-------|
+| LMTP-HELLO-01 | 4.1 | Normative | LHLO replaces EHLO, has its extension semantics and requires a domain; MAIL requires a successful greeting. | `TestRFC2033GreetingAndSequence` |
+| LMTP-HELLO-02 | 4.1 | MUST NOT | An LMTP server must not accept HELO or EHLO (500 recommended); SMTP refuses LHLO to detect configuration mistakes. | `TestRFC2033GreetingAndSequence` |
+| LMTP-HELLO-03 | 4.1 | Normative | The LMTP client uses LHLO and does not downgrade to SMTP HELO on a 500 or 502 refusal. | `TestRFC2033ClientNoSMTPFallback` |
+| LMTP-DATA-01 | 4.2 | MUST | DATA without any successful RCPT fails with 503, including when all recipients were refused or a prior transaction has ended. | `TestRFC2033GreetingAndSequence`, `TestRFC2033RecipientReplies` |
+| LMTP-DATA-02 | 4.2 | Normative | After the final dot, issue exactly one reply per successful RCPT, in original RCPT order, with no aggregate reply or reply for refused recipients. | `TestRFC2033RecipientReplies` |
+| LMTP-DATA-03 | 4.2 | Normative | Repeated successful RCPT commands for the same forward-path each receive their own reply. | `TestRFC2033RecipientReplies` |
+| LMTP-DATA-04 | 4.2 | Normative | A multiline reply counts as one recipient reply. | `TestRFC2033RecipientReplies`, `TestRFC2033ClientPartialReplies` |
+| LMTP-DATA-05 | 4.2 | Normative | A single-status backend or unset per-recipient status expands its result to every accepted RCPT. | `TestRFC2033FallbackAndUnsetStatuses` |
+| LMTP-EXAMPLE-01 | 4.2 | Normative | The chris/pat/jones/green example rejects jones at RCPT, accepts pat at DATA and temporarily refuses green with 452. | `TestRFC2033RecipientReplies` |
+| LMTP-BDAT-01 | 4.3 | Normative | BDAT LAST with accepted recipients returns one ordered reply for each accepted RCPT. | `TestRFC2033RecipientReplies` |
+| LMTP-BDAT-02 | 4.3 | Normative | Duplicate forward-paths and multiline replies retain per-RCPT counting for BDAT LAST. | `TestRFC2033RecipientReplies` |
+| LMTP-BDAT-03 | 4.3 | Normative | A non-LAST BDAT command returns exactly one reply. | `TestRFC2033RecipientReplies` |
+| LMTP-BDAT-04 | 4.3 | Normative | BDAT LAST expands a fallback backend or unset status result to all accepted recipients. | `TestRFC2033FallbackAndUnsetStatuses` |
+| LMTP-BDAT-05 | 4.3 | Normative | BDAT LAST with no successful RCPT returns zero replies. | n/a: known gap: the shared SMTP handler drains the chunk and returns 503; LMTP does not yet override it. |
+| LMTP-EXT-01 | 5 | MUST | The LMTP server implements and advertises PIPELINING. | `TestRFC2033GreetingAndSequence`, `TestRFC2033RecipientReplies` |
+| LMTP-EXT-02 | 5 | MUST | The LMTP server implements and advertises ENHANCEDSTATUSCODES. | `TestRFC2033GreetingAndSequence`, `TestRFC2033RecipientReplies` |
+| LMTP-EXT-03 | 5 | SHOULD | The LMTP server implements 8BITMIME. | `TestRFC2033GreetingAndSequence` |
+| LMTP-BDAT-06 | 4.3 | Normative | Even failed LAST chunks report individual outcomes for accepted recipients. | n/a: known gap: early size-limit/backend/transport errors use the shared single-reply SMTP path rather than the normal LAST per-recipient result path. |
+| LMTP-FLUSH-01 | 5 | SHOULD | Send each DATA recipient reply as soon as available, flushing before waiting for a slower recipient. | `TestServer_LMTP_Early` |
+| LMTP-FLUSH-02 | 5 | SHOULD | Send BDAT LAST recipient replies as soon as available. | n/a: known gap: handleBdat waits for LMTPData to return and buffers all LAST replies together. |
+| LMTP-CLIENT-01 | 4.2, 5 | MUST | Preserve received recipient successes and failures when the connection closes before all replies arrive. | `TestRFC2033ClientPartialReplies` |
+| LMTP-CLIENT-02 | 4.2 | Normative | The client consumes multiline replies as one response before matching the next recipient. | `TestRFC2033ClientPartialReplies` |
+| LMTP-CLIENT-03 | 5 | MUST | On disconnect treat recipients without replies as temporary failures. | n/a: known API gap: partial results and the transport error are returned, but no synthetic 4xx entry is added for unanswered recipients; caller must treat them as temporary failures. |
+| LMTP-CLIENT-04 | 5 | SHOULD | Deliver received results to the caller as they arrive. | n/a: current synchronous API collects results until completion or failure; no per-reply callback. |
+| LMTP-CLIENT-06 | 4, 4.2 | Normative | Classify every 2xx final recipient reply as positive completion. | n/a: known gap: CloseWithLMTPResponse expects exactly 250; other positive completion codes are returned as SMTPError entries. |
+| LMTP-CLIENT-05 | 4.2, 4.3 | Normative | Expose independent outcomes for duplicate accepted paths. | n/a: known API limitation: wire replies are consumed separately but result maps are keyed by address, so duplicate outcomes may collapse; use distinct transactions when each outcome must be retained. |
+| LMTP-DURABLE-01 | 4.2, 4.3 | MUST NOT | After accepting responsibility, do not lose messages to host crashes or predictable resource shortages. | n/a: mandatory host duty: persist delivery or relay responsibility before returning nil or SetStatus(nil); the library has no durable spool. |
+| LMTP-DEFAULT-01 | 5 | Normative | LMTP listen helpers default to a Unix-domain socket rather than the SMTP TCP network. | `TestRFC2033DefaultNetwork` |
+| LMTP-DEPLOY-01 | 1, 5 | MUST NOT | Do not use LMTP on TCP port 25. | n/a: host must enforce this on supplied listeners and explicit Network/Addr; the default network is unix, tested by TestRFC2033DefaultNetwork. |
+| LMTP-DEPLOY-02 | 1, 5 | SHOULD | Use LMTP only by prior arrangement, avoid wide-area networks and prefer SMTP for fast queueing receivers capable of notifications. | n/a: host deployment/topology decision; the library supports both protocols without choosing the receiver role. |

@@ -215,7 +215,7 @@ func (c *Client) hello() error {
 	c.didHello = true
 	if err := c.ehlo(); err != nil {
 		var smtpError *SMTPError
-		if errors.As(err, &smtpError) && (smtpError.Code == 500 || smtpError.Code == 502) {
+		if !c.lmtp && errors.As(err, &smtpError) && (smtpError.Code == 500 || smtpError.Code == 502) {
 			// The server doesn't support EHLO, fallback to HELO
 			c.helloError = c.helo()
 		} else {
@@ -225,7 +225,7 @@ func (c *Client) hello() error {
 	return c.helloError
 }
 
-// Hello sends a HELO or EHLO to the server as the given host name.
+// Hello sends a HELO or EHLO (LHLO for LMTP) to the server as the given host name.
 // Calling this method is only necessary if the client needs control
 // over the host name used. The client will introduce itself as "localhost"
 // automatically otherwise. If Hello is called, it must be called before
