@@ -569,17 +569,17 @@ when CloseWithLMTPResponse finishes; it does not expose a streaming callback.
 | LMTP-DATA-04 | 4.2 | Normative | A multiline reply counts as one recipient reply. | `TestRFC2033RecipientReplies`, `TestRFC2033ClientPartialReplies` |
 | LMTP-DATA-05 | 4.2 | Normative | A single-status backend or unset per-recipient status expands its result to every accepted RCPT. | `TestRFC2033FallbackAndUnsetStatuses` |
 | LMTP-EXAMPLE-01 | 4.2 | Normative | The chris/pat/jones/green example rejects jones at RCPT, accepts pat at DATA and temporarily refuses green with 452. | `TestRFC2033RecipientReplies` |
-| LMTP-BDAT-01 | 4.3 | Normative | BDAT LAST with accepted recipients returns one ordered reply for each accepted RCPT. | `TestRFC2033RecipientReplies` |
-| LMTP-BDAT-02 | 4.3 | Normative | Duplicate forward-paths and multiline replies retain per-RCPT counting for BDAT LAST. | `TestRFC2033RecipientReplies` |
+| LMTP-BDAT-01 | 4.3 | Normative | BDAT LAST with accepted recipients returns one ordered reply for each accepted RCPT. | `TestRFC2033RecipientReplies`, `TestRFC2033BDATRecipientRepliesFlushed` |
+| LMTP-BDAT-02 | 4.3 | Normative | Duplicate forward-paths and multiline replies retain per-RCPT counting for BDAT LAST. | `TestRFC2033RecipientReplies`, `TestRFC2033BDATRecipientRepliesFlushed` |
 | LMTP-BDAT-03 | 4.3 | Normative | A non-LAST BDAT command returns exactly one reply. | `TestRFC2033RecipientReplies` |
-| LMTP-BDAT-04 | 4.3 | Normative | BDAT LAST expands a fallback backend or unset status result to all accepted recipients. | `TestRFC2033FallbackAndUnsetStatuses` |
+| LMTP-BDAT-04 | 4.3 | Normative | BDAT LAST expands a fallback backend or unset status result to all accepted recipients. | `TestRFC2033FallbackAndUnsetStatuses`, `TestRFC2033BDATRecipientRepliesFlushed` |
 | LMTP-BDAT-05 | 4.3 | Normative | BDAT LAST with no successful RCPT returns zero replies. | n/a: known gap: the shared SMTP handler drains the chunk and returns 503; LMTP does not yet override it. |
 | LMTP-EXT-01 | 5 | MUST | The LMTP server implements and advertises PIPELINING. | `TestRFC2033GreetingAndSequence`, `TestRFC2033RecipientReplies` |
 | LMTP-EXT-02 | 5 | MUST | The LMTP server implements and advertises ENHANCEDSTATUSCODES. | `TestRFC2033GreetingAndSequence`, `TestRFC2033RecipientReplies` |
 | LMTP-EXT-03 | 5 | SHOULD | The LMTP server implements 8BITMIME. | `TestRFC2033GreetingAndSequence` |
 | LMTP-BDAT-06 | 4.3 | Normative | Even failed LAST chunks report individual outcomes for accepted recipients. | n/a: known gap: early size-limit/backend/transport errors use the shared single-reply SMTP path rather than the normal LAST per-recipient result path. |
 | LMTP-FLUSH-01 | 5 | SHOULD | Send each DATA recipient reply as soon as available, flushing before waiting for a slower recipient. | `TestServer_LMTP_Early` |
-| LMTP-FLUSH-02 | 5 | SHOULD | Send BDAT LAST recipient replies as soon as available. | n/a: known gap: handleBdat waits for LMTPData to return and buffers all LAST replies together. |
+| LMTP-FLUSH-02 | 5 | SHOULD | Send BDAT LAST recipient replies as soon as available, flushing in RCPT order before waiting for slower recipients or the backend's return. | `TestRFC2033BDATRecipientRepliesFlushed` |
 | LMTP-CLIENT-01 | 4.2, 5 | MUST | Preserve received recipient successes and failures when the connection closes before all replies arrive. | `TestRFC2033ClientPartialReplies` |
 | LMTP-CLIENT-02 | 4.2 | Normative | The client consumes multiline replies as one response before matching the next recipient. | `TestRFC2033ClientPartialReplies`, `TestRFC2033ClientPositiveCompletion` |
 | LMTP-CLIENT-03 | 5 | MUST | On disconnect treat recipients without replies as temporary failures. | n/a: known API gap: partial results and the transport error are returned, but no synthetic 4xx entry is added for unanswered recipients; caller must treat them as temporary failures. |

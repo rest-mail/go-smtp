@@ -1,5 +1,13 @@
 # Coverage
 
+The BDAT LAST reply-flushing follow-up adds gated wire tests for zero-length
+and nonempty LAST chunks, prompt per-recipient replies, duplicate paths,
+multiline failures, unset success/error results, backend panic recovery and
+post-delivery transaction state. Each gate opens only after the preceding
+reply arrives, including the last explicit reply before the backend returns.
+Focused tests and vet are checked locally; full coverage and race validation
+run in CI. No new coverage percentage is claimed for this follow-up.
+
 After the Postfix XCLIENT session-state audit, statement coverage of the library
 package and `internal/checklist` is **95.4%** combined (library **95.1%**, checker
 **99.3%**), measured locally on Go 1.27.1 linux/arm64 without the race
@@ -152,6 +160,6 @@ outcomes, fallback backend success/failure expansion, unset statuses,
 post-delivery transaction isolation, greeting/command checks and partial
 client responses on disconnect. The regression test proves that refused LHLO
 must not fall back to SMTP HELO. The checklist records unresolved BDAT reply
-count/flushing/error paths, client streaming/temporary-failure/duplicate-map
+count/early-error paths, client streaming/temporary-failure/duplicate-map
 limits, positive-reply classification and mandatory host durability/deployment
 duties. No new parser is introduced, so existing shared parser fuzzers apply.

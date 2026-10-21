@@ -188,7 +188,10 @@ LMTP uses LHLO and refuses SMTP HELO/EHLO. `NewClientLMTP` preserves an LHLO
 refusal instead of falling back to HELO. `LMTPSession.LMTPData` can supply
 one status per accepted RCPT, including duplicate paths; unset statuses use
 the method's returned error. A plain `Session.Data` result applies to all
-recipients. DATA replies are flushed individually in RCPT order.
+recipients. DATA and BDAT LAST replies are flushed individually in RCPT order
+as statuses become available, including before `LMTPData` returns. The server
+waits for the method to return before resetting the transaction or processing
+the next command.
 
 A successful status promises durable delivery or relay responsibility: the
 host must persist the message before reporting success. Deploy LMTP only by
@@ -200,8 +203,7 @@ alongside transport errors. Treat every unanswered recipient as a temporary fail
 there are no synthetic per-recipient 4xx entries or streaming callbacks. Its
 address-keyed maps cannot preserve separate duplicate-path outcomes. The
 checklist also records BDAT gaps: no-recipient LAST returns 503 instead
-of zero replies, LAST statuses wait for the backend to finish rather than
-being flushed individually, and early failures use a single SMTP reply.
+of zero replies, and early failures use a single SMTP reply.
 
 XCLIENT is restricted to connections approved by `TrustXCLIENT`. A successful
 assertion logs out the old backend session, clears SMTP greeting/authentication
