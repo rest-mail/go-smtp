@@ -12,8 +12,12 @@ var (
 		EnhancedCode: EnhancedCode{5, 7, 8},
 		Message:      "Authentication failed",
 	}
+	// ErrAuthRequired rejects a command that requires an authenticated or
+	// independently authorized session (RFC 4954 section 6, RFC 6409 section 4.3).
+	// Submission backends must enforce that policy in Mail; the generic server
+	// also serves unauthenticated relay and does not impose it automatically.
 	ErrAuthRequired = &SMTPError{
-		Code:         502,
+		Code:         530,
 		EnhancedCode: EnhancedCode{5, 7, 0},
 		Message:      "Please authenticate first",
 	}
