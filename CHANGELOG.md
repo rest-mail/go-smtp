@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Checked RFC 4954 §5 MAIL `AUTH=` syntax (server decoding, malformed values,
+  unauthenticated clients, client encoding and a client-to-server round trip)
+  and §6 host failure replies (534/538/535/530/454) with wire tests.
+
 - README badges for CI, the enforced coverage floor and the checklist
   (276/387 mapped), checked against CHECKLIST.md and the CI `FLOOR` by
   `TestReadmeBadges`. The CI coverage floor rises from 85% to 94.5%.
@@ -76,6 +80,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   unsupported enforcement modes are explicitly recorded.
 
 ### Fixed
+
+- The client sends `AUTH=<>` for an unknown submitter (an empty
+  `MailOptions.Auth`) instead of the invalid empty `AUTH=` (RFC 4954 §5).
+
+- The server answers a malformed MAIL `AUTH=` value with 501 5.5.4, the
+  parameter syntax error of RFC 5321 §4.2.2, instead of 500.
 
 - `ErrAuthRequired` now replies with 530 instead of 502, as required for
   unauthenticated submission by RFC 6409 section 4.3 and RFC 4954 section 6.
