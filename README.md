@@ -44,7 +44,8 @@ rules from RFC 3461 §§2–4, 5.1 and 5.4, and the SMTPUTF8 envelope rules
 from RFC 6531 (including refusal of `SMTPUTF8=`) and the RRVS parameter
 from RFC 7293, DELIVERBY transport from RFC 2852 and MT-PRIORITY transport
 from RFC 6710, LMTP from RFC 2033, and Postfix XCLIENT session state and
-trust boundaries (a non-IETF extension with explicit syntax gaps). A small program,
+trust boundaries (a non-IETF extension with explicit syntax gaps), plus the
+RFC 6409 §4.3 submission authentication error/backend contract. A small program,
 [`internal/checklist`](internal/checklist/main.go), checks it against the tests
 in CI. It is the same program as
 [go-spf](https://github.com/rest-mail/go-spf)'s and the other `go-*`
@@ -219,6 +220,12 @@ are accepted but not surfaced or advertised. The host must validate attributes,
 map LOGIN to its own identity policy, apply relay/access rules and reset cached
 client assertions appropriately. Identity policy runs when the replacement
 backend session is created after the new greeting, rather than before the 220.
+
+For message submission, the backend must require successful AUTH or independently
+established authorization in `Session.Mail`, returning `ErrAuthRequired` otherwise
+(as in `ExampleServer`). This error sends `530 5.7.0`. Binding to port 587 does
+not select a submission mode, and `AllowInsecureAuth` only permits plaintext AUTH;
+it does not require authentication. Other RFC 6409 requirements remain unaudited.
 
 ## Relationship with net/smtp
 

@@ -20,7 +20,8 @@ the SMTPUTF8 envelope (RFC 6531), the RRVS parameter (RFC 7293), DELIVERBY
 transport (RFC 2852), MT-PRIORITY transport (RFC 6710) and LMTP
 (RFC 2033) are audited below.
 The remaining AUTH and DSN lifecycle rules remain for later slices.
-RFC 6409 (submission) is not in this slot. Reply line lengths (§4.5.3.1.5)
+RFC 6409 submission authentication (§4.3) is checked below; its remaining
+requirements are not yet audited. Reply line lengths (§4.5.3.1.5)
 are checked by SMTP-LIM-06;
 SASL challenges retain the independent size rules of RFC 4954 §4.
 
@@ -637,3 +638,26 @@ and its safety guarantees, rather than extra Postfix protocol requirements.
 | XC-REPLY-01 | Server response; reply codes | Normative | Connection-level access policy may reject the asserted identity with an appropriate code, including 421/disconnect when unable to continue. | n/a: no immediate per-XCLIENT backend rejection hook; the fresh Backend.NewSession runs after HELO/EHLO and may return an SMTPError (including a terminating 421), so pre-220 access rejection is not supported yet. |
 | XC-CACHE-01 | SMTP connection caching | Normative | Attributes persist across deliveries, ordinary RSET and EHLO; cached-connection users must reset them when changing clients. | `TestXClientReplacesSession`, `TestXClientPipelinedExample` |
 | XC-EXAMPLE-01 | XCLIENT Example | Normative | The published EHLO, NAME/ADDR assertion, fresh greeting, EHLO, MAIL, RCPT, DATA and QUIT conversation succeeds. | `TestXClientRefusedDuringTransaction`, `TestXClientPipelinedExample` |
+
+## Submission authentication (RFC 6409 §§3.2, 4.3, 7)
+
+This slice checks [RFC 6409 §4.3](https://datatracker.ietf.org/doc/html/rfc6409#section-4.3)'s
+authentication-required error and recovery,
+not full RFC 6409 conformance. The generic server also handles relay: merely
+listening on port 587 does not enable submission policy. A submission backend
+must authorize `Mail` using its successful AUTH state or independent trusted
+credentials, returning `ErrAuthRequired` otherwise. `AllowInsecureAuth` controls
+whether AUTH is allowed over plaintext; it does not require authentication.
+The tests use a backend with that policy and a plaintext in-memory pipe.
+
+| ID | Section | Level | Requirement | Tests |
+|----|---------|-------|-------------|-------|
+| SUB-AUTH-01 | RFC 6409 §4.3 | Normative | Authentication-required MAIL rejection uses 530; failed MAIL leaves no transaction and successful AUTH permits retry. | `TestRFC6409SubmissionAuthentication` |
+| SUB-AUTH-02 | RFC 6409 §4.3 | MUST | By default, reject unauthenticated MAIL unless independent authentication or authorization is established. | n/a: host policy; the generic relay/submission server has no submission mode. Backends must enforce this in Mail; the test backend demonstrates the contract, not automatic enforcement. |
+| SUB-AUTH-03 | RFC 6409 §§4.3, 7 | MUST | Submission supports AUTH; independently authorized sessions may submit without it. DATA and BDAT use the same authorized envelope. | `TestRFC6409SubmissionAuthentication` |
+| SUB-NULL-01 | RFC 6409 §3.2 | MUST NOT | A null reverse path alone does not cause submission rejection. | `TestRFC6409SubmissionAuthentication` |
+
+Remaining RFC 6409 audit: port selection, return-path determination, domain and
+header validation, rejection policy, logging, timeouts, extension applicability,
+message modifications and delivery/relay responsibilities. No header rewriting,
+DNS qualification or submission-specific policy is supplied by this change.

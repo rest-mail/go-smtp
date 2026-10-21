@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Checked RFC 6409 submission authentication error/backend contract, with
+  failed-AUTH recovery, independent authorization, null return paths, transaction
+  resets and DATA/BDAT wire tests. Remaining submission requirements are explicit.
+
 - Postfix XCLIENT checklist for session state, trust, TLS retention, pipelining
   and the published example. Remaining value-validation/xtext and host-policy
   gaps are explicit; XCLIENT is not an IETF RFC.
@@ -68,6 +72,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   unsupported enforcement modes are explicitly recorded.
 
 ### Fixed
+
+- `ErrAuthRequired` now replies with 530 instead of 502, as required for
+  unauthenticated submission by RFC 6409 section 4.3 and RFC 4954 section 6.
 
 - XCLIENT now refuses assertions throughout a mail transaction (503), rejects
   an empty assertion (501), and applies attributes atomically. A successful
