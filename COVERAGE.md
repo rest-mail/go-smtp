@@ -33,9 +33,12 @@ go tool cover -func=coverage.out
 ```
 
 `cmd/smtp-debug-server`, a demo program, is left out of the figure because
-the package list does not name it. The 85% CI floor is unchanged; the merged
-suite's CI figure may differ by Go version. Both the combined and library-only
-local figures now exceed 95%. Raising the gate and moving to the shared workflow remain a separate slice after CI validation.
+the package list does not name it. CI on main measured **94.7%** after the
+RFC 6409 submission audit (#109), below the local figures, so the CI floor is
+ratcheted from 85% to **94.5%**, not yet the shared 95% gate. The README
+coverage badge shows this floor, and `TestReadmeBadges` fails if the badge and
+the `FLOOR` in `.github/workflows/ci.yml` disagree. Closing the last 0.3% in CI
+and moving to the shared workflow remain a separate slice.
 
 Earlier CI runs reported 87.2% combined (library 86.2%, checker 99.3%) on
 Go 1.27.2 before the 503 tests of #87 landed. Local and CI statement counts
