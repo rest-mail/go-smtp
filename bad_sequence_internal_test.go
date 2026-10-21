@@ -32,7 +32,7 @@ func TestServerBadSequence(t *testing.T) {
 		{"MAIL during BDAT", []string{"HELO localhost", mail, rcpt, "BDAT 0"}, mail, "MAIL not allowed during message transfer"},
 		{"RCPT during BDAT", []string{"HELO localhost", mail, rcpt, "BDAT 0"}, rcpt, "RCPT not allowed during message transfer"},
 		{"DATA during BDAT", []string{"HELO localhost", mail, rcpt, "BDAT 0"}, "DATA", "DATA not allowed during message transfer"},
-		{"XCLIENT during BDAT", []string{"HELO localhost", mail, rcpt, "BDAT 0"}, "XCLIENT ADDR=203.0.113.1", "XCLIENT not allowed during message transfer"},
+		{"XCLIENT during BDAT", []string{"HELO localhost", mail, rcpt, "BDAT 0"}, "XCLIENT ADDR=203.0.113.1", "XCLIENT not allowed during mail transaction"},
 		{"DATA after BINARYMIME", []string{"HELO localhost", mail + " BODY=BINARYMIME", rcpt}, "DATA", "DATA not allowed for BINARYMIME messages"},
 		{"AUTH after MAIL", []string{"HELO localhost", mail}, "AUTH PLAIN =", "AUTH not allowed during mail transaction"},
 		{"AUTH during BDAT", []string{"HELO localhost", mail, rcpt, "BDAT 0"}, "AUTH PLAIN =", "AUTH not allowed during mail transaction"},

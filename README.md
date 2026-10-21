@@ -43,8 +43,8 @@ AUTH exchange requirements from RFC 4954 §4 and the DSN parameter/protocol
 rules from RFC 3461 §§2–4, 5.1 and 5.4, and the SMTPUTF8 envelope rules
 from RFC 6531 (including refusal of `SMTPUTF8=`) and the RRVS parameter
 from RFC 7293, DELIVERBY transport from RFC 2852 and MT-PRIORITY transport
-from RFC 6710. Other extensions retain summary
-rows. A small program,
+from RFC 6710, LMTP from RFC 2033, and Postfix XCLIENT session state and
+trust boundaries (a non-IETF extension with explicit syntax gaps). A small program,
 [`internal/checklist`](internal/checklist/main.go), checks it against the tests
 in CI. It is the same program as
 [go-spf](https://github.com/rest-mail/go-spf)'s and the other `go-*`
@@ -201,6 +201,24 @@ address-keyed maps cannot preserve separate duplicate-path outcomes. The
 checklist also records BDAT gaps: no-recipient LAST returns 503 instead
 of zero replies, LAST statuses wait for the backend to finish rather than
 being flushed individually, and early failures use a single SMTP reply.
+
+XCLIENT is restricted to connections approved by `TrustXCLIENT`. A successful
+assertion logs out the old backend session, clears SMTP greeting/authentication
+state and sends 220. The proxy must greet again; `Backend.NewSession` then sees
+the accumulated `Conn.XClient()` identity. Asserted HELO/PROTO remain metadata;
+the transport peer and TLS session remain intact. XCLIENT during a mail
+transaction gets 503, and rejected syntax leaves the existing identity intact.
+A backend may retain an identity pointer: later assertions use a copy.
+
+The [Postfix XCLIENT checklist](CHECKLIST.md#postfix-xclient-session-state-and-trust-boundaries)
+records incomplete compatibility: asserted HELO does not satisfy the new
+SMTP greeting requirement and PROTO does not select effective protocol state.
+Values remain literal (no xtext decoding),
+address/protocol/sentinel validation is not implemented, and PORT/DESTADDR/DESTPORT
+are accepted but not surfaced or advertised. The host must validate attributes,
+map LOGIN to its own identity policy, apply relay/access rules and reset cached
+client assertions appropriately. Identity policy runs when the replacement
+backend session is created after the new greeting, rather than before the 220.
 
 ## Relationship with net/smtp
 

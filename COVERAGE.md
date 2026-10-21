@@ -1,9 +1,9 @@
 # Coverage
 
-After the RFC 2033 LMTP audit, statement coverage of the library package
-and `internal/checklist` is **95.1%** combined (library **94.8%**, checker
+After the Postfix XCLIENT session-state audit, statement coverage of the library
+package and `internal/checklist` is **95.4%** combined (library **95.1%**, checker
 **99.3%**), measured locally on Go 1.27.1 linux/arm64 without the race
-detector. This includes the preceding RFC 6710 MT-PRIORITY audit. The local
+detector. This includes the preceding LMTP and MT-PRIORITY audits. The local
 command was:
 
 ```
@@ -11,10 +11,19 @@ go test -count=1 -coverprofile=coverage.out . ./internal/...
 go tool cover -func=coverage.out
 ```
 
-The LMTP positive-completion follow-up keeps the same coverage figures. Tests
+The preceding LMTP positive-completion follow-up measured 95.1% combined
+(library 94.8%, checker 99.3%). Those tests
 exercise every final recipient code from 200 to 299, non-2xx boundaries,
 multiline replies mixed with temporary/permanent failures, `Close`, and
 partial results on disconnect. LMTP-CLIENT-06 is now mapped to these tests.
+
+XCLIENT tests cover transaction refusal after MAIL/RCPT/between BDAT chunks,
+atomic rejection, empty commands, backend logout/replacement, fresh greetings
+and authentication, retained HELO/PROTO/identity snapshots, TLS retention,
+trust configuration/revocation, caching and the Postfix pipelined example.
+No standalone parser was added: existing SMTP token-parser fuzzers are unchanged.
+Attribute xtext decoding, address/protocol/sentinel validation, full port/destination
+support and immediate connection-level rejection remain documented gaps.
 
 CI uses the same package list with `-race` and the current stable Go:
 
@@ -25,9 +34,8 @@ go tool cover -func=coverage.out
 
 `cmd/smtp-debug-server`, a demo program, is left out of the figure because
 the package list does not name it. The 85% CI floor is unchanged; the merged
-suite's CI figure may differ by Go version. The combined local figure now
-exceeds 95%, but library-only coverage remains below it. Raising the gate and
-moving to the shared workflow remain a separate slice after CI validation.
+suite's CI figure may differ by Go version. Both the combined and library-only
+local figures now exceed 95%. Raising the gate and moving to the shared workflow remain a separate slice after CI validation.
 
 Earlier CI runs reported 87.2% combined (library 86.2%, checker 99.3%) on
 Go 1.27.2 before the 503 tests of #87 landed. Local and CI statement counts

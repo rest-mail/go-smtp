@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Postfix XCLIENT checklist for session state, trust, TLS retention, pipelining
+  and the published example. Remaining value-validation/xtext and host-policy
+  gaps are explicit; XCLIENT is not an IETF RFC.
+
 - Checked RFC 2033 LMTP requirements, the RFC's mixed-recipient example,
   ordered/duplicate/multiline DATA and BDAT replies, fallback backend results,
   transaction isolation and client partial-disconnect results. Host durability
@@ -64,6 +68,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   unsupported enforcement modes are explicitly recorded.
 
 ### Fixed
+
+- XCLIENT now refuses assertions throughout a mail transaction (503), rejects
+  an empty assertion (501), and applies attributes atomically. A successful
+  assertion logs out the old backend session, clears its SMTP greeting and
+  authentication, and requires a fresh HELO/EHLO. Accumulated proxy attributes
+  and TLS survive; previous backend identity snapshots no longer change.
 
 - The LMTP client accepts every 2xx final recipient reply as positive completion
   (RFC 2033), instead of misreporting successful codes other than 250 as
