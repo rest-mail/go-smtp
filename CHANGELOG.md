@@ -8,12 +8,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- `Client.Quit` after STARTTLS sends QUIT immediately instead of first
+  sending a fresh EHLO, so a client rejecting the negotiated security quits
+  at once (RFC 3207 §4.1).
+
 - LMTP BDAT LAST flushes each recipient reply in RCPT order as soon as its
   status is available, without waiting for later deliveries or `LMTPData` to
   return. Unset statuses still use the backend's final result; transaction
   reset and subsequent commands wait for the backend to finish.
 
 ### Added
+
+- Checked RFC 3207 STARTTLS policy rows: immediate TLS-state decisions by
+  both peers, QUIT after a rejected negotiation, TLS required for selected
+  hosts, opportunistic TLS and post-TLS capability changes.
 
 - README badges for CI, the enforced coverage floor and the checklist
   (276/387 mapped), checked against CHECKLIST.md and the CI `FLOOR` by
