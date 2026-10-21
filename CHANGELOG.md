@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- README badges for CI, the enforced coverage floor and the checklist
+  (276/387 mapped), checked against CHECKLIST.md and the CI `FLOOR` by
+  `TestReadmeBadges`. The CI coverage floor rises from 85% to 94.5%.
+
 - Checked RFC 6409 submission authentication error/backend contract, with
   failed-AUTH recovery, independent authorization, null return paths, transaction
   resets and DATA/BDAT wire tests. Remaining submission requirements are explicit.
