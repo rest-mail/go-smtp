@@ -11,6 +11,11 @@ go test -count=1 -coverprofile=coverage.out . ./internal/...
 go tool cover -func=coverage.out
 ```
 
+The LMTP positive-completion follow-up keeps the same coverage figures. Tests
+exercise every final recipient code from 200 to 299, non-2xx boundaries,
+multiline replies mixed with temporary/permanent failures, `Close`, and
+partial results on disconnect. LMTP-CLIENT-06 is now mapped to these tests.
+
 CI uses the same package list with `-race` and the current stable Go:
 
 ```

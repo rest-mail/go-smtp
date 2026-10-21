@@ -65,6 +65,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- The LMTP client accepts every 2xx final recipient reply as positive completion
+  (RFC 2033), instead of misreporting successful codes other than 250 as
+  per-recipient failures. Mixed failures and partial results retain their
+  recipient association.
+
 - The LMTP client no longer falls back to SMTP HELO after LHLO is refused
   with 500 or 502, preserving protocol-misconfiguration errors.
 
