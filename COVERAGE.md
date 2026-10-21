@@ -1,5 +1,13 @@
 # Coverage
 
+The BDAT LAST reply-flushing follow-up adds gated wire tests for zero-length
+and nonempty LAST chunks, prompt per-recipient replies, duplicate paths,
+multiline failures, unset success/error results, backend panic recovery and
+post-delivery transaction state. Each gate opens only after the preceding
+reply arrives, including the last explicit reply before the backend returns.
+Focused tests and vet are checked locally; full coverage and race validation
+run in CI. No new coverage percentage is claimed for this follow-up.
+
 After the Postfix XCLIENT session-state audit, statement coverage of the library
 package and `internal/checklist` is **95.4%** combined (library **95.1%**, checker
 **99.3%**), measured locally on Go 1.27.1 linux/arm64 without the race
@@ -33,9 +41,12 @@ go tool cover -func=coverage.out
 ```
 
 `cmd/smtp-debug-server`, a demo program, is left out of the figure because
-the package list does not name it. The 85% CI floor is unchanged; the merged
-suite's CI figure may differ by Go version. Both the combined and library-only
-local figures now exceed 95%. Raising the gate and moving to the shared workflow remain a separate slice after CI validation.
+the package list does not name it. CI on main measured **94.7%** after the
+RFC 6409 submission audit (#109), below the local figures, so the CI floor is
+ratcheted from 85% to **94.5%**, not yet the shared 95% gate. The README
+coverage badge shows this floor, and `TestReadmeBadges` fails if the badge and
+the `FLOOR` in `.github/workflows/ci.yml` disagree. Closing the last 0.3% in CI
+and moving to the shared workflow remain a separate slice.
 
 Earlier CI runs reported 87.2% combined (library 86.2%, checker 99.3%) on
 Go 1.27.2 before the 503 tests of #87 landed. Local and CI statement counts
@@ -152,6 +163,6 @@ outcomes, fallback backend success/failure expansion, unset statuses,
 post-delivery transaction isolation, greeting/command checks and partial
 client responses on disconnect. The regression test proves that refused LHLO
 must not fall back to SMTP HELO. The checklist records unresolved BDAT reply
-count/flushing/error paths, client streaming/temporary-failure/duplicate-map
+count/early-error paths, client streaming/temporary-failure/duplicate-map
 limits, positive-reply classification and mandatory host durability/deployment
 duties. No new parser is introduced, so existing shared parser fuzzers apply.

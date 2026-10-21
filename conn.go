@@ -1618,6 +1618,9 @@ func (c *Conn) handleBdat(arg string) {
 					}
 				} else {
 					err = lmtpSession.LMTPData(r, status)
+					// Publish unset recipients before the connection waits for
+					// them. Explicit statuses can already be going to the peer.
+					status.fillRemaining(err)
 				}
 			}
 
@@ -1700,15 +1703,20 @@ func (c *Conn) handleBdat(arg string) {
 			p.Close()
 		}
 
-		err := <-c.dataResult
-
+		var err error
 		if c.server.LMTP {
-			c.bdatStatus.fillRemaining(err)
 			for i, rcpt := range c.recipients {
 				code, enchCode, msg := dataErrorToStatus(<-c.bdatStatus.status[i])
 				c.writeResponse(code, enchCode, "<"+rcpt+"> "+msg)
+				// RFC 2033 §5: do not hold a completed recipient's reply
+				// behind a slower recipient or the backend's return.
+				c.flush()
 			}
+			// The backend may still be finishing after its last SetStatus.
+			// Join it before resetting or handling the next transaction.
+			err = <-c.dataResult
 		} else {
+			err = <-c.dataResult
 			c.writeResponse(dataErrorToStatus(err))
 		}
 
