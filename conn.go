@@ -440,8 +440,14 @@ func (c *Conn) handleGreet(enhanced bool, arg string) {
 		c.setSession(sess)
 	}
 
+	// RFC 5321 §4.1.1.1: the server identifies itself on the first line of
+	// its HELO and EHLO replies (ehlo-ok-rsp = "250" SP Domain [SP ehlo-greet]).
+	greeting := "Hello " + domain
+	if c.server.Domain != "" {
+		greeting = c.server.Domain + " " + greeting
+	}
 	if !enhanced {
-		c.writeResponse(250, EnhancedCode{2, 0, 0}, fmt.Sprintf("Hello %s", domain))
+		c.writeResponse(250, EnhancedCode{2, 0, 0}, greeting)
 		return
 	}
 
@@ -514,7 +520,7 @@ func (c *Conn) handleGreet(enhanced bool, arg string) {
 		caps = append(caps, fb.Features(c)...)
 	}
 
-	args := []string{"Hello " + domain}
+	args := []string{greeting}
 	args = append(args, caps...)
 	c.writeResponse(250, NoEnhancedCode, args...)
 }

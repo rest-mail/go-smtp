@@ -8,12 +8,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- The first line of the HELO and EHLO replies now starts with the server's
+  domain (`250-mx.example.net Hello client.example.org`), as RFC 5321
+  §4.1.1.1 requires; it used to be `250-Hello client.example.org`. Tests that
+  match the exact reply text need updating.
+
 - LMTP BDAT LAST flushes each recipient reply in RCPT order as soon as its
   status is available, without waiting for later deliveries or `LMTPData` to
   return. Unset statuses still use the backend's final result; transaction
   reset and subsequent commands wait for the backend to finish.
 
 ### Added
+
+- Seven more RFC 5321 core rows: server identification in HELO/EHLO,
+  local-part case, address-literal HELO/EHLO, NOOP parameters, commands
+  allowed at any time and client timeouts, each with a wire test; the
+  server's own command timeout is n/a (host configuration).
 
 - README badges for CI, the enforced coverage floor and the checklist
   (276/387 mapped), checked against CHECKLIST.md and the CI `FLOOR` by
