@@ -786,6 +786,7 @@ func (cmd *DataCommand) CloseWithResponse() (*DataResponse, error) {
 
 // CloseWithLMTPResponse is equivalent to Close, but also returns per-recipient
 // server responses. It can only be called when the LMTP protocol is used.
+// Every 2xx final recipient reply is treated as successful completion.
 //
 // If server returns an error, it will be of type LMTPDataError.
 func (cmd *DataCommand) CloseWithLMTPResponse() (map[string]*DataResponse, error) {
@@ -804,7 +805,9 @@ func (cmd *DataCommand) CloseWithLMTPResponse() (map[string]*DataResponse, error
 	lmtpErr := make(LMTPDataError, len(cmd.client.rcpts))
 	for i := 0; i < len(cmd.client.rcpts); i++ {
 		rcpt := cmd.client.rcpts[i]
-		_, msg, err := cmd.client.readResponse(250)
+		// RFC 2033 sections 4 and 4.2 define any 2xx recipient reply as
+		// positive completion, including codes the client does not recognize.
+		_, msg, err := cmd.client.readResponse(2)
 		if err != nil {
 			var smtpErr *SMTPError
 			if errors.As(err, &smtpErr) {

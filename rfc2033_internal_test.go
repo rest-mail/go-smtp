@@ -176,14 +176,90 @@ func TestRFC2033RecipientReplies(t *testing.T) {
 	}
 }
 
-// checklist: LMTP-DATA-04 LMTP-CLIENT-01 LMTP-CLIENT-02
+// checklist: LMTP-CLIENT-06 LMTP-CLIENT-02
+func TestRFC2033ClientPositiveCompletion(t *testing.T) {
+	// RFC 2033 defines positive completion by the first digit, including
+	// unrecognized 2xx codes. Exercise the complete class and its boundaries.
+	codes := []int{199, 300, 354, 399, 400, 451, 499, 500, 550, 599}
+	for code := 200; code < 300; code++ {
+		codes = append(codes, code)
+	}
+	for _, code := range codes {
+		t.Run(fmt.Sprint(code), func(t *testing.T) {
+			var wrote bytes.Buffer
+			fake := faker{ReadWriter: struct {
+				io.Reader
+				io.Writer
+			}{strings.NewReader(fmt.Sprintf("220 ready\r\n250 hello\r\n250 sender\r\n"+
+				"250 recipient\r\n250 recipient\r\n250 recipient\r\n250 recipient\r\n354 send data\r\n"+
+				"%d-first line\r\n%d final line\r\n451 4.2.2 quota\r\n550 5.1.1 no mailbox\r\n250 delivered\r\n250 noop\r\n", code, code)), &wrote}}
+			c := NewClientLMTP(fake)
+			defer c.Close()
+			if err := c.Mail("chris@bar.com", nil); err != nil {
+				t.Fatal(err)
+			}
+			for _, rcpt := range []string{"pat@foo.edu", "quota@foo.edu", "missing@foo.edu", "green@foo.edu"} {
+				if err := c.Rcpt(rcpt, nil); err != nil {
+					t.Fatal(err)
+				}
+			}
+			cmd, err := c.Data()
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp, err := cmd.CloseWithLMTPResponse()
+			var failures LMTPDataError
+			if !errors.As(err, &failures) {
+				t.Fatalf("error=%v, want per-recipient failures", err)
+			}
+			wantSuccesses, wantFailures := 1, 3
+			if code >= 200 && code < 300 {
+				wantSuccesses, wantFailures = 2, 2
+				if got := resp["pat@foo.edu"]; got == nil || got.StatusText != "first line\nfinal line" {
+					t.Fatalf("positive completion lost: responses=%v, failures=%v", resp, failures)
+				}
+			} else if got := failures["pat@foo.edu"]; got == nil || got.Code != code || got.Message != "first line\nfinal line" {
+				t.Fatalf("unexpected reply accepted or changed: %v", failures)
+			}
+			if len(resp) != wantSuccesses || len(failures) != wantFailures || resp["green@foo.edu"] == nil {
+				t.Fatalf("responses=%v, failures=%v", resp, failures)
+			}
+			for rcpt, want := range map[string]int{"quota@foo.edu": 451, "missing@foo.edu": 550} {
+				if got := failures[rcpt]; got == nil || got.Code != want {
+					t.Fatalf("%s failure=%v, want %d", rcpt, got, want)
+				}
+			}
+			if err := c.Noop(); err != nil {
+				t.Fatalf("reply stream lost synchronization: %v", err)
+			}
+		})
+	}
+}
+
+// checklist: LMTP-CLIENT-06
+func TestRFC2033ClientClosePositiveCompletion(t *testing.T) {
+	var wrote bytes.Buffer
+	fake := faker{ReadWriter: struct {
+		io.Reader
+		io.Writer
+	}{strings.NewReader("251 forwarded\r\n299 delivered\r\n"), &wrote}}
+	c := NewClientLMTP(fake)
+	defer c.Close()
+	c.rcpts = []string{"pat@foo.edu", "green@foo.edu"}
+	cmd := &DataCommand{client: c}
+	if err := cmd.Close(); err != nil {
+		t.Fatalf("positive completion returned as failure: %v", err)
+	}
+}
+
+// checklist: LMTP-DATA-04 LMTP-CLIENT-01 LMTP-CLIENT-02 LMTP-CLIENT-06
 func TestRFC2033ClientPartialReplies(t *testing.T) {
 	for _, tail := range []string{"", "550 5.1.1 no mailbox\r\n"} {
 		var wrote bytes.Buffer
 		fake := faker{ReadWriter: struct {
 			io.Reader
 			io.Writer
-		}{strings.NewReader("250-2.0.0 delivered\r\n250 2.0.0 durable\r\n" + tail), &wrote}}
+		}{strings.NewReader("251-2.0.0 delivered\r\n251 2.0.0 durable\r\n" + tail), &wrote}}
 		c := NewClientLMTP(fake)
 		defer c.Close()
 		c.rcpts = []string{"pat@foo.edu", "green@foo.edu", "missing@foo.edu"}

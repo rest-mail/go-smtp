@@ -193,14 +193,14 @@ A successful status promises durable delivery or relay responsibility: the
 host must persist the message before reporting success. Deploy LMTP only by
 prior arrangement on local transports, never TCP port 25; explicit listeners
 and addresses are not validated (the default network is Unix sockets).
-`CloseWithLMTPResponse` returns partial successes and known failures alongside
-transport errors. Treat every unanswered recipient as a temporary failure;
+`CloseWithLMTPResponse` accepts every 2xx final recipient reply as success,
+including unrecognized codes, and returns partial successes and known failures
+alongside transport errors. Treat every unanswered recipient as a temporary failure;
 there are no synthetic per-recipient 4xx entries or streaming callbacks. Its
 address-keyed maps cannot preserve separate duplicate-path outcomes. The
 checklist also records BDAT gaps: no-recipient LAST returns 503 instead
 of zero replies, LAST statuses wait for the backend to finish rather than
 being flushed individually, and early failures use a single SMTP reply.
-The client also expects exactly 250 for each final positive reply. These are explicit limits, not full conformance.
 
 ## Relationship with net/smtp
 
