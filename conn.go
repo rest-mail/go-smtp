@@ -911,7 +911,9 @@ func decodeTypedAddress(val string) (DSNAddressType, string, error) {
 		return "", "", err
 	}
 
-	return DSNAddressType(aType), aAddr, nil
+	// Preserve the original type spelling for relays (RFC 3461 section
+	// 5.2.1(d)); normalization above is only for choosing the decoder.
+	return DSNAddressType(tv[0]), aAddr, nil
 }
 
 func encodeXtext(raw string) string {

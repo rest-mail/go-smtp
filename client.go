@@ -676,7 +676,7 @@ func (c *Client) buildRcptCmd(to string, opts *RcptOptions) (string, error) {
 		}
 		if opts.OriginalRecipient != "" {
 			var enc string
-			switch opts.OriginalRecipientType {
+			switch DSNAddressType(strings.ToUpper(string(opts.OriginalRecipientType))) {
 			case DSNAddressTypeRFC822:
 				if !isPrintableASCII(opts.OriginalRecipient) {
 					return "", errors.New("smtp: Illegal address")

@@ -156,7 +156,9 @@ type RcptOptions struct {
 	// unspecified; the transport does not generate notifications.
 	Notify []DSNNotify
 
-	// Original recipient set by client.
+	// Original recipient set by client. The server preserves the address type
+	// spelling for relays; compare it case-insensitively. The client accepts
+	// case-insensitive RFC822/UTF-8 types and retains the supplied spelling.
 	OriginalRecipientType DSNAddressType
 	OriginalRecipient     string
 

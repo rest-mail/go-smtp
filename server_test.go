@@ -1701,7 +1701,7 @@ func TestServerDSN(t *testing.T) {
 	if val := opts[0].Notify; val == nil || len(val) != 1 || val[0] != smtp.DSNNotifyNever {
 		t.Fatal("Invalid NOTIFY parameter value:", val)
 	}
-	if val := opts[0].OriginalRecipientType; val != smtp.DSNAddressTypeRFC822 {
+	if val := opts[0].OriginalRecipientType; val != "Rfc822" {
 		t.Fatal("Invalid ORCPT address type:", val)
 	}
 	if val := opts[0].OriginalRecipient; val != dsnEmailRFC822 {
@@ -1710,7 +1710,7 @@ func TestServerDSN(t *testing.T) {
 	if val := opts[1].Notify; val == nil || len(val) != 2 || val[0] != smtp.DSNNotifyFailure || val[1] != smtp.DSNNotifyDelayed {
 		t.Fatal("Invalid NOTIFY parameter value:", val)
 	}
-	if val := opts[1].OriginalRecipientType; val != smtp.DSNAddressTypeUTF8 {
+	if val := opts[1].OriginalRecipientType; val != "Utf-8" {
 		t.Fatal("Invalid ORCPT address type:", val)
 	}
 	if val := opts[1].OriginalRecipient; val != dsnEmailUTF8 {
@@ -1870,7 +1870,7 @@ func TestServerDSNwithSMTPUTF8(t *testing.T) {
 	if val := opts[2].Notify; val == nil || len(val) != 1 || val[0] != smtp.DSNNotifySuccess {
 		t.Fatal("Invalid NOTIFY parameter value:", val)
 	}
-	if val := opts[2].OriginalRecipientType; val != smtp.DSNAddressTypeUTF8 {
+	if val := opts[2].OriginalRecipientType; val != "utf-8" {
 		t.Fatal("Invalid ORCPT address type:", val)
 	}
 	if val := opts[2].OriginalRecipient; val != dsnEmailUTF8 {

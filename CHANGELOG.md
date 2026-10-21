@@ -8,12 +8,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- Preserve received ORCPT address-type spelling through relay: decoding no longer
+  uppercases the type, and the outbound client accepts supported types in any
+  ASCII letter case while retaining the supplied spelling. Hosts comparing
+  `RcptOptions.OriginalRecipientType` must now compare it case-insensitively.
+
 - LMTP BDAT LAST flushes each recipient reply in RCPT order as soon as its
   status is available, without waiting for later deliveries or `LMTPData` to
   return. Unset statuses still use the backend's final result; transaction
   reset and subsequent commands wait for the backend to finish.
 
 ### Added
+
+- Six RFC 3461 relay transport checklist mappings, split from the previously
+  combined host rows: ENVID, RET, per-recipient NOTIFY, original ORCPT, optional
+  host-added ORCPT and omission of parameters for a non-DSN next hop. Real SMTP
+  wire tests cover ordinary and pipelined outbound delivery. Queueing, routing
+  and report-generation duties remain explicitly outside transport coverage.
 
 - README badges for CI, the enforced coverage floor and the checklist
   (276/387 mapped), checked against CHECKLIST.md and the CI `FLOOR` by
