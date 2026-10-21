@@ -119,12 +119,12 @@ SASL challenges retain the independent size rules of RFC 4954 §4.
 | ID | Section | Level | Requirement | Tests |
 |----|---------|-------|-------------|-------|
 | SMTP-CLI-01 | 3.2, 4.1.1.1 | MUST | The client reads the greeting and sends EHLO, reading its multi-line reply; it falls back to HELO when EHLO is refused. | `TestHello`, `TestNewClient`, `TestNewClient2`, `TestBasic` |
-| SMTP-CLI-02 | 2.4 | MUST | EHLO keywords in the reply are read case-insensitively. | `TestClientEHLOExtensionCaseInsensitive` |
-| SMTP-CLI-03 | 4.2.1 | MUST | A 4xx or 5xx reply is returned as an error carrying the code and text, and a 421 ends the session. | `TestBasic_SMTPError`, `TestHello_421Response` |
+| SMTP-CLI-02 | 2.4 | MUST | EHLO keywords in the reply are read case-insensitively. | `TestClientEHLOExtensionCaseInsensitive`, `TestClientSupportsAuthAndSizeFromEHLO` |
+| SMTP-CLI-03 | 4.2.1 | MUST | A 4xx or 5xx reply is returned as an error carrying the code and text, and a 421 ends the session. | `TestBasic_SMTPError`, `TestHello_421Response`, `TestClientGreetingRefusedFailsEveryCall`, `TestNewClientStartTLSGreetingRefused`, `TestClientResetAndQuitRefused`, `TestClientSendMailStopsAtFirstFailure`, `TestToSMTPErrMalformedEnhancedCode` |
 | SMTP-CLI-04 | 4.5.2 | MUST | The client doubles a leading `.` of each line it sends in DATA and ends the data with a line holding one `.`. | `TestRFC5321_ClientDotStuffing`, `TestEODClientDotStuffsAndNormalises` |
 | SMTP-CLI-05 | 4.5.3.1.5 | MUST | A reply line longer than the client supports is an error, not a truncation. | `TestClient_TooLongLine` |
 | SMTP-CLI-06 | 4.1.1.5 | MUST | A new MAIL starts with no recipients from the one before, and RSET clears them. | `TestClientMailClearsRcpts`, `TestPipelinerMailClearsRcpts`, `TestPipeline_Reset` |
-| SMTP-CLI-07 | 2.2.2 | MUST | The client does not send a MAIL parameter the server did not advertise, or one out of range. | `TestClientMailParamsUnadvertised`, `TestClientMailParamsOutOfRange` |
+| SMTP-CLI-07 | 2.2.2 | MUST | The client does not send a MAIL parameter the server did not advertise, or one out of range. | `TestClientMailParamsUnadvertised`, `TestClientMailParamsOutOfRange`, `TestClientMailRequireTLS` |
 | SMTP-CLI-08 | n/a | Normative | The client can tell whether a connection it kept is still healthy before it reuses it. | `TestCheckConn_HealthyPlaintext`, `TestCheckConn_ServerClosedPlaintext`, `TestCheckConn_UnsolicitedData`, `TestCheckConn_BufferedData`, `TestCheckConn_TLS` |
 
 ## Extensions (one row each; clause-by-clause checks come in later slots)
@@ -272,7 +272,7 @@ extension combination; these tests do not claim a universal combination audit.
 |----|---------|-------|-------------|-------|
 | SIZE-EHLO-01 | 3, 4 | Normative | Advertise SIZE and the fixed inclusive maximum as a decimal octet count. | `TestRFC1870Advertisement` |
 | SIZE-EHLO-02 | 3, 7 | Normative | SIZE 0 means no configured fixed maximum; a bare SIZE does not convey a maximum. | `TestRFC1870Advertisement` |
-| SIZE-EHLO-03 | 3, 7 | Normative | The client distinguishes a numeric maximum (including unlimited zero) from an absent or unusable maximum; only ASCII decimal digits are valid. | `TestRFC1870ClientLimits`, `FuzzRFC1870SizeValues` |
+| SIZE-EHLO-03 | 3, 7 | Normative | The client distinguishes a numeric maximum (including unlimited zero) from an absent or unusable maximum; only ASCII decimal digits are valid. | `TestRFC1870ClientLimits`, `FuzzRFC1870SizeValues`, `TestClientSupportsAuthAndSizeFromEHLO` |
 | SIZE-MAIL-01 | 3, 6 | Normative | A SIZE value is 1–20 ASCII decimal digits, with no sign; leading zeroes are valid. | `TestRFC1870Declarations` |
 | SIZE-MAIL-02 | 6 | Normative | A MAIL command has at most one SIZE parameter. | `TestRFC1870Declarations` |
 | SIZE-MAIL-03 | 3, 6 | Normative | Pass the declared octet estimate to the backend without a 32-bit cap; values outside the implementation's int64 range are refused as too large. | `TestRFC1870Declarations` |
@@ -311,7 +311,7 @@ does not automatically choose that recovery or the host's retry policy.
 |----|---------|-------|-------------|-------|
 | PIPE-EHLO-01 | 2, 3 | Normative | Advertise PIPELINING as a parameterless EHLO keyword; no new verbs or MAIL/RCPT parameters are introduced. | `TestRFC2920Examples` |
 | PIPE-EHLO-02 | 3 | Normative | Confirm successful EHLO and the PIPELINING keyword before using the extension. | `TestPipeline_NotSupported` |
-| PIPE-CLIENT-01 | 3, 3.1 | Normative | The client sends a pipelined group only after discovering server support. | `TestPipeline_NotSupported`, `TestRFC2920ClientResponseCorrelation` |
+| PIPE-CLIENT-01 | 3, 3.1 | Normative | The client sends a pipelined group only after discovering server support. | `TestPipeline_NotSupported`, `TestRFC2920ClientResponseCorrelation`, `TestPipelinerRejectsBeforeSending` |
 | PIPE-CLIENT-02 | 3.1 | MUST | Check every command status, including statuses after an earlier rejection. | `TestPipeline_NoRoundTripDeadlock`, `TestRFC2920ClientResponseCorrelation` |
 | PIPE-CLIENT-03 | 3.1 | MUST | Correlate statuses by command/response count, never by code value or response text, and support multiline responses. | `TestRFC2920ClientResponseCorrelation` |
 | PIPE-CLIENT-04 | 3.1 | MUST NOT | Do not confuse a multiline response with responses to multiple commands. | `TestRFC2920ClientResponseCorrelation` |
