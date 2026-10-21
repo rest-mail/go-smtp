@@ -12,6 +12,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   `451 4.3.5` before backend session creation, instead of advertising values
   outside RFC 6710's ASCII grammar or its 20-octet limit. An empty name still
   omits the policy; a disabled extension ignores the unused configuration.
+- LMTP BDAT LAST flushes each recipient reply in RCPT order as soon as its
+  status is available, without waiting for later deliveries or `LMTPData` to
+  return. Unset statuses still use the backend's final result; transaction
+  reset and subsequent commands wait for the backend to finish.
 
 ### Added
 
