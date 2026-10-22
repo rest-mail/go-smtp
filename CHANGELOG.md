@@ -8,6 +8,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- The client acts on the first digit of a reply code only (RFC 5321 §4.2.1,
+  §4.3.2). A 252 to VRFY, a 251 to MAIL, any other 2yz completion, and any 3yz
+  to DATA now succeed; before, every command but RCPT needed its exact code
+  (250, 220, 221, 354) and returned an `SMTPError` otherwise. Pipelined MAIL
+  and RCPT follow the same rule. Callers that relied on `Verify` failing with
+  252 now get nil.
+
 - DATA body writes could block indefinitely before Close. The client now
   applies `DataTransferTimeout` to each network write, including the final
   flush, and retains a write failure so a partial message cannot be retried or
