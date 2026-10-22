@@ -15,6 +15,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- A MAIL or RCPT path with a second `@` in its domain, such as
+  `<user@@example.net>`, now gets `501` instead of reaching the backend. No
+  RFC 5321 domain or address literal contains `@` (RFC 6409 §5.1 asks
+  submission servers to reject such envelope syntax). CHECKLIST.md now records
+  the rest of RFC 6409 section by section.
+
+- Command parsing tolerates trailing ASCII spaces and tabs before CRLF
+  (RFC 5321 §4.1.1). A single space after `NOOP`, `RSET`, `DATA` or `QUIT`
+  previously returned 501; trailing tabs could also prevent dispatch.
+  SMTPUTF8 argument bytes and message body whitespace are preserved.
+
+- REQUIRETLS MAIL parameters reject values, including empty values, with
+  501 5.5.4. Enabled servers reject plaintext REQUIRETLS with 530 5.7.0.
+  Synchronous and pipelined clients reject explicit REQUIRETLS unless TLS
+  has completed, even when a plaintext peer advertises the capability.
+
+- The client acts on the first digit of a reply code only (RFC 5321 §4.2.1,
+  §4.3.2). A 252 to VRFY, a 251 to MAIL, any other 2yz completion, and any 3yz
+  to DATA now succeed; before, every command but RCPT needed its exact code
+  (250, 220, 221, 354) and returned an `SMTPError` otherwise. Pipelined MAIL
+  and RCPT follow the same rule. Callers that relied on `Verify` failing with
+  252 now get nil.
+
 - DATA body writes could block indefinitely before Close. The client now
   applies `DataTransferTimeout` to each network write, including the final
   flush, and retains a write failure so a partial message cannot be retried or
@@ -32,6 +55,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   §4.1.1.1 requires; it used to be `250-Hello client.example.org`. Tests that
   match the exact reply text need updating.
 
+- RSET and QUIT with arguments now return 501 without clearing the active
+  transaction or closing the connection (RFC 5321 §§4.1.1, 4.3.2).
+
 - Multiline server replies repeat the enhanced status code on every line, as
   RFC 2034 §4 requires; it used to appear on the last line only, so a client
   reading the first line (including this package's) found no status code.
@@ -39,6 +65,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - `Client.Quit` after STARTTLS sends QUIT immediately instead of first
   sending a fresh EHLO, so a client rejecting the negotiated security quits
   at once (RFC 3207 §4.1).
+
+- LMTP BDAT LAST now returns zero replies with no accepted recipients and one
+  reply per accepted RCPT on early size, backend or short-transfer failures.
+  Duplicate recipients and explicit backend outcomes are retained. Ordinary
+  SMTP and non-LAST reply counts are unchanged. Hosts consuming raw LMTP
+  replies must account for these corrected counts (RFC 2033 section 4.3).
 
 - Invalid enabled MT-PRIORITY policy names now receive EHLO/LHLO
   `451 4.3.5` before backend session creation, instead of advertising values
@@ -51,6 +83,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   reset and subsequent commands wait for the backend to finish.
 
 ### Added
+
+- RFC 8689 REQUIRETLS envelope checklist and certificate-verified wire tests
+  for advertisement, grammar, TLS-only use, per-message tags, reset, extended
+  MAIL length, client negotiation and the Appendix A.1 envelope. Header,
+  trust/routing, queue and bounce responsibilities remain explicit.
 
 - Two checked RFC 5321 §§4.5.3.2/4.5.3.2.5 DATA timeout rows, with per-buffer
   renewal, SMTP/LMTP framing, blocked-write, error and configuration tests.
@@ -70,12 +107,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   allowed at any time and client timeouts, each with a wire test; the
   server's own command timeout is n/a (host configuration).
 
+- Dated line-by-line RFC 5321 sections 3–4 audit: 105 additional checklist
+  rows, 13 mapped to wire proofs and 92 with explicit host/unsupported
+  reasons. Five new wire tests cover command syntax/state, opaque content
+  above 64 KiB, quoted mailbox equivalence, HELO framing and client exchanges.
+  Existing open checklist slices are identified for merge reconciliation.
+
 - RFC 2034 (ENHANCEDSTATUSCODES) checklist section: nine rows, seven mapped
   to new wire tests.
 
 - Checked RFC 3207 STARTTLS policy rows: immediate TLS-state decisions by
   both peers, QUIT after a rejected negotiation, TLS required for selected
   hosts, opportunistic TLS and post-TLS capability changes.
+
+- Six wire-tested RFC 2033/6531 checklist clauses from four formerly combined
+  gaps: zero-recipient LAST, size/backend/short-transfer LAST failures,
+  explicitly declared internationalized headers and host-selected next-hop
+  rejection. Remaining content classification and routing/report policy stay
+  explicit host duties; no new public API or automatic MIME inspection.
 
 - Wire proofs for PLAIN over verified TLS, backend MAIL storage refusals (452),
   and default SMTPUTF8, RRVS and DELIVERBY command-length allowances. Five

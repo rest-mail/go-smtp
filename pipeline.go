@@ -105,7 +105,7 @@ func (c *Client) Pipeline() (*Pipeliner, error) {
 // recipient list is cleared.
 func (p *Pipeliner) Reset() error {
 	p.c.utf8 = false
-	return p.enqueue(pipelinedCmd{expectCode: 250, kind: pipelineReset}, "RSET")
+	return p.enqueue(pipelinedCmd{expectCode: 2, kind: pipelineReset}, "RSET")
 }
 
 // Mail queues a MAIL FROM command. Option handling matches Client.Mail. The
@@ -117,7 +117,7 @@ func (p *Pipeliner) Mail(from string, opts *MailOptions) error {
 	if err != nil {
 		return err
 	}
-	return p.enqueue(pipelinedCmd{expectCode: 250, kind: pipelineMail}, cmd)
+	return p.enqueue(pipelinedCmd{expectCode: 2, kind: pipelineMail}, cmd)
 }
 
 // Rcpt queues a RCPT TO command. Option handling matches Client.Rcpt. The error
@@ -129,7 +129,7 @@ func (p *Pipeliner) Rcpt(to string, opts *RcptOptions) error {
 	if err != nil {
 		return err
 	}
-	return p.enqueue(pipelinedCmd{expectCode: 25, kind: pipelineRcpt, rcpt: to}, cmd)
+	return p.enqueue(pipelinedCmd{expectCode: 2, kind: pipelineRcpt, rcpt: to}, cmd)
 }
 
 // enqueue writes a command line without reading its response and records it for

@@ -19,6 +19,8 @@ CHUNKING/BINARYMIME (RFC 3030), 8BITMIME (RFC 6152), AUTH exchange rules
 the SMTPUTF8 envelope (RFC 6531), the RRVS parameter (RFC 7293), DELIVERBY
 transport (RFC 2852), MT-PRIORITY transport (RFC 6710), LMTP
 (RFC 2033) and ENHANCEDSTATUSCODES (RFC 2034) are audited below.
+REQUIRETLS envelope transport (RFC 8689) is audited separately, with explicit
+header, trust and relay policy limits.
 The remaining AUTH and DSN lifecycle rules remain for later slices.
 The combined DSN budget proof exercises the default 2000-octet MAIL and RCPT
 limits with all built-in parameter families enabled, exact backend options and
@@ -29,8 +31,9 @@ when BINARYMIME is advertised (MIME-CLIENT-03). Callers remain responsible for
 classifying opaque DATA content (MIME-POLICY-01). PIPE-CLIENT-08 and TLS-PIPE-01
 check synchronous AUTH and STARTTLS exchanges at completed group boundaries;
 custom extension commands have no queue API.
-RFC 6409 submission authentication (§4.3) is checked below; its remaining
-requirements are not yet audited. Reply line lengths (§4.5.3.1.5)
+RFC 6409 submission is audited section by section below: authentication (§4.3),
+envelope syntax (§5.1), the extension set (§7) and address preservation (§8.8)
+are checked; the rest are host duties. Reply line lengths (§4.5.3.1.5)
 are checked by SMTP-LIM-06;
 SASL challenges retain the independent size rules of RFC 4954 §4.
 
@@ -54,6 +57,7 @@ SASL challenges retain the independent size rules of RFC 4954 §4.
 | SMTP-SYN-13 | 2.3.8, 4.1.1 | MUST | A command line ends at CRLF only: a bare LF does not end a command (it is a 500 and the connection is closed, and the text after it is not run), and a bare CR in the middle of a line does not split it into two commands. | `TestEODCommandLineBareLF` |
 | SMTP-SYN-14 | 2.4 | MUST | The local-part of a mailbox is case-sensitive: MAIL and RCPT addresses reach the backend in the case sent, and recipients differing only in case stay distinct. | `TestRFC5321_LocalPartCasePreserved` |
 | SMTP-SYN-15 | 4.1.1.1, 4.1.3 | Normative | HELO and EHLO accept an address literal (`[192.0.2.1]`, `[IPv6:2001:db8::1]`) as the client's name, and the backend sees it as `Conn.Hostname`. | `TestRFC5321_HelloAddressLiteral` |
+| SMTP-SYN-16 | 4.1.1 | SHOULD | Tolerate trailing whitespace before command CRLF; ASCII SP/HTAB does not become a parameter or alter SMTPUTF8 argument bytes. | `TestParseCmdTrailingWhitespace`, `TestRFC5321TrailingCommandWhitespace`, `FuzzParseCmd` |
 
 ## Command order and state (§3.3, §4.1.1.2, §4.1.4)
 
@@ -84,7 +88,8 @@ SASL challenges retain the independent size rules of RFC 4954 §4.
 | SMTP-RSET-01 | 4.1.1.5 | MUST | RSET clears the sender, the recipients and the message data, and is answered 250. | `TestRFC5321_RsetAndSecondEhloClearTransaction`, `TestServer_otherCommands` |
 | SMTP-RSET-02 | 4.1.4 | MUST | A second EHLO or HELO clears the transaction exactly as RSET does. | `TestRFC5321_RsetAndSecondEhloClearTransaction`, `TestRFC5321HelloIdentifyingSuffix` |
 | SMTP-RCPT-01 | 3.3, 4.1.1.3 | MUST | A transaction may have several recipients; each is answered on its own. | `TestRFC5321_RecipientLimit`, `TestRFC5321_HundredRecipients` |
-| SMTP-RCPT-02 | 4.5.3.1.8 | SHOULD | A server that limits recipients answers the ones over the limit 452 4.5.3, and the accepted ones stay in the transaction. | `TestRFC5321_RecipientLimit` |
+| SMTP-RCPT-02 | 4.5.3.1.8, 4.5.3.1.10 | MUST | A server that limits recipients answers the ones over the limit 452 4.5.3, and the accepted ones stay in the transaction. | `TestRFC5321_RecipientLimit` |
+| SMTP-RCPT-03 | 3.6.1, 4.1.1.3 | MUST | The server accepts a source route in a forward-path or reverse-path and ignores it: the backend gets only the mailbox, with no route hosts. | `TestRFC5321_SourceRouteIgnored` |
 
 ## Message data (§4.1.1.4, §4.5.2)
 
@@ -97,6 +102,7 @@ SASL challenges retain the independent size rules of RFC 4954 §4.
 | SMTP-DATA-05 | 2.3.8 | Normative | The data is delivered as received: line endings are not rewritten, and an empty body is a valid message. | `TestServer_EmptyMessage`, `TestServer_LFDotLF` |
 | SMTP-DATA-06 | 4.5.3.1.6 | MUST | A text line of at least 1000 octets is accepted in DATA, whatever the command line limit is. | `TestServer_MaxLineLengthBoundsCommandsNotData` |
 | SMTP-DATA-07 | 4.1.1.4, 2.3.8, 4.5.2 | MUST | The data ends only at `<CRLF>.<CRLF>`: `LF.LF`, `CR.CR`, `LF.CRLF`, `CRLF.LF` and a CR after the leading dot (`CRLF.CR`) are content, never run as commands; a stray CR before the real `<CRLF>.<CRLF>` does not hide it, so the message ends there. | `TestEODNonStandardSequencesDoNotEndData`, `TestEODCRBeforeCRLFDotEndsData` |
+| SMTP-DATA-08 | 3.3 | MUST | When every RCPT was rejected, DATA gets 503 (or 554) and nothing is taken as message data; a client that gets a 5yz (or any non-3yz) reply to DATA sends no message data. | `TestRFC5321_DataAfterAllRecipientsRejected`, `TestRFC5321_ClientFirstDigitFailures` |
 
 ## Size limits and timeouts (§4.5.3)
 
@@ -153,6 +159,9 @@ the DATA writer retains the error and refuses further writes or termination.
 | SMTP-CLI-06 | 4.1.1.5 | MUST | A new MAIL starts with no recipients from the one before, and RSET clears them. | `TestClientMailClearsRcpts`, `TestPipelinerMailClearsRcpts`, `TestPipeline_Reset` |
 | SMTP-CLI-07 | 2.2.2 | MUST | The client does not send a MAIL parameter the server did not advertise, or one out of range. | `TestClientMailParamsUnadvertised`, `TestClientMailParamsOutOfRange`, `TestClientMailRequireTLS` |
 | SMTP-CLI-08 | n/a | Normative | The client can tell whether a connection it kept is still healthy before it reuses it. | `TestCheckConn_HealthyPlaintext`, `TestCheckConn_ServerClosedPlaintext`, `TestCheckConn_UnsolicitedData`, `TestCheckConn_BufferedData`, `TestCheckConn_TLS` |
+| SMTP-CLI-09 | 4.2.1, 4.3.2 | MUST | The client acts on the first digit of a reply code only: an unlisted 2yz (such as 252 to VRFY, 251 to MAIL, 299 to RCPT) is success, an unlisted 3yz to DATA is the go-ahead, and an unlisted 4yz or 5yz is an error with that code; the text is not consulted, and an empty text is accepted. Pipelined MAIL and RCPT follow the same rule. | `TestRFC5321_ClientFirstDigitOnly`, `TestRFC5321_ClientFirstDigitFailures`, `TestRFC5321_PipelinerFirstDigitOnly` |
+| SMTP-CLI-10 | 4.1.1.10, 3.8 | MUST | Quit sends QUIT before it closes the connection, and waits for the reply before closing. | `TestRFC5321_ClientQuitWaitsForReply` |
+| SMTP-CLI-11 | 4.2.1 | MUST | A reply with no text at all (a bare `250` with no space) is acceptable to the client. | n/a: known gap, left for the owner; replies are read with Go's `net/textproto`, which rejects a code line shorter than four characters as "short response". Accepting it needs a reply reader of our own. Senders SHOULD NOT send bare codes (4.2.1), and `250 ` with an empty text is accepted (SMTP-CLI-09). |
 
 ## Extensions (one row each; clause-by-clause checks come in later slots)
 
@@ -473,6 +482,10 @@ This slice audits the envelope: the EHLO keyword, the MAIL parameter, UTF-8
 mailboxes and the per-transaction rules for non-ASCII addresses. RFC 6532
 message headers, IDNA lookups and downgrade are host responsibilities; the
 UTF-8 `ORCPT` encoding of RFC 6533 stays in SMTP-EXT-06.
+UTF8-BODY-01 tests explicitly declared content at both top-level and nested
+message headers. UTF8-DOWN-01 installs an actual two-hop rejection policy in
+the test host; neither row claims automatic content classification or relay
+policy. Those remaining duties stay explicit in UTF8-BODY-02/UTF8-DOWN-02.
 
 | ID | Section | Level | Requirement | Tests |
 |----|---------|-------|-------------|-------|
@@ -492,8 +505,10 @@ UTF-8 `ORCPT` encoding of RFC 6533 stays in SMTP-EXT-06.
 | UTF8-CLIENT-04 | 3.4 | SHOULD NOT | The client omits SMTPUTF8 when the envelope does not need it. | `TestSendMail_SMTPUTF8_Autodetect` |
 | UTF8-VRFY-01 | 3.7.4.2 | MUST NOT | VRFY and EXPN replies contain no UTF-8 unless the client sent SMTPUTF8; the server's VRFY reply (252) and EXPN refusal are always ASCII. | `TestRFC6531VrfyRepliesStayASCII` |
 | UTF8-REPLY-01 | 3.7.4.1 | MUST NOT | Without SMTPUTF8 on MAIL, no 251 or 551 reply carries a non-ASCII mailbox. | n/a: host responsibility: the library sends no 251 or 551 itself; a backend returning a custom `SMTPError` chooses its text. |
-| UTF8-BODY-01 | 3.2, 3.1 item 10 | MUST NOT | No RFC 6532 internationalized header is sent to a server without SMTPUTF8. | n/a: gap: Data does not inspect content; callers must set `MailOptions.UTF8` for an internationalized message. |
-| UTF8-DOWN-01 | 3.2 | Normative | A sender facing a server without SMTPUTF8 rejects, bounces or downgrades the message. | n/a: host policy: the client returns an error; there is no queue, bounce or downgrade implementation. |
+| UTF8-BODY-01 | 3.2, 3.1 item 10 | MUST NOT | A host declaring an internationalized message with `MailOptions.UTF8`, even with an ASCII envelope and nested MIME headers, cannot send it to an unadvertised next hop; an advertising hop receives the flag and unchanged content. | `TestRFC6531DeclaredInternationalizedHeaders` |
+| UTF8-BODY-02 | 3.2, 3.4 | MUST | Identify internationalized headers at every MIME depth and set SMTPUTF8 when required. | n/a: host content classification; Data streams opaque bytes and SendMail only detects envelope addresses. Automatic header inspection or a message classification API needs an owner decision. |
+| UTF8-DOWN-01 | 3.2 | SHOULD | A relay host selecting rejection can turn the outbound refusal of a declared internationalized message into an upstream permanent failure, without leaking the message downstream; ASCII delivery still works. | `TestRFC6531HostRejectsUnsupportedNextHop` |
+| UTF8-DOWN-02 | 3.2 | Normative | Choose rejection, notification, transformation, requeue or an alternate MX according to the sender role and circumstances. | n/a: host queue/routing/content policy; the tested host explicitly chooses rejection. The library has no queue, bounce generator, MIME downgrader or MX selector. |
 | UTF8-DNS-01 | 3.2 | MUST | Domain names looked up in DNS follow IDNA (Unicode-aware lookup or A-labels). | n/a: the library performs no DNS lookups; the host's dialer and routing do. |
 | UTF8-EHLO-03 | 3.7.1 | MUST | EHLO domain names and the server's EHLO response use LDH labels or A-labels. | n/a: host configuration: `Client.Hello` and `Server.Domain` take the name the host supplies. |
 | UTF8-TRACE-01 | 3.7.3, 3.1 item 11 | Normative | Trace fields use the UTF8SMTP/UTF8SMTPA/UTF8SMTPS WITH keywords. | n/a: the library writes no Received fields; the host adds trace headers. |
@@ -610,7 +625,11 @@ Sections refer to [RFC 2033](https://datatracker.ietf.org/doc/html/rfc2033).
 This audits the LMTP differences from ESMTP, including the §4.2 example
 addresses, message and mixed results. Existing SMTP, PIPELINING, DATA and
 CHUNKING parser tests/fuzzers apply to the shared machinery. LMTP introduces
-no separate parser. Successful delivery is a host promise: transport success
+no separate parser. The former combined LMTP-BDAT-06 failure gap is split
+into size-limit, early-backend and short-transfer clauses, each with its own
+wire proof. A fully broken connection cannot guarantee receipt of replies;
+the short-transfer test half-closes the request direction only.
+Successful delivery is a host promise: transport success
 alone does not prove durable storage. The client API returns collected results
 when CloseWithLMTPResponse finishes; it does not expose a streaming callback.
 
@@ -629,11 +648,13 @@ when CloseWithLMTPResponse finishes; it does not expose a streaming callback.
 | LMTP-BDAT-02 | 4.3 | Normative | Duplicate forward-paths and multiline replies retain per-RCPT counting for BDAT LAST. | `TestRFC2033RecipientReplies`, `TestRFC2033BDATRecipientRepliesFlushed` |
 | LMTP-BDAT-03 | 4.3 | Normative | A non-LAST BDAT command returns exactly one reply. | `TestRFC2033RecipientReplies` |
 | LMTP-BDAT-04 | 4.3 | Normative | BDAT LAST expands a fallback backend or unset status result to all accepted recipients. | `TestRFC2033FallbackAndUnsetStatuses`, `TestRFC2033BDATRecipientRepliesFlushed` |
-| LMTP-BDAT-05 | 4.3 | Normative | BDAT LAST with no successful RCPT returns zero replies. | n/a: known gap: the shared SMTP handler drains the chunk and returns 503; LMTP does not yet override it. |
+| LMTP-BDAT-05 | 4.3 | Normative | BDAT LAST with no successful RCPT drains its opaque chunk and returns zero replies, including after all refusals, RSET or a completed transaction. | `TestRFC2033LastWithoutRecipients` |
 | LMTP-EXT-01 | 5 | MUST | The LMTP server implements and advertises PIPELINING. | `TestRFC2033GreetingAndSequence`, `TestRFC2033RecipientReplies` |
 | LMTP-EXT-02 | 5 | MUST | The LMTP server implements and advertises ENHANCEDSTATUSCODES. | `TestRFC2033GreetingAndSequence`, `TestRFC2033RecipientReplies` |
 | LMTP-EXT-03 | 5 | SHOULD | The LMTP server implements 8BITMIME. | `TestRFC2033GreetingAndSequence` |
-| LMTP-BDAT-06 | 4.3 | Normative | Even failed LAST chunks report individual outcomes for accepted recipients. | n/a: known gap: early size-limit/backend/transport errors use the shared single-reply SMTP path rather than the normal LAST per-recipient result path. |
+| LMTP-BDAT-06 | 4.3 | Normative | A size-limit failure on the first or cumulative LAST chunk returns one 552 per accepted RCPT, preserving duplicates and order, then permits another transaction. | `TestRFC2033LastSizeFailureReplies` |
+| LMTP-BDAT-07 | 4.3 | Normative | An early backend refusal of a LAST chunk preserves per-recipient results and drains the remaining chunk; recoverable refusals permit another transaction, while panic or requested termination closes after the results. A fallback backend applies its refusal to every accepted RCPT. | `TestRFC2033LastEarlyBackendFailureReplies`, `TestRFC2033LastEarlyTerminalReplies` |
+| LMTP-BDAT-08 | 4.3 | Normative | A short LAST chunk reports a temporary transfer failure to each accepted RCPT when the reply direction remains writable, then closes rather than reinterpreting incomplete data as commands. | `TestRFC2033LastShortReadReplies` |
 | LMTP-FLUSH-01 | 5 | SHOULD | Send each DATA recipient reply as soon as available, flushing before waiting for a slower recipient. | `TestServer_LMTP_Early` |
 | LMTP-FLUSH-02 | 5 | SHOULD | Send BDAT LAST recipient replies as soon as available, flushing in RCPT order before waiting for slower recipients or the backend's return. | `TestRFC2033BDATRecipientRepliesFlushed` |
 | LMTP-CLIENT-01 | 4.2, 5 | MUST | Preserve received recipient successes and failures when the connection closes before all replies arrive. | `TestRFC2033ClientPartialReplies` |
@@ -712,11 +733,68 @@ The tests use a backend with that policy and a plaintext in-memory pipe.
 | SUB-AUTH-02 | RFC 6409 §4.3 | MUST | By default, reject unauthenticated MAIL unless independent authentication or authorization is established. | n/a: host policy; the generic relay/submission server has no submission mode. Backends must enforce this in Mail; the test backend demonstrates the contract, not automatic enforcement. |
 | SUB-AUTH-03 | RFC 6409 §§4.3, 7 | MUST | Submission supports AUTH; independently authorized sessions may submit without it. DATA and BDAT use the same authorized envelope. | `TestRFC6409SubmissionAuthentication` |
 | SUB-NULL-01 | RFC 6409 §3.2 | MUST NOT | A null reverse path alone does not cause submission rejection. | `TestRFC6409SubmissionAuthentication` |
+| SUB-PORT-01 | RFC 6409 §3.1 | MAY | Port 587 carries submissions; a site may designate port 25 hosts as MSAs. | n/a: listener address is host configuration; the server treats every port alike, so a submission listener needs a submission backend (SUB-AUTH-02). |
+| SUB-RET-01 | RFC 6409 §3.2 | SHOULD | Reject immediately (550 to MAIL) when no return path to the submitting user can be determined. | n/a: host policy; Backend Mail sees the reverse path and AUTH state and returns the SMTPError. |
+| SUB-CODE-01 | RFC 6409 §§4.1, 6.1–6.3 | Normative | 554 rejects improper MAIL, RCPT or DATA; 550 5.7.1/5.7.0 rejects on submission rights, permissions or site policy. | n/a: these rejections are backend decisions; codes a backend supplies in an SMTPError are sent as given (ESC rows). |
+| SUB-FQDN-01 | RFC 6409 §4.2 | MUST | Ensure every envelope domain, and every header address domain if the message text is examined, is fully qualified; reject incomplete multi-level domains rather than expand them. | n/a: the server does no DNS or domain qualification and never expands domains; Backend Mail and Rcpt must reject unqualified domains with 554. |
+| SUB-SYN-01 | RFC 6409 §5.1 | SHOULD | Reject a MAIL or RCPT command whose envelope address has illegal syntax with 501. | `TestRFC6409SubmissionExtensions` |
+| SUB-SYN-02 | RFC 6409 §5.1 | SHOULD | If the message text is examined, reject illegal header address syntax with 554 after end-of-data. | n/a: the server passes message content to the backend unexamined; header checks are the backend's. |
+| SUB-LOG-01 | RFC 6409 §5.2 | SHOULD | Log message errors, especially client misconfiguration, with limits against log flooding. | n/a: host duty; Server.ErrorLog receives only server-side failures, and client-error logging policy belongs to the backend. |
+| SUB-TIME-01 | RFC 6409 §5.3 | SHOULD | Respond to every command, even DATA, in under 2 minutes. | n/a: reply latency is set by the backend's Mail, Rcpt and Data calls; ReadTimeout and WriteTimeout are host configuration. |
+| SUB-OPT-01 | RFC 6409 §§6.4–6.5 | MAY | Permit reduced authentication for postmaster, and convert character sets or encodings. | n/a: optional host policy; the server delivers Postmaster paths (SMTP rows) and never converts content. |
+| SUB-EXT-01 | RFC 6409 §7 | MUST | Offer PIPELINING, ENHANCEDSTATUSCODES, DSN and 8BITMIME (SHOULD) and AUTH (MUST). | `TestRFC6409SubmissionExtensions` |
+| SUB-EXT-02 | RFC 6409 §7 | MUST NOT | Offer neither ETRN nor ATRN on submission. | `TestRFC6409SubmissionExtensions` |
+| SUB-EXT-03 | RFC 6409 §7 | MUST NOT | Do not use the 521 reply code on submission. | n/a: no server path sends 521; a code a backend supplies is the host's. |
+| SUB-EXT-04 | RFC 6409 §7 | SHOULD | Future SMTP extensions say whether they are valid on the submission port. | n/a: a duty for extension authors, not an implementation. |
+| SUB-MOD-01 | RFC 6409 §8.8 | MUST NOT | Do not rewrite a forward-pointing (destination) address against RFC 5321's local-part rules. | `TestRFC6409SubmissionExtensions` |
+| SUB-MOD-02 | RFC 6409 §§8, 8.1–8.7 | MUST | Forwarded or delivered messages conform to RFC 5321/5322; an added Sender holds a valid address; add Message-ID if missing; Date, transfer encoding, signing, encryption and alias resolution are optional. | n/a: the server never modifies submitted content or adds header fields; any modification, and conformance of what is relayed onward, is the backend's. |
 
-Remaining RFC 6409 audit: port selection, return-path determination, domain and
-header validation, rejection policy, logging, timeouts, extension applicability,
-message modifications and delivery/relay responsibilities. No header rewriting,
-DNS qualification or submission-specific policy is supplied by this change.
+RFC 6409 has now been read section by section (§§1–12). Its explicit
+requirements each have a row above; port selection, return-path policy, domain
+qualification, logging, latency and message modification are host duties. The
+server supplies the transport: the §7 extension set, 501 for malformed envelope
+paths, and paths passed to the backend unchanged. Enabling DSN is still the
+host's choice (`EnableDSN`); the test enables it.
+
+
+## REQUIRETLS (RFC 8689)
+
+Sections refer to [RFC 8689](https://www.rfc-editor.org/rfc/rfc8689).
+This audits the previously unlisted REQUIRETLS envelope transport. Enabling
+`EnableREQUIRETLS` is a host promise to implement onward handling; a TLS socket
+and a boolean alone do not implement the RFC. The tests use certificate-verified
+TLS and actual SMTP commands, including ordinary and pipelined client MAIL.
+Header interpretation, trust/routing policy, storage and reports remain explicit
+host responsibilities or unsupported features below. The Appendix A.1 envelope
+addresses and STARTTLS/MAIL/RCPT/DATA sequence are exercised; its illustrative
+reply text and extra post-handshake greeting are not protocol requirements.
+
+| ID | Section | Level | Requirement | Tests |
+|----|---------|-------|-------------|-------|
+| REQTLS-EHLO-01 | 2, 7 | Normative | Advertise parameterless REQUIRETLS only when enabled and over TLS; a disabled server refuses the parameter. | `TestRFC8689Advertisement` |
+| REQTLS-SYN-01 | 2(4,8) | Normative | REQUIRETLS is a case-insensitive, value-free MAIL parameter; reject values (including empty), duplicates and use on RCPT without accepting the invalid request. | `TestRFC8689ParameterGrammar` |
+| REQTLS-TLS-01 | 2 | MUST | REQUIRETLS is used only in a TLS-protected session; a plaintext request is refused without starting a transaction. | `TestRFC8689ServerRefusesPlaintext` |
+| REQTLS-RECEIVE-01 | 4.1 | MUST | Expose the received REQUIRETLS tag to the backend for that message; RSET, EHLO and completed delivery do not apply it to a later untagged message. | `TestRFC8689ReceiptAndReset` |
+| REQTLS-LEN-01 | 2(5) | Normative | Allow 11 extra octets on MAIL, with the default command budget. | `TestRFC8689MailLength` |
+| REQTLS-CLIENT-01 | 2, 4.2.1(4) | MUST | A client refuses an explicit REQUIRETLS request before sending MAIL over plaintext, even if an unsafe peer advertised it; the same guard protects pipelined MAIL. | `TestRFC8689ClientRefusesPlaintext` |
+| REQTLS-CLIENT-02 | 2, 4.2.1(5) | MUST | Send the REQUIRETLS MAIL parameter only when the TLS peer advertises support; otherwise return an error without queuing or writing that MAIL. | `TestRFC8689ClientNegotiation` |
+| REQTLS-EXAMPLE-01 | App. A.1 (example) | Normative | Transfer the example's roger@example.org to editor@example.net envelope over verified TLS with REQUIRETLS and DATA. | `TestRFC8689ClientNegotiation` |
+| REQTLS-TRUST-01 | 2, 4.2.1(1–2) | MUST | Validate MX names through DNSSEC or MTA-STS before requiring TLS. | n/a: host routing duty; the library connects to a supplied address and performs no MX, DNSSEC or MTA-STS lookup. |
+| REQTLS-TRUST-02 | 2, 4.2.1(4) | MUST | Authenticate the server certificate, including the selected MX hostname, with trusted PKIX or DANE. | n/a: tls.Config and host validation policy own trust; RequireTLS enforces a completed TLS session but cannot attest to a custom verifier or DANE policy. InsecureSkipVerify without a validating callback remains unsafe and is not blocked. |
+| REQTLS-TRUST-03 | 4.2.1 | SHOULD | Apply current TLS security recommendations during negotiation. | n/a: host supplies protocol, cipher and certificate policy in tls.Config; no REQUIRETLS-specific security profile is imposed. |
+| REQTLS-STORE-01 | 4.1 | MUST | Persist the tag and retain it for every locally aliased or redistributed instance. | n/a: backend queue, durable storage and recipient expansion are outside the library; receipt exposes MailOptions.RequireTLS only. |
+| REQTLS-HEADER-01 | 3 | MUST NOT | Generate multiple TLS-Required headers; the field has the sole value No. | n/a: no message-header parser or generator; the host must validate and construct headers. |
+| REQTLS-HEADER-02 | 4.1, 4.3 | MUST | Tag TLS-Required: No messages accordingly when REQUIRETLS is absent, ignoring the header when REQUIRETLS is present. | n/a: opaque DATA is not interpreted; MailOptions has no TLS-optional tri-state. Hosts must parse content and prioritize the envelope tag themselves. |
+| REQTLS-OPTIONAL-01 | 3, 4.2.2 | MUST | For TLS-optional mail resolve the server, attempt STARTTLS and permit policy override/fallback; report failure when the server insists on TLS. | n/a: host controls routing, retry, downgrade and notification policy; the transport has no TLS-Required header handling or automatic fallback. |
+| REQTLS-RELAY-01 | 4.2.1, 4.3 | MUST | Preserve the requirement on onward relay and submission only after all trust and negotiation checks pass. | n/a: the client serializes a supplied tag, but host queue/relay code must retain it and perform DNS/certificate policy checks; no automatic relay is provided. |
+| REQTLS-FAIL-01 | 4.2.1 | MUST | After security/support failure, QUIT and try the remaining MX hosts; never transmit the protected message to an unsuitable route and generate a non-delivery report if none qualify. | n/a: no MX iteration, retry queue or report generator; client errors are returned to the host, which chooses QUIT or another permitted ordinary transaction. |
+| REQTLS-FAIL-02 | 4.2.1, 7 | SHOULD | Report 5.7.30 for missing REQUIRETLS and 5.7.10 for failed TLS establishment. | n/a: these are host-generated non-delivery status codes; local negotiation errors do not synthesize a DSN. |
+| REQTLS-DELIVERY-01 | 4.4 | SHOULD | Protect end-user retrieval according to RFC 8314. | n/a: IMAP, POP and webmail deployment are outside this SMTP transport. |
+| REQTLS-BOUNCE-01 | 5 | MUST | Protect resulting bounces with REQUIRETLS and use an empty reverse-path. | n/a: host classifies/generates bounces and chooses their envelope; generic Mail cannot identify a report. |
+| REQTLS-BOUNCE-02 | 5 | MUST | Treat REQUIRETLS bounces as RET=HDRS, disregarding RET=FULL. | n/a: host report generator decides included content; the transport exposes both options without rewriting the received request. |
+| REQTLS-BOUNCE-03 | 5 | SHOULD NOT | Discard null-sender bounces solely because the next hop lacks REQUIRETLS. | n/a: host must explicitly choose the bounce exception; the client conservatively refuses any explicit unsupported RequireTLS option, including a null sender. |
+| REQTLS-REORIGIN-01 | 6 | Normative | Apply incoming TLS requirements to reoriginated messages to the extent feasible. | n/a: mailing lists, vacation responders and other mediators are host applications. |
+| REQTLS-CONTENT-01 | 8.3 | MUST | Use end-to-end content encryption when intermediate MTAs must not see sensitive content. | n/a: REQUIRETLS protects hops only; OpenPGP/S/MIME content construction is outside this library. |
 
 ## ENHANCEDSTATUSCODES (RFC 2034)
 
@@ -736,3 +814,157 @@ side owns each rule.
 | ESC-MULTI-01 | 4 | MUST | Every line of a multiline reply begins with the same status code. | `TestRFC2034MultilineSameCode` |
 | ESC-CLIENT-01 | 4 | Normative | The client reads the status code from a reply and removes the repeated code from each line, keeping the multiline text. | `TestRFC2034ClientRoundTrip` |
 | ESC-HOST-01 | 4 | MUST | A backend-supplied status code agrees with its reply code and keeps subject and detail to 1-3 digits. | n/a: host responsibility; the server sends `SMTPError.EnhancedCode` as given, and `NoEnhancedCode` lets an extension omit it. Validating or rewriting host codes would change what hosts send, so it is left to the owner (rest-mail/rest-mail-server#374). |
+
+## RFC 5321 sections 3–4: omission audit (2026-10-22)
+
+Audited the RFC Editor text of RFC 5321 §§3–4 line by line on **2026-10-22**,
+including all subsections: §§3.1–3.9.2; §§4.1.1.1–4.1.1.10, 4.1.2–4.1.5;
+§§4.2.1–4.2.5; §§4.3.1–4.3.2; §4.4; and §§4.5.1–4.5.5, including
+§§4.5.3.1.1–4.5.3.1.10, 4.5.3.2.1–4.5.3.2.7 and 4.5.4.1–4.5.4.2.
+Compared every MUST/MUST NOT/SHOULD/SHOULD NOT (including requirements split
+across pages) and its surrounding prose against the existing rows and the
+diffs of go-smtp PRs #113–#123. §§4.2.2–4.2.3 are reply-code catalogues;
+§4.1.3 supplies address-literal grammar. Their normative context was included. The examples of limit-error replies in
+§4.5.3.1.9 contain no additional MUST/SHOULD.
+This is an inventory audit, not proof that every input or deployment conforms.
+Imported RFCs and RFC 5321 §§1–2 and §§5–8 are outside this dated pass.
+
+Rows already present above are not repeated. In particular, #120 owns server
+identification, local-part case, address-literal greeting, any-time commands,
+NOOP parameters and client/server timeout rows; #122 owns source-route
+stripping, DATA after rejected recipients, first-digit reply interpretation,
+client QUIT sequencing and bare-code replies. DSN-HOST-03 (split into
+DSN-HOST-09 by #117) already records report-loop prevention (§§3.6.2, 4.5.4);
+DSN-HOST-07 already records null notification senders and reverse-path report
+targets (§§3.6.2, 4.4). Those duties are referenced rather than added again. Those independent PRs are not
+assumed merged: their rows/tests must be retained when reconciling this audit.
+The additional rows below distinguish transport proofs, unsupported behavior
+and duties of the application using the transport. **n/a does not waive an
+MTA's obligation**: a host must implement those duties before claiming full
+RFC conformance. Known transport gaps remain tracked by
+[rest-mail-server#374](https://github.com/rest-mail/rest-mail-server/issues/374).
+
+### Additional transport proofs
+
+| ID | Section | Level | Requirement | Tests |
+|----|---------|-------|-------------|-------|
+| SMTP-AUDIT-01 | 4.1.1, 4.3.2 | SHOULD | Reject arguments on RSET, QUIT and DATA with 501 before changing state; a rejected RSET does not discard the transaction and a rejected QUIT does not close the connection. | `TestRFC5321_ParameterlessCommands` |
+| SMTP-AUDIT-02 | 3.3, 3.6.3, 3.7.2, 4.4 | MUST NOT | The transport does not reject malformed trace fields or mismatched Resent fields and does not rewrite, reorder or delete existing Received fields or other relayed content. | `TestRFC5321_OpaqueContentAndMinimumMessage` |
+| SMTP-AUDIT-03 | 4.5.3.1.7 | MUST | With the default unlimited MaxMessageBytes the receiver accepts at least 64 KiB of message content, headers included. | `TestRFC5321_OpaqueContentAndMinimumMessage` |
+| SMTP-AUDIT-04 | 4.1.1.4 | Normative | Successful end-of-DATA consumes the sender, recipients and message data; RCPT alone cannot reuse a completed transaction and a fresh MAIL is accepted. | `TestRFC5321_OpaqueContentAndMinimumMessage` |
+| SMTP-AUDIT-05 | 3.2 | MUST NOT | HELO must not receive the extended EHLO capability response. | `TestRFC5321_HeloAndRejectedEhlo` |
+| SMTP-AUDIT-06 | 4.1.4 | MUST | Rejected EHLO leaves the previous state intact; a missing argument gets 501 without losing the active sender or recipients. | `TestRFC5321_HeloAndRejectedEhlo` |
+| SMTP-AUDIT-07 | 4.1.2 | MUST | Equivalent quoted forms of a local-part denote the same mailbox; quoted-pair escapes are decoded before backend MAIL/RCPT comparisons. | `TestRFC5321_QuotedLocalPartEquivalence` |
+
+### Session, verification and command responsibility gaps
+
+| ID | Section | Level | Requirement | Tests |
+|----|---------|-------|-------------|-------|
+| SMTP-AUDIT-08 | 3.1 | MUST | A server rejecting the session with initial 554 waits for QUIT before closing. | n/a: initial-554 rejection mode is not supported; the transport sends 220 on connection opening. A host must not substitute 554 and immediately close. |
+| SMTP-AUDIT-09 | 3.1 | SHOULD | After initial 554, answer intervening commands 503 and supply useful debugging text in the greeting. | n/a: initial-554 rejection mode is not supported. |
+| SMTP-AUDIT-10 | 3.3 | MUST | MAIL refusal distinguishes temporary from permanent reverse-path failure. | n/a: Session.Mail's SMTPError selects 4yz/5yz; the transport cannot classify an application's mailbox or policy failures. Plain errors default to temporary 451. |
+| SMTP-AUDIT-11 | 3.3 | MUST NOT | A restricted client must not assume any Internet SMTP server will relay for it. | n/a: relay selection and authorization are caller deployment policy; the client sends to the peer selected by its caller. |
+| SMTP-AUDIT-12 | 3.3 | SHOULD | A receiver deferring individual recipient verification until after DATA treats individual failures as subsequent failures and sends notifications rather than an ambiguous whole-message rejection. | n/a: backend owns recipient verification, partial delivery and notification generation; SMTP has one final result. |
+| SMTP-AUDIT-13 | 3.4 | MUST NOT | A server returning 251 or 551 must not assume the client updates addresses or informs the user. | n/a: forwarding/address-book workflow belongs to the host; the transport has no address-book state or user notification UI. |
+| SMTP-AUDIT-14 | 3.4 | SHOULD | Sites can disable or restrict disclosure through 251/551 forwarding responses. | n/a: the backend chooses its SMTPError/SMTPResponse; no built-in forwarding directory exists. Site policy must govern its response text. |
+| SMTP-AUDIT-15 | 3.5.1, 3.5.3 | SHOULD | Actually support VRFY and EXPN address verification, with more aggressive verification for VRFY than RCPT. | n/a: known limitation: VRFY always returns 252 and EXPN returns 502; no backend verification/expansion API exists. |
+| SMTP-AUDIT-16 | 3.5.1 | MUST | A normal 250 VRFY includes the user's mailbox in the required address form; successful EXPN lists the members' mailboxes. | n/a: no 250 VRFY or successful EXPN response is generated; real verification/expansion is unsupported. |
+| SMTP-AUDIT-17 | 3.5.1 | SHOULD | VRFY of an undeliverable-as-a-whole list reports an error; recognize local-part@domain as a user name. | n/a: real verification/list expansion is unsupported; VRFY does not interpret its argument. |
+| SMTP-AUDIT-18 | 3.5.1 | MUST | VRFY/EXPN implementations recognize at least local mailbox names. | n/a: known limitation: VRFY is a privacy-preserving 252 stub, not an address verifier; EXPN is unsupported. |
+| SMTP-AUDIT-19 | 3.5.1 | SHOULD | Interpret VRFY/EXPN response text cautiously and generally only for diagnosis. | n/a: Client.Verify returns status only; presentation and diagnostic use belong to the caller. There is no EXPN client API. |
+| SMTP-AUDIT-20 | 3.5.2 | MUST | Normal address-bearing VRFY/EXPN replies contain valid RCPT-usable fully qualified mailboxes, including a program's mailbox rather than its internal target. | n/a: address-bearing VRFY/EXPN responses are unsupported. |
+| SMTP-AUDIT-21 | 3.5.2 | SHOULD | Enclose returned VRFY/EXPN addresses in angle brackets. | n/a: address-bearing VRFY/EXPN responses are unsupported. |
+| SMTP-AUDIT-22 | 3.5.2 | MUST NOT | Return source routes in VRFY/EXPN replies. | n/a: neither command returns an address; real verification/expansion is unsupported. |
+| SMTP-AUDIT-23 | 3.5.4 | SHOULD NOT | Attempt source expansion of mailing lists to eliminate duplicates. | n/a: library has no source expansion or mailing-list manager. |
+| SMTP-AUDIT-24 | 3.8, 4.1.1.10 | SHOULD | Treat unexpected connection failures as temporary transaction failures for retry purposes. | n/a: network errors are returned to the caller; the client owns no retry queue and does not synthesize a 451 SMTP reply. Caller must classify ambiguous delivery outcomes carefully. |
+| SMTP-AUDIT-25 | 3.8 | MUST NOT | Intentionally close a normal connection except after QUIT/221, shutdown/421 or timeout. | n/a: strict normal-operation conformance has exceptions: the transport closes after its consecutive-invalid-command threshold and malformed bare-LF commands (SMTP-SRV-03, SMTP-SYN-13). Host must assess abuse/security policy. |
+| SMTP-AUDIT-26 | 4.1.1 | SHOULD | Tolerate trailing whitespace before command CRLF. | n/a: partial support only: argument trimWSP handles SP/HTAB after arguments, but parseCmd rejects a four-letter verb followed by exactly one space as a mangled five-byte command. |
+| SMTP-AUDIT-27 | 4.1.1, 4.3.2 | MUST NOT | Clients send parameters on DATA, RSET or QUIT without a negotiated extension. | `TestRFC5321_ClientAuditSequence` |
+| SMTP-AUDIT-28 | 4.1.1.1, 4.1.4 | MUST | Client EHLO uses its primary host name if possible. | n/a: Client.Hello accepts a caller-selected name; the automatic default is localhost, without primary-name discovery. Caller must supply the correct identity. |
+| SMTP-AUDIT-29 | 4.1.1.1, 4.1.4 | SHOULD | When no meaningful domain exists use an address literal, without an identifying suffix after it. | n/a: caller supplies Hello's argument; the library neither discovers nor validates a public address/identity. |
+| SMTP-AUDIT-30 | 4.1.1.1, 3.5.2, 4.2.4 | MUST | Advertise every implemented non-required command except private X commands; advertise EXPN if supported and never advertise commands answered 500/502. | n/a: built-in optional commands have extension rows, but FeatureBackend/ExtraCaps are caller-owned declarations; the transport cannot validate custom capabilities against host behavior. EXPN is not implemented. |
+| SMTP-AUDIT-31 | 4.1.1.2, 4.1.1.3, 3.6.1 | SHOULD NOT | Generate source routes in outgoing reverse-paths or forward-paths. | n/a: caller supplies addresses; client validates CR/LF injection but does not prohibit caller-supplied source-route syntax. Server stripping is owned by #122. |
+| SMTP-AUDIT-32 | 3.6.1 | MUST NOT | Generate invalid source routes or depend on serial name resolution. | n/a: no route generation or DNS routing is implemented; caller must provide valid addresses and routing. |
+| SMTP-AUDIT-33 | 4.1.1.3 | MUST NOT | Copy source-route host names into the reverse-path while relaying. | n/a: caller constructs each onward envelope; no relay engine joins incoming RCPT routes to outgoing MAIL. |
+| SMTP-AUDIT-34 | 4.1.1.3 | MUST NOT | Send RCPT extension parameters not offered by EHLO. | `TestRFC5321_ClientAuditSequence` |
+| SMTP-AUDIT-35 | 4.1.1.4 | SHOULD | Avoid unnecessary ASCII control characters in originating message data. | n/a: caller constructs content; transport must preserve the permitted ASCII octets, not filter them. |
+| SMTP-AUDIT-36 | 4.1.1.8 | SHOULD | Support HELP without arguments. | n/a: known gap: HELP returns 502, explicitly tested by SMTP-CMD-07; no help-content implementation exists. |
+| SMTP-AUDIT-37 | 4.1.2 | SHOULD | Avoid defining mailboxes requiring quoted local-parts or case distinctions; transmit local-parts with minimum quoting. | n/a: mailbox naming is host policy and the client does not minimize caller-supplied quoting. Server equivalence is separately tested by SMTP-AUDIT-07. |
+| SMTP-AUDIT-38 | 4.1.2 | MUST NOT | Define mailboxes requiring non-ASCII/control characters in base SMTP or use such characters in mailbox commands absent an extension. | n/a: host chooses mailbox definitions; transport control-byte rejection is SMTP-SYN-02 and non-ASCII envelope enforcement is already covered by UTF8-ADDR-02/03 and UTF8-CLIENT-01. Those checks cannot ensure the host provisions usable base-SMTP mailbox names. |
+| SMTP-AUDIT-39 | 4.1.2 | MUST | Reject invalid SMTP domain-label characters with 501 unless an extension permits them. | n/a: known parser gap: domain parsing does not fully validate LDH labels (including underscore); address-literal parsing is also permissive. No strict domain-validator implementation is claimed. |
+| SMTP-AUDIT-40 | 4.1.3 | MUST | Any standardized general-address-literal tag is specified by a Standards-Track RFC and registered with IANA. | n/a: standards/registry duty, not an action the transport can perform; it does not define/register new literal tags. |
+| SMTP-AUDIT-41 | 4.1.4 | MUST NOT | Refuse a message solely because the EHLO name does not match the client's IP address. | n/a: transport performs no matching DNS verification, but Backend.NewSession may impose arbitrary host policy; end-to-end compliance requires auditing that backend. |
+| SMTP-AUDIT-42 | 4.1.5 | MUST | Non-X commands conform to the extension registration requirements of §2.2.2. | n/a: standards/registration duty for host-defined extensions; the library cannot register or validate third-party specifications. |
+| SMTP-AUDIT-43 | 4.2.1, 4.3.2 | MUST NOT | Send reply codes outside three digits beginning 2, 3, 4 or 5 without a negotiated extension. | n/a: known host-facing gap: SMTPError/SMTPResponse accept caller-supplied codes without range validation. Built-in replies use valid codes. |
+| SMTP-AUDIT-44 | 4.2.1 | SHOULD | Treat out-of-range reply severities as fatal transaction errors. | n/a: client surfaces an error for mismatched codes but does not consistently terminate the connection; caller must abandon the transaction. |
+| SMTP-AUDIT-45 | 4.2, 4.3.1, 4.3.2 | SHOULD | Use listed reply codes and suitable standard text; preserve their meanings and prefer enhanced status codes over inventing finer-grained basic codes. | n/a: built-in replies and enhanced statuses have tests above; custom backend codes/text require host semantic review. The transport cannot infer their meaning. |
+| SMTP-AUDIT-46 | 4.2.1 | MUST | Every line in a multiline reply uses the same basic code. | `TestRFC2034MultilineSameCode` |
+| SMTP-AUDIT-47 | 4.3.1 | MUST | Wait for each command's reply before the next command unless a negotiated extension permits pipelining. | `TestRFC5321_ClientAuditSequence` |
+
+### Relay, gateway, list and trace duties
+
+| ID | Section | Level | Requirement | Tests |
+|----|---------|-------|-------------|-------|
+| SMTP-AUDIT-48 | 3.6.2 | SHOULD | Refusing relay for policy reasons uses 550. | n/a: Session.Rcpt backend chooses relay policy and its SMTPError; library has no relay authorization policy. |
+| SMTP-AUDIT-49 | 3.6.2, 4.1.1.4, 4.2.5 | MUST | After accepting relay responsibility, subsequent delivery failure is reported by mail to the original reverse-path. | n/a: backend owns durable acceptance, delivery, retries and DSN generation; returning success from Data must mean it has accepted these duties. |
+| SMTP-AUDIT-50 | 3.6.2 | SHOULD | Use standardized non-delivery report formats when possible. | n/a: no DSN message generator exists; DSN option transport is audited separately. |
+| SMTP-AUDIT-51 | 3.7.2 | MUST | A gateway prepends Received when forwarding across the Internet boundary. | n/a: no gateway/content translation engine; host inserts trace fields. |
+| SMTP-AUDIT-52 | 3.7.2 | SHOULD | Gateway trace fields identify the environment/protocol using via clauses. | n/a: host builds gateway trace fields. |
+| SMTP-AUDIT-53 | 3.7.3 | SHOULD | Gateways accept valid SMTP addresses, RFC 5322 address headers and messages. | n/a: gateway conversion and RFC 5322 acceptance belong to the host; no conversion engine is implemented. |
+| SMTP-AUDIT-54 | 3.7.3, 3.7.4 | MUST | Gateway-generated addresses and headers conform to Internet standards; transform address headers to usable fully qualified reply addresses. | n/a: host owns cross-protocol address and header conversion. |
+| SMTP-AUDIT-55 | 3.7.4 | SHOULD | Foreign-environment delivery errors return to the SMTP reverse-path rather than From/Sender headers. | n/a: gateway host owns foreign delivery and report routing. |
+| SMTP-AUDIT-56 | 3.7.5 | SHOULD | Incoming gateway envelopes use the foreign error-return address, with an originator-based approximation only as a last resort. | n/a: host constructs gateway envelopes; transport receives no foreign-envelope model. |
+| SMTP-AUDIT-57 | 3.9 | SHOULD | Support both aliases and mailing-list expansion. | n/a: backend owns address expansion; transport has neither alias nor list storage. |
+| SMTP-AUDIT-58 | 3.9 | MUST | List redistribution changes the envelope return address to the list administrator. | n/a: backend/list manager constructs onward envelopes. |
+| SMTP-AUDIT-59 | 3.9 | MUST NOT | MTA-style list redistribution changes the message headers, including From. | n/a: list manager is outside the library; SMTP-AUDIT-02 proves transport preservation only. Lists doing MUA-style reposting have the distinct role described in §3.9.2. |
+| SMTP-AUDIT-60 | 3.9 | SHOULD | Use list members as supplied instead of heuristically eliminating recipients. | n/a: backend/list manager owns expansion; transport does not deduplicate list membership. |
+| SMTP-AUDIT-61 | 4.4 | MUST | Prepend a Received trace field on receipt for delivery or further processing. | n/a: host inserts Received; transport deliberately exposes opaque content to Session.Data. |
+| SMTP-AUDIT-62 | 4.4 | MUST | Received fields follow the trace grammar and include FROM in an SMTP environment. | n/a: host constructs trace fields, including BY, date and required FROM. |
+| SMTP-AUDIT-63 | 4.4 | SHOULD | Received FROM includes both the EHLO name and the TCP peer address literal. | n/a: host constructs trace fields using Conn.Hostname and Conn.Conn().RemoteAddr; proxy trust must also be assessed by the host. |
+| SMTP-AUDIT-64 | 4.4 | MUST | A Received FOR clause contains exactly one path even with several RCPTs. | n/a: host constructs trace fields and must avoid exposing multiple recipient paths. |
+| SMTP-AUDIT-65 | 4.4 | SHOULD | Trace dates use numeric timezone offsets, preferably local time; optional timezone names appear in comments. | n/a: host formats trace dates. |
+| SMTP-AUDIT-66 | 4.4 | MUST | Final delivery inserts a Return-Path preserving the SMTP reverse-path. | n/a: mailbox/delivery backend inserts Return-Path; transport has no final-delivery role flag. |
+| SMTP-AUDIT-67 | 4.4 | SHOULD NOT | An originating sender includes an existing Return-Path header. | n/a: message construction belongs to the caller; transport must not inspect relay content to enforce this. |
+| SMTP-AUDIT-68 | 4.4 | SHOULD | Exactly one Return-Path is present at final delivery. | n/a: host must distinguish final delivery from relay and manage existing Return-Path fields. |
+| SMTP-AUDIT-69 | 4.4 | SHOULD | Non-SMTP transports designate an unambiguous envelope-associated error return address. | n/a: foreign transport/gateway duty; no non-SMTP envelope model exists. |
+| SMTP-AUDIT-70 | 4.4 | SHOULD | SMTP-to-foreign gateways insert Return-Path unless the foreign transport separately preserves an Internet envelope sender. | n/a: gateway host owns this conversion. |
+| SMTP-AUDIT-71 | 4.4 | SHOULD | Foreign-to-SMTP gateways delete Return-Path and reconstruct the MAIL reverse-path using envelope information. | n/a: gateway host owns this conversion. |
+| SMTP-AUDIT-72 | 4.4 | MUST | If delivery succeeds for only some accepted recipients, return OK and send undeliverable notifications for the others. | n/a: SMTP Session.Data has one final status; backend must account for partial delivery before returning success and generate reports. LMTP has separate per-recipient semantics. |
+| SMTP-AUDIT-73 | 4.4 | MUST | Every failed recipient is included in either one combined notification or separate notifications. | n/a: host owns notification recipient accounting. |
+| SMTP-AUDIT-74 | 4.4 | SHOULD | Prefer one combined failed-recipient notification for efficiency. | n/a: host owns notification aggregation. |
+| SMTP-AUDIT-75 | 4.4 | MUST NOT | Trace dates use obsolete RFC 5322 forms, especially two-digit years. | n/a: host formats trace fields; no trace-date writer exists. |
+| SMTP-AUDIT-76 | 4.4 | SHOULD NOT | Use unregistered Received clause, VIA link or WITH protocol names. | n/a: host constructs trace fields and chooses registered names. |
+
+### Delivery, size, timeout and retry responsibilities
+
+| ID | Section | Level | Requirement | Tests |
+|----|---------|-------|-------------|-------|
+| SMTP-AUDIT-77 | 4.2.5 | MUST NOT | A receiver returning a final DATA 4yz or 5yz later attempts delivery of that rejected message. | n/a: backend owns durable storage and delivery side effects; transport cannot roll back a backend that delivers before returning an error. |
+| SMTP-AUDIT-78 | 4.2.1, 4.2.5 | SHOULD | Retry temporary failures; expose unrecovered failures as non-delivery to the originator. | n/a: no retry scheduler or user notification layer; SMTPError exposes the reply category. |
+| SMTP-AUDIT-79 | 4.2.1, 4.2.5 | SHOULD NOT | Repeat an identical permanently rejected request; after final DATA 5yz, retry the same server without user review/intervention. | n/a: caller controls retries and user review. |
+| SMTP-AUDIT-80 | 4.5.1 | MUST | The host supports case-insensitive Postmaster at every served domain and the domainless form. | n/a: parser acceptance is SMTP-SYN-03; backend must provision and accept delivery to Postmaster across its served domains. Parser success alone is not mailbox delivery. |
+| SMTP-AUDIT-81 | 4.5.1 | SHOULD | Any anti-abuse blocking of Postmaster is narrowly tailored. | n/a: host/operator anti-abuse policy; transport has no Postmaster-specific access control. |
+| SMTP-AUDIT-82 | 4.5.2 | MUST | Any local storage/charset transformations are reversible, especially for relay. | n/a: backend owns storage transformations; SMTP-AUDIT-02 proves only that transport passes the original content. |
+| SMTP-AUDIT-83 | 4.5.3.1 | SHOULD | Avoid objects larger than the interoperability limits where possible. | n/a: caller controls message/address sizes and server configuration; configurable transport limits are not content generation policy. |
+| SMTP-AUDIT-84 | 4.5.3.1 | MUST | Clients handle rejection of objects larger than the peer supports. | n/a: client returns the SMTP error, but retry/chunk/reduction policy belongs to the caller; no automatic smaller-message delivery is implemented. |
+| SMTP-AUDIT-85 | 4.5.3.1.7 | SHOULD | Size-limited receivers implement SIZE and large-message senders use SIZE when possible. | n/a: SIZE transport is audited above; caller chooses MaxMessageBytes and MailOptions.Size and must supply the actual content size. |
+| SMTP-AUDIT-86 | 4.5.3.1.8 | SHOULD NOT | Delivery servers reject based on perceived header defects or total recipient count in headers. | n/a: transport does not validate headers (SMTP-AUDIT-02), but delivery-backend acceptance policy must be audited by the host. Relay content preservation is separately proved. |
+| SMTP-AUDIT-87 | 4.5.3.1.8 | SHOULD | Send more than 100 recipients in chunks if a peer refuses additional recipients. | n/a: caller owns recipient batching/retries; client returns per-RCPT failures without automatic splitting. |
+| SMTP-AUDIT-88 | 4.5.3.1.10 | SHOULD | Treat legacy 552 for too many RCPTs as a temporary failure like 452. | n/a: known limitation: SMTPError.Temporary classifies 552 as permanent; caller must identify this RCPT-specific legacy case. |
+| SMTP-AUDIT-89 | 4.5.3.2 | MUST | Provide per-command client timeouts, including a timer on each buffer of data transfer. | n/a: command/submission timers are tested in #120, but DataCommand.Write has no per-buffer deadline; a stalled body write can wait indefinitely before Close installs its deadline. |
+| SMTP-AUDIT-90 | 4.5.3.2 | SHOULD | Timeouts can be reconfigured without recompilation; use the recommended minimums for greeting, MAIL, RCPT, DATA initiation, block transfer and final reply. | n/a: CommandTimeout and SubmissionTimeout are public configuration, but there is no distinct data-block timeout and #120's tests cover only existing command/final-reply timers. Host must choose appropriate values. |
+| SMTP-AUDIT-91 | 4.5.4, 4.5.4.1 | MUST | Queue undelivered mail and envelope data for periodic retries, with per-command activity timeouts. | n/a: host supplies durable queue, scheduler and delivery workers. |
+| SMTP-AUDIT-92 | 4.5.4.1 | MUST | Delay retries to a failed destination. | n/a: no retry scheduler; caller controls destination backoff. |
+| SMTP-AUDIT-93 | 4.5.4.1 | SHOULD | Retry intervals are generally at least 30 minutes. | n/a: caller queue policy; no automatic retries. |
+| SMTP-AUDIT-94 | 4.5.4.1 | MUST | Retry algorithm parameters are configurable. | n/a: caller queue policy; no retry algorithm exists in transport. |
+| SMTP-AUDIT-95 | 4.5.4.1 | SHOULD | Track unreachable hosts and connection timeouts to avoid redundant delivery attempts. | n/a: caller routing/queue cache; client is scoped to one chosen connection. |
+| SMTP-AUDIT-96 | 4.5.4.1 | SHOULD | Use care caching negative responses because peer capabilities and results can change. | n/a: caller's pooling/queue cache policy; transport keeps negotiated capabilities for its current connection only. |
+| SMTP-AUDIT-97 | 4.5.4.1 | MUST NOT | Cache permanent MAIL failures for use against later attempts. | `TestRFC5321_ClientAuditSequence` |
+| SMTP-AUDIT-98 | 4.5.4.1 | SHOULD | Coalesce recipients for the same next-hop into one MAIL, multiple RCPTs and one DATA. | n/a: client permits multiple RCPTs, but caller owns routing/grouping and chooses transaction boundaries. |
+| SMTP-AUDIT-99 | 4.5.4.2 | SHOULD | Keep a listener pending on SMTP port 25 and support simultaneous incoming sessions. | n/a: Server.Serve supports concurrent connections, but operator owns service lifetime, port selection, admission limits and availability. |
+| SMTP-AUDIT-100 | 4.5.5 | SHOULD | Messages not required to use a null reverse-path use a valid non-null sender. | n/a: caller classifies messages and chooses their envelope; transport cannot infer message purpose from opaque content. |
+| SMTP-AUDIT-101 | 4.5.5 | SHOULD NOT | Reply to null-reverse-path messages or replace the null sender with a non-null one when forwarding. | n/a: caller owns automated replies/forwarding; SMTP-AUDIT-02 proves only that incoming null sender reaches the backend unchanged. |
+| SMTP-AUDIT-102 | 4.1.1.4 | MUST NOT | The sender adds an extra CRLF before the data terminator; a final line missing CRLF is either refused or terminated once. | `TestRFC5321_ClientAuditSequence` |
+| SMTP-AUDIT-103 | 4.2 | MUST | Generate exactly one logical reply for each command (apart from negotiated multi-step exchanges). | n/a: known exception: exceeding the consecutive-invalid-command threshold sends the command error followed by a second 500 before closing (SMTP-SRV-03). Abuse-handling semantics need a separate change. |
+| SMTP-AUDIT-104 | 3.8, 4.1.1.10 | MUST | On premature connection loss cancel the pending transaction but preserve previously completed transactions; treat the interrupted transaction as temporary failure. | n/a: transport resets/logs out the backend on disconnect, but durable commit/rollback and retry classification are backend/caller duties, not guaranteed by the Session interface. |
+| SMTP-AUDIT-105 | 4.1.1, 4.1.2 | MUST | Local-parts conform to the mailbox grammar and receiver site conventions. | n/a: known parser gap: the unquoted branch accepts leading, trailing and consecutive dots instead of requiring nonempty Atom components. Site naming rules belong to the backend; control-byte rejection alone (SMTP-SYN-02) does not prove complete local-part grammar. |

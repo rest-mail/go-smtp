@@ -54,6 +54,9 @@ func splitWSP(s string) []string {
 
 func parseCmd(line string) (cmd string, arg string, err error) {
 	line = strings.TrimRight(line, "\r\n")
+	// RFC 5321 §4.1.1 recommends tolerating trailing whitespace. Strip
+	// only ASCII SP/HTAB: Unicode whitespace can be SMTPUTF8 argument data.
+	line = strings.TrimRight(line, " \t")
 	// SMTP verbs are ASCII (RFC 5321 section 2.4). Unicode case folding
 	// would otherwise turn e.g. long-s into S in STARTTLS. Arguments may
 	// contain UTF-8, so check only the verb before normalizing its case.
@@ -382,6 +385,11 @@ func (p *parser) parseMailbox() (string, error) {
 		}
 		if isCTL(ch) {
 			return "", fmt.Errorf("control byte in domain")
+		}
+		// Neither Domain nor address-literal (RFC 5321 §4.1.2) can hold
+		// another "@"; a second one means the mailbox is malformed.
+		if ch == '@' {
+			return "", fmt.Errorf("malformed domain")
 		}
 		p.readByte()
 		sb.WriteByte(ch)

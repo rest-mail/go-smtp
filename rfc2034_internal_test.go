@@ -116,7 +116,7 @@ func (s rfc2034Session) Data(r io.Reader) error {
 // A multiline host reply repeats one status code on every line, an SMTPError
 // without one gets X.0.0 and a plain error gets 554 5.0.0.
 //
-// checklist: ESC-MULTI-01 ESC-REPLY-02
+// checklist: ESC-MULTI-01 ESC-REPLY-02 SMTP-AUDIT-46
 func TestRFC2034MultilineSameCode(t *testing.T) {
 	for _, tc := range []struct {
 		name string
