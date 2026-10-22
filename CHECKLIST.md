@@ -52,6 +52,8 @@ SASL challenges retain the independent size rules of RFC 4954 §4.
 | SMTP-SYN-11 | 2.3.8 | Normative | Only CRLF ends a line: a bare LF is not a line end, so `LF.LF` does not end the data (SMTP smuggling). | `TestServer_smtpSmuggling`, `TestServer_LFDotLF`, `TestEODNonStandardSequencesDoNotEndData`, `TestEODCRBeforeCRLFDotEndsData`, `TestEODBDATChunksIgnoreDotSequences`, `TestEODClientDotStuffsAndNormalises` |
 | SMTP-SYN-12 | 2.2.2 | Normative | A MAIL parameter the server does not know is refused, not ignored. | `TestServerUnknownArg` |
 | SMTP-SYN-13 | 2.3.8, 4.1.1 | MUST | A command line ends at CRLF only: a bare LF does not end a command (it is a 500 and the connection is closed, and the text after it is not run), and a bare CR in the middle of a line does not split it into two commands. | `TestEODCommandLineBareLF` |
+| SMTP-SYN-14 | 2.4 | MUST | The local-part of a mailbox is case-sensitive: MAIL and RCPT addresses reach the backend in the case sent, and recipients differing only in case stay distinct. | `TestRFC5321_LocalPartCasePreserved` |
+| SMTP-SYN-15 | 4.1.1.1, 4.1.3 | Normative | HELO and EHLO accept an address literal (`[192.0.2.1]`, `[IPv6:2001:db8::1]`) as the client's name, and the backend sees it as `Conn.Hostname`. | `TestRFC5321_HelloAddressLiteral` |
 
 ## Command order and state (§3.3, §4.1.1.2, §4.1.4)
 
@@ -62,6 +64,7 @@ SASL challenges retain the independent size rules of RFC 4954 §4.
 | SMTP-ORD-03 | 3.3, 4.1.1.4 | MUST | DATA is refused when the transaction has no recipient. | `TestRFC5321_CommandOrder` |
 | SMTP-ORD-04 | 4.1.1.2, 4.1.4 | MUST | A second MAIL inside a transaction is a 503 and leaves the transaction (sender and recipients) intact; after RSET a new MAIL is accepted. | `TestServerNestedMailRejected`, `TestServerResetThenMail` |
 | SMTP-ORD-05 | 4.1.4 | SHOULD | A command out of sequence is answered 503 5.5.1: MAIL or AUTH before HELO/EHLO, RCPT before MAIL, DATA or BDAT without a recipient, a transaction command between BDAT chunks, DATA after BODY=BINARYMIME, and STARTTLS on a TLS connection. | `TestServerBadSequence`, `TestServerSTARTTLSAlreadyTLSBadSequence`, `TestClientBadSequenceError` |
+| SMTP-ORD-06 | 4.1.4 | Normative | NOOP, VRFY, RSET, HELP and EXPN may be sent at any time: before HELO/EHLO, and inside a transaction without changing its sender or recipients (HELP and EXPN get 502, as SMTP-CMD-07). | `TestRFC5321_AnyTimeCommands` |
 
 ## Commands (§4.1.1, §4.5.1)
 
@@ -76,6 +79,7 @@ SASL challenges retain the independent size rules of RFC 4954 §4.
 | SMTP-CMD-07 | 4.2.4 | MUST | A command the server does not implement is a 502 (tested for HELP; SEND, SOML, SAML, EXPN and TURN share the code path). | `TestServer_otherCommands` |
 | SMTP-CMD-08 | 4.2.4 | MUST | An unrecognised command is a 500, and the server answers the next command. | `TestServer_tooManyInvalidCommands`, `TestRFC5321_UnknownAndArgumentErrors` |
 | SMTP-CMD-09 | 4.5.1 | MUST | The minimum implementation (EHLO, HELO, MAIL, RCPT, DATA, RSET, NOOP, QUIT, VRFY) is supported. | `TestServer`, `TestServer_helo`, `TestServer_otherCommands` |
+| SMTP-CMD-10 | 4.1.1.9 | SHOULD | A parameter string given with NOOP is ignored: NOOP with or without one is answered 250 and leaves the transaction as it was. | `TestRFC5321_NoopIgnoresParameter` |
 | SMTP-RSET-01 | 4.1.1.5 | MUST | RSET clears the sender, the recipients and the message data, and is answered 250. | `TestRFC5321_RsetAndSecondEhloClearTransaction`, `TestServer_otherCommands` |
 | SMTP-RSET-02 | 4.1.4 | MUST | A second EHLO or HELO clears the transaction exactly as RSET does. | `TestRFC5321_RsetAndSecondEhloClearTransaction` |
 | SMTP-RCPT-01 | 3.3, 4.1.1.3 | MUST | A transaction may have several recipients; each is answered on its own. | `TestRFC5321_RecipientLimit`, `TestRFC5321_HundredRecipients` |
@@ -103,6 +107,8 @@ SASL challenges retain the independent size rules of RFC 4954 §4.
 | SMTP-LIM-04 | 4.5.3.1.8 | MUST | At least 100 recipients are accepted in one transaction. | `TestRFC5321_HundredRecipients` |
 | SMTP-LIM-05 | 4.5.3.2 | SHOULD | A configured read timeout closes a connection that stops sending, in DATA as well as between commands; the timeout restarts as data arrives. | `TestDataReadTimeoutClosesConnection`, `TestDataBodyReadDeadlineRefresh` |
 | SMTP-LIM-06 | 4.5.3.1.5 | MUST | A server reply line is at most 512 octets, code and CRLF included; RFC 4954 SASL challenges have independent size rules. | `TestRFC5321_ReplyLine512`, `TestRFC5321_MultilineReplyLine512`, `TestRFC5321_BackendReplyLine512`, `TestRFC4954_LongChallengeNotTruncated` |
+| SMTP-LIM-07 | 4.5.3.2 | SHOULD | The client times out a server that stops answering: each command reply within `CommandTimeout` (default 5 minutes), the reply after the final dot within `SubmissionTimeout` (default 12 minutes, over the 10 the RFC asks for). | `TestRFC5321_ClientTimeouts` |
+| SMTP-LIM-08 | 4.5.3.2.7 | SHOULD | The server waits at least 5 minutes for the next command before it times out. | n/a: host configuration; `Server.ReadTimeout` is zero (no timeout) by default, and a host that sets one chooses its length. SMTP-LIM-05 checks a configured timeout. |
 
 ## Replies (§4.2)
 
@@ -111,6 +117,7 @@ SASL challenges retain the independent size rules of RFC 4954 §4.
 | SMTP-REP-01 | 4.2 | MUST | The server greets a new connection with a 220 reply. | `TestServer_helo`, `TestServer` |
 | SMTP-REP-02 | 3.8, 4.2.2 | MUST | A server that must stop answers 421 before closing: on shutdown, and after an internal error. | `TestServerCloseSends421`, `TestServerPanicRecover`, `TestConnReject` |
 | SMTP-REP-03 | 4.2.1 | MUST | The code a backend returns is the reply code, with its text; a plain error is not leaked to the client. | `TestErrorf`, `TestBackendErrorf_StatusNotLeaked`, `TestDataWrappedSMTPError`, `TestMailWrappedSMTPError`, `TestCustomResponse_Mail`, `TestCustomResponse_Rcpt`, `TestCustomResponse_Data`, `TestSMTPErrorTemporary`, `TestRFC5321_BackendReplyLine512` |
+| SMTP-REP-04 | 4.1.1.1, 4.3.1 | MUST | The server identifies itself by its domain: in the 220 greeting and as the first word of the HELO and EHLO replies (`250-mx.example.net Hello client`). | `TestRFC5321_ServerIdentifiesItself` |
 
 ## Connection handling (§3.8, §4.1.1.10), library behaviour
 

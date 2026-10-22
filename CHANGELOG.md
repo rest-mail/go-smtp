@@ -8,6 +8,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- The first line of the HELO and EHLO replies now starts with the server's
+  domain (`250-mx.example.net Hello client.example.org`), as RFC 5321
+  §4.1.1.1 requires; it used to be `250-Hello client.example.org`. Tests that
+  match the exact reply text need updating.
+
 - Multiline server replies repeat the enhanced status code on every line, as
   RFC 2034 §4 requires; it used to appear on the last line only, so a client
   reading the first line (including this package's) found no status code.
@@ -27,6 +32,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   reset and subsequent commands wait for the backend to finish.
 
 ### Added
+
+- Seven more RFC 5321 core rows: server identification in HELO/EHLO,
+  local-part case, address-literal HELO/EHLO, NOOP parameters, commands
+  allowed at any time and client timeouts, each with a wire test; the
+  server's own command timeout is n/a (host configuration).
 
 - RFC 2034 (ENHANCEDSTATUSCODES) checklist section: nine rows, seven mapped
   to new wire tests.
