@@ -15,7 +15,7 @@ trust boundaries; its remaining syntax and metadata-only compatibility gaps
 are explicit.
 STARTTLS (RFC 3207), SIZE (RFC 1870), PIPELINING (RFC 2920),
 CHUNKING/BINARYMIME (RFC 3030), 8BITMIME (RFC 6152), AUTH exchange rules
-(RFC 4954 §4, MAIL AUTH= syntax of §5 and the failure replies of §6), DSN parameter/protocol rules (RFC 3461 §§2–4, 5.1, 5.4),
+(RFC 4954 §4, MAIL AUTH= syntax of §5 and the failure replies of §6), DSN parameter/protocol and relay transport rules (RFC 3461 §§2–4, 5.1, 5.2.1–5.2.2, 5.4),
 the SMTPUTF8 envelope (RFC 6531), the RRVS parameter (RFC 7293), DELIVERBY
 transport (RFC 2852), MT-PRIORITY transport (RFC 6710), LMTP
 (RFC 2033) and ENHANCEDSTATUSCODES (RFC 2034) are audited below.
@@ -400,10 +400,18 @@ validating the enclosed MIME object remains the caller's responsibility.
 | BINARY-HOST-03 | 3 | MUST | When the next hop lacks BINARYMIME, any MIME conversion must be lossless and produce valid 7bit/8bit MIME without nested transfer encodings, or use delivery-failure policy. | n/a: the library has no MIME converter, queue or binary client sender; host routing and notification policy remain unaudited. |
 | BINARY-HOST-04 | 3 | Normative | Accept binary MIME content lacking the BINARYMIME body declaration and normally return it to the sender with a suitable DSN. | n/a: no MIME inspection or DSN generation; the transport accepts opaque content and leaves post-acceptance notification policy to the host. |
 
-## DSN parameters and protocol (RFC 3461 §§2–4, 5.1, 5.4)
+## DSN parameters, protocol and relay transport (RFC 3461 §§2–4, 5.1, 5.2.1–5.2.2, 5.4)
 
 This slice audits the SMTP parameters and their transport, not a complete MTA's
 notification lifecycle. Sections below refer to RFC 3461 unless stated otherwise.
+The former combined DSN-HOST-03/04 rows are split into individual relay
+transport clauses below: a host passes the received options into the outbound
+client, and both ordinary and pipelined SMTP paths preserve the requests.
+Tests deliver across two real SMTP connections, inspect the outbound commands
+and the next backend's metadata, and rewrite routing addresses independently of
+ORCPT. They do not prove an autonomous relay or notification lifecycle; those
+host duties remain explicit in DSN-HOST-09/10. Address types are compared
+case-insensitively but their received spelling is retained for relays.
 The §10.1 example tests its envelope and recipient requests; it does not claim
 that the host generates the reports in §§10.6–10.9. RFC 6533's UTF-8 address
 encoding remains in SMTP-EXT-06, not this RFC 3461 ASCII-address audit.
@@ -428,16 +436,22 @@ encoding remains in SMTP-EXT-06, not this RFC 3461 ASCII-address audit.
 | DSN-HOST-01 | 4.1, 4.3 | Normative | Absent NOTIFY means FAILURE or FAILURE,DELAY; absent RET permits headers or full content, and no DELAY requests no delayed report. | n/a: the host interprets unset options and notification policy; the library preserves absence rather than choosing defaults. |
 | DSN-HOST-02 | 4.2, 5.4 | MUST | Initial submission and mailing-list redistribution use the current recipient as ORCPT. | n/a: callers distinguish new submission from relay and choose identifiers; the generic transport cannot infer that role or enforce equality during forwarding. |
 | DSN-LIMIT-03 | 5.4 | SHOULD NOT | Submitting user agents generate ENVID parameters longer than 38 characters. | n/a: the generic client also serves relays and preserves foreign identifiers; a submitting UA must choose short IDs. |
-| DSN-HOST-03 | 5.2, 5.2.1 | MUST | Preserve recipient requests and envelope metadata when relaying, and never issue a DSN for a null sender. | n/a: no relay queue or notification generator; host must carry options across inbound/outbound sessions and suppress report loops. |
-| DSN-HOST-04 | 5.2.2–5.2.6 | MUST | Honor delivery, delay, failure, foreign gateway and non-DSN next-hop reporting rules. | n/a: the host owns delivery/retries/reporting; a client omits DSN options for a non-DSN peer without reporting that downgrade, so callers must inspect Extension("DSN") and implement fallback policy. |
+| DSN-HOST-03 | 5.2.1(a) | MUST | When received MAIL options are passed to a DSN-capable next hop, preserve ENVID (including its absence and identifier case) across the server/client boundary. | `TestRFC3461RelayEnvelopeID` |
+| DSN-RELAY-01 | 5.2.1(b) | MUST | When relaying received MAIL options to a DSN-capable peer, retain FULL/HDRS and do not invent RET when absent. | `TestRFC3461RelayReturn` |
+| DSN-RELAY-02 | 5.2.1(c) | MUST | When relaying received RCPT options to a DSN-capable peer, retain each recipient's notification conditions and do not add NOTIFY when absent. | `TestRFC3461RelayNotify` |
+| DSN-RELAY-03 | 5.2.1(d) | MUST | When relaying received RCPT options, retain the ORCPT address and address-type case even if the routing address changes; do not synthesize an absent ORCPT. | `TestRFC3461RelayOriginalRecipient` |
+| DSN-RELAY-04 | 5.2.1(d) | MUST | If a host elects to add an absent ORCPT, the transport can carry the received RCPT address as the original recipient, independently of the rewritten outbound route. | `TestRFC3461RelayAddedOriginalRecipient` |
+| DSN-HOST-04 | 5.2.2(a) | MUST NOT | Send ENVID, RET, NOTIFY or ORCPT to a next hop without DSN, including when relaying options received from a DSN-capable peer. | `TestRFC3461RelayNonDSN` |
 | DSN-HOST-05 | 5.2.7–5.3 | MUST | Apply mailing-list, alias, confidential-forwarding and multi-recipient report rules; translate local/gateway requests and strip local control headers. | n/a: no alias/list expansion, gateway conversion or message-header processing in this transport library; host lifecycle audit remains. |
 | DSN-HOST-06 | 5.4 | MUST | Accept command lines large enough for all enabled extension combinations. | `TestRFC3461CombinedCommandBudget` |
 | DSN-HOST-07 | 6.1 | MUST | Reports use a null sender, the original envelope sender as recipient, no RET, and only NEVER if NOTIFY is specified. | n/a: a caller constructing a DSN owns its envelope; generic MAIL/RCPT cannot distinguish reports from ordinary messages. |
 | DSN-HOST-08 | 6.2–6.3 | MUST | Generate multipart delivery-status reports with the requested content and required envelope/recipient fields. | n/a: no report MIME generator in this library; host must implement and test report content, confidentiality and field requirements. |
+| DSN-HOST-09 | 5.2, 5.2.1 | MUST NOT | Issue a DSN for a null reverse-path, even if a sender is present in message headers. | n/a: the library has no notification generator, durable queue or automatic relay. The host must suppress report loops, notify its postmaster safely, persist metadata and pass the received options to the outbound client; the relay transport tests prove only that last boundary. |
+| DSN-HOST-10 | 5.2.2(b–f)–5.2.6 | MUST | Apply non-DSN next-hop, delivery, delay, failure and foreign-gateway reporting rules. | n/a: no report generator, delivery scheduler or gateway in this transport library. The host must inspect Extension("DSN"), recipient outcomes and received NOTIFY before choosing relayed/failed reports or suppressing them; omission of next-hop parameters alone is not reporting conformance. |
 
 The existing xtext fuzz targets use independent grammar/encoding references and
 remain in SMTP-EXT-04. FuzzRFC3461Notify checks the new list parser against an
-ASCII grammar oracle. Reports, fallback behavior, other registered address types
+ASCII grammar oracle. Reports, downgrade reporting, other registered address types
 and the remaining lifecycle clauses are explicit scope/gap rows, not proof of
 complete RFC 3461 conformance.
 

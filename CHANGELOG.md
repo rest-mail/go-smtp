@@ -8,6 +8,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- Preserve received ORCPT address-type spelling through relay: decoding no longer
+  uppercases the type, and the outbound client accepts supported types in any
+  ASCII letter case while retaining the supplied spelling. Hosts comparing
+  `RcptOptions.OriginalRecipientType` must now compare it case-insensitively.
+
 - The first line of the HELO and EHLO replies now starts with the server's
   domain (`250-mx.example.net Hello client.example.org`), as RFC 5321
   §4.1.1.1 requires; it used to be `250-Hello client.example.org`. Tests that
@@ -32,6 +37,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   reset and subsequent commands wait for the backend to finish.
 
 ### Added
+
+- Six RFC 3461 relay transport checklist mappings, split from the previously
+  combined host rows: ENVID, RET, per-recipient NOTIFY, original ORCPT, optional
+  host-added ORCPT and omission of parameters for a non-DSN next hop. Real SMTP
+  wire tests cover ordinary and pipelined outbound delivery. Queueing, routing
+  and report-generation duties remain explicitly outside transport coverage.
 
 - Checked RFC 4954 §5 MAIL `AUTH=` syntax (server decoding, malformed values,
   unauthenticated clients, client encoding and a client-to-server round trip)
