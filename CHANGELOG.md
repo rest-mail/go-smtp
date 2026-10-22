@@ -20,6 +20,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   instead of the 2000-octet reply line limit, which returns once AUTH ends.
   A large challenge, such as a GSSAPI token, used to fail the exchange with
   `ErrTooLongLine` (RFC 4954 §4).
+- When an LMTP connection fails during the DATA replies,
+  `CloseWithLMTPResponse` now returns a temporary `451 4.4.2` failure in its
+  `LMTPDataError` for each recipient left without a reply, joined with the
+  transport error. Before, those recipients were missing from both results
+  (RFC 2033 §5).
 - A MAIL or RCPT path with a second `@` in its domain, such as
   `<user@@example.net>`, now gets `501` instead of reaching the backend. No
   RFC 5321 domain or address literal contains `@` (RFC 6409 §5.1 asks

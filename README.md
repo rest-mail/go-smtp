@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/rest-mail/go-smtp/actions/workflows/ci.yml/badge.svg)](https://github.com/rest-mail/go-smtp/actions/workflows/ci.yml)
 [![Coverage gate: >=95%](https://img.shields.io/badge/coverage%20gate-%3E%3D95%25-brightgreen)](COVERAGE.md)
-[![Checklist: 356/574 mapped](https://img.shields.io/badge/checklist-356%2F574%20mapped-blue)](CHECKLIST.md)
+[![Checklist: 357/574 mapped](https://img.shields.io/badge/checklist-357%2F574%20mapped-blue)](CHECKLIST.md)
 [![Go Reference](https://pkg.go.dev/badge/github.com/rest-mail/go-smtp.svg)](https://pkg.go.dev/github.com/rest-mail/go-smtp)
 
 An ESMTP client and server library written in Go.
@@ -204,7 +204,10 @@ becomes an upstream rejection, notification, retry or transformation; the
 checked two-hop example chooses rejection and then proves ASCII recovery.
 
 LMTP uses LHLO and refuses SMTP HELO/EHLO. `NewClientLMTP` preserves an LHLO
-refusal instead of falling back to HELO. `LMTPSession.LMTPData` can supply
+refusal instead of falling back to HELO. If the connection fails while the
+client reads DATA replies, each recipient left without a reply gets a
+temporary `451 4.4.2` failure in the `LMTPDataError`, joined with the
+transport error (RFC 2033 §5). `LMTPSession.LMTPData` can supply
 one status per accepted RCPT, including duplicate paths; unset statuses use
 the method's returned error. A plain `Session.Data` result applies to all
 recipients. DATA and BDAT LAST replies are flushed individually in RCPT order
