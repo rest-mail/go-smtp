@@ -15,7 +15,7 @@ trust boundaries; its remaining syntax and metadata-only compatibility gaps
 are explicit.
 STARTTLS (RFC 3207), SIZE (RFC 1870), PIPELINING (RFC 2920),
 CHUNKING/BINARYMIME (RFC 3030), 8BITMIME (RFC 6152), AUTH exchange rules
-(RFC 4954 §4), DSN parameter/protocol rules (RFC 3461 §§2–4, 5.1, 5.4),
+(RFC 4954 §4, MAIL AUTH= syntax of §5 and the failure replies of §6), DSN parameter/protocol rules (RFC 3461 §§2–4, 5.1, 5.4),
 the SMTPUTF8 envelope (RFC 6531), the RRVS parameter (RFC 7293), DELIVERBY
 transport (RFC 2852), MT-PRIORITY transport (RFC 6710), LMTP
 (RFC 2033) and ENHANCEDSTATUSCODES (RFC 2034) are audited below.
@@ -166,9 +166,10 @@ SASL challenges retain the independent size rules of RFC 4954 §4.
 
 This slice checks command framing and the SASL challenge/response exchange,
 including the PLAIN and empty EXTERNAL wire examples of §4.1. It does **not**
-claim a complete RFC 4954 audit. The §5 MAIL AUTH trust/relay rules, §6 policy,
-§7 trace headers and §14 TLS identity requirements remain unaudited. Existing
-MAIL AUTH tests remain in SMTP-EXT-08. The host supplies the actual SASL
+claim a complete RFC 4954 audit. The §5 MAIL AUTH parameter syntax and the
+§6 failure replies are checked; the §5 relay rules for passing AUTH= on,
+other §6 policy, §7 trace headers and §14 TLS identity requirements remain
+unaudited. The host supplies the actual SASL
 mechanisms and credential/identity policy through AuthSession.
 SMTP-AUTH-24 installs a PLAIN backend and a verified STARTTLS client, with
 insecure authentication disabled; the host still configures TLS and credentials.
@@ -200,6 +201,12 @@ insecure authentication disabled; the host still configures TLS and credentials.
 | SMTP-AUTH-23 | RFC 4954 §4 | SHOULD | Authorization identities use SASLprep; failed preparation or an unexpectedly empty prepared identity must fail authentication. | n/a: host responsibility; the transport receives opaque SASL bytes and no authorization identity. Hosts must implement preparation and return a SASL error on failure. |
 | SMTP-AUTH-24 | RFC 4954 §4 | MUST | PLAIN over TLS is available for interoperability. | `TestRFC4954PlainOverTLS` |
 | SMTP-AUTH-25 | RFC 4954 §4 | MUST | AUTH is last in a pipelined group except for eligible one-round-trip mechanisms with an initial response. | n/a: client Auth is synchronous, outside the Pipeliner API; the raw server cannot distinguish a group boundary from buffered continuation bytes. Host-provided mechanisms must not negotiate unsupported security layers. |
+| SMTP-AUTH-26 | RFC 4954 §5 | Normative | The MAIL `AUTH=` value is xtext whose decoded form is an addr-spec or `<>`; the host receives the decoded mailbox (a quoted local-part unquoted, as for the reverse-path), an empty string for `<>` and nil when absent. | `TestRFC4954_MailAuthParameter` |
+| SMTP-AUTH-27 | RFC 4954 §5 | MUST | A server that advertises AUTH accepts the MAIL `AUTH=` parameter even from a client that has not authenticated. | `TestRFC4954_MailAuthParameter`, `TestRFC4954_MailAuthRoundTrip`, `TestServer_authParam` |
+| SMTP-AUTH-28 | RFC 4954 §5 | Normative | An `AUTH=` value that is not valid xtext, or decodes to neither an addr-spec nor `<>`, is a parameter syntax error: 501 5.5.4 before Session.Mail, and the session continues. | `TestRFC4954_MailAuthMalformed`, `TestServer_authParam` |
+| SMTP-AUTH-29 | RFC 4954 §6 | Normative | Host failure replies reach the wire unchanged from the mechanism factory or a SASL step (534 5.7.9, 538 5.7.11, 535 5.7.8, 530 5.7.0); an uncoded failure is the temporary 454 4.7.0, and a later AUTH can still succeed. | `TestRFC4954_HostFailureCodes` |
+| SMTP-AUTH-30 | RFC 4954 §5 | Normative | The client sends the submitter as xtext and an unknown submitter as `AUTH=<>`, never an empty value, and omits the parameter when the server did not advertise AUTH. | `TestRFC4954_ClientMailAuthParameter`, `TestRFC4954_MailAuthRoundTrip` |
+| SMTP-AUTH-31 | RFC 4954 §5 | MUST | A server that does not trust the client's authenticated identity, or whose client has not authenticated, behaves as if `AUTH=<>` was supplied. | n/a: host trust policy, left for the owner; Session.Mail receives the asserted value unchanged, and only the host knows whether its AuthSession succeeded or another trust source (such as XCLIENT) applies. Blanking it in the transport would change what every host sees. |
 
 
 ## STARTTLS (RFC 3207)
