@@ -8,6 +8,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- Command parsing tolerates trailing ASCII spaces and tabs before CRLF
+  (RFC 5321 §4.1.1). A single space after `NOOP`, `RSET`, `DATA` or `QUIT`
+  previously returned 501; trailing tabs could also prevent dispatch.
+  SMTPUTF8 argument bytes and message body whitespace are preserved.
+
 - The first line of the HELO and EHLO replies now starts with the server's
   domain (`250-mx.example.net Hello client.example.org`), as RFC 5321
   §4.1.1.1 requires; it used to be `250-Hello client.example.org`. Tests that

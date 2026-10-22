@@ -54,6 +54,7 @@ SASL challenges retain the independent size rules of RFC 4954 §4.
 | SMTP-SYN-13 | 2.3.8, 4.1.1 | MUST | A command line ends at CRLF only: a bare LF does not end a command (it is a 500 and the connection is closed, and the text after it is not run), and a bare CR in the middle of a line does not split it into two commands. | `TestEODCommandLineBareLF` |
 | SMTP-SYN-14 | 2.4 | MUST | The local-part of a mailbox is case-sensitive: MAIL and RCPT addresses reach the backend in the case sent, and recipients differing only in case stay distinct. | `TestRFC5321_LocalPartCasePreserved` |
 | SMTP-SYN-15 | 4.1.1.1, 4.1.3 | Normative | HELO and EHLO accept an address literal (`[192.0.2.1]`, `[IPv6:2001:db8::1]`) as the client's name, and the backend sees it as `Conn.Hostname`. | `TestRFC5321_HelloAddressLiteral` |
+| SMTP-SYN-16 | 4.1.1 | SHOULD | Tolerate trailing whitespace before command CRLF; ASCII SP/HTAB does not become a parameter or alter SMTPUTF8 argument bytes. | `TestParseCmdTrailingWhitespace`, `TestRFC5321TrailingCommandWhitespace`, `FuzzParseCmd` |
 
 ## Command order and state (§3.3, §4.1.1.2, §4.1.4)
 
