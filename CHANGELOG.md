@@ -8,6 +8,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- A SASL response line during AUTH is no longer limited by `MaxLineLength`
+  (RFC 4954 §4 makes challenge and response sizes independent of the command
+  line limit). The new `Server.MaxAuthResponseLength` bounds it instead:
+  64 KiB by default, enough for large GSSAPI tokens; a negative value removes
+  the bound. An over-long response still gets `500 5.5.6` and the connection
+  closes. The client side remains a known gap (SMTP-AUTH-32).
+
 - A MAIL or RCPT path with a second `@` in its domain, such as
   `<user@@example.net>`, now gets `501` instead of reaching the backend. No
   RFC 5321 domain or address literal contains `@` (RFC 6409 §5.1 asks
