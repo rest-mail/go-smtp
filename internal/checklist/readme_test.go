@@ -16,7 +16,7 @@ var ciFloor = regexp.MustCompile(`(?m)^\s*FLOOR:\s*'([0-9]+(?:\.[0-9]+)?)'\s*$`)
 // TestReadmeBadges keeps the README badges honest. The real mappings are
 // checked before they are counted, so a row naming a missing test never
 // contributes to a green badge, and the coverage badge must show the floor CI
-// actually enforces.
+// actually enforces, with at least the RFC verification minimum of 95%.
 func TestReadmeBadges(t *testing.T) {
 	root := filepath.Join("..", "..")
 	file := filepath.Join(root, "CHECKLIST.md")
@@ -49,9 +49,8 @@ func TestReadmeBadges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	color := "yellowgreen"
-	if floor >= 95 {
-		color = "brightgreen"
+	if floor < 95 {
+		t.Fatalf("coverage floor %g%% is below the required 95%%", floor)
 	}
 	pct := strconv.FormatFloat(floor, 'f', -1, 64)
 
@@ -61,8 +60,8 @@ func TestReadmeBadges(t *testing.T) {
 	}
 	for _, want := range []string{
 		"[![CI](https://github.com/rest-mail/go-smtp/actions/workflows/ci.yml/badge.svg)](https://github.com/rest-mail/go-smtp/actions/workflows/ci.yml)",
-		fmt.Sprintf("[![Coverage gate: >=%s%%](https://img.shields.io/badge/coverage%%20gate-%%3E%%3D%s%%25-%s)](COVERAGE.md)",
-			pct, pct, color),
+		fmt.Sprintf("[![Coverage gate: >=%s%%](https://img.shields.io/badge/coverage%%20gate-%%3E%%3D%s%%25-brightgreen)](COVERAGE.md)",
+			pct, pct),
 		fmt.Sprintf("[![Checklist: %d/%d mapped](https://img.shields.io/badge/checklist-%d%%2F%d%%20mapped-blue)](CHECKLIST.md)",
 			mapped, len(items), mapped, len(items)),
 	} {

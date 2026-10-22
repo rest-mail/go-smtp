@@ -415,6 +415,15 @@ func (c *Conn) handleGreet(enhanced bool, arg string) {
 		c.writeResponse(501, EnhancedCode{5, 5, 2}, "Domain/address argument required for HELO")
 		return
 	}
+	// RFC 6710 section 7 restricts the advertised policy to 1..20 ASCII
+	// letters, digits, hyphen, underscore or dot. Empty omits the policy.
+	// Refuse a bad configuration rather than advertising a different policy.
+	profile := string(c.server.MtPriorityProfile)
+	if enhanced && c.server.EnableMTPRIORITY && (len(profile) > 20 ||
+		strings.Trim(profile, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.") != "") {
+		c.writeResponse(451, EnhancedCode{4, 3, 5}, "Invalid MT-PRIORITY policy configuration")
+		return
+	}
 	// c.helo is populated before NewSession so
 	// NewSession can access it via Conn.Hostname.
 	c.helo = domain
@@ -440,8 +449,14 @@ func (c *Conn) handleGreet(enhanced bool, arg string) {
 		c.setSession(sess)
 	}
 
+	// RFC 5321 §4.1.1.1: the server identifies itself on the first line of
+	// its HELO and EHLO replies (ehlo-ok-rsp = "250" SP Domain [SP ehlo-greet]).
+	greeting := "Hello " + domain
+	if c.server.Domain != "" {
+		greeting = c.server.Domain + " " + greeting
+	}
 	if !enhanced {
-		c.writeResponse(250, EnhancedCode{2, 0, 0}, fmt.Sprintf("Hello %s", domain))
+		c.writeResponse(250, EnhancedCode{2, 0, 0}, greeting)
 		return
 	}
 
@@ -514,7 +529,7 @@ func (c *Conn) handleGreet(enhanced bool, arg string) {
 		caps = append(caps, fb.Features(c)...)
 	}
 
-	args := []string{"Hello " + domain}
+	args := []string{greeting}
 	args = append(args, caps...)
 	c.writeResponse(250, NoEnhancedCode, args...)
 }
@@ -1962,14 +1977,17 @@ func (c *Conn) writeResponse(code int, enhCode EnhancedCode, text ...string) {
 	// transform each single line with \n, into separate lines
 	text = strings.Split(strings.Join(text, "\n"), "\n")
 
+	// RFC 2034 §4: the same status code begins the text of every line of a
+	// multiline reply, not only the last.
+	status := ""
+	if enhCode != NoEnhancedCode {
+		status = fmt.Sprintf("%d.%d.%d ", enhCode[0], enhCode[1], enhCode[2])
+	}
 	lastLineIndex := len(text) - 1
 	for i, line := range text {
-		prefix := fmt.Sprintf("%d-", code)
+		prefix := fmt.Sprintf("%d-%s", code, status)
 		if i == lastLineIndex {
-			prefix = fmt.Sprintf("%d ", code)
-			if enhCode != NoEnhancedCode {
-				prefix += fmt.Sprintf("%d.%d.%d ", enhCode[0], enhCode[1], enhCode[2])
-			}
+			prefix = fmt.Sprintf("%d %s", code, status)
 		}
 
 		// RFC 5321 §4.5.3.1.5: count the prefix and CRLF in the 512-octet

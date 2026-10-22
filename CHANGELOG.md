@@ -8,6 +8,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- The first line of the HELO and EHLO replies now starts with the server's
+  domain (`250-mx.example.net Hello client.example.org`), as RFC 5321
+  §4.1.1.1 requires; it used to be `250-Hello client.example.org`. Tests that
+  match the exact reply text need updating.
+
+- Multiline server replies repeat the enhanced status code on every line, as
+  RFC 2034 §4 requires; it used to appear on the last line only, so a client
+  reading the first line (including this package's) found no status code.
+
+- `Client.Quit` after STARTTLS sends QUIT immediately instead of first
+  sending a fresh EHLO, so a client rejecting the negotiated security quits
+  at once (RFC 3207 §4.1).
+
+- Invalid enabled MT-PRIORITY policy names now receive EHLO/LHLO
+  `451 4.3.5` before backend session creation, instead of advertising values
+  outside RFC 6710's ASCII grammar or its 20-octet limit. An empty name still
+  omits the policy; a disabled extension ignores the unused configuration.
+
 - LMTP BDAT LAST flushes each recipient reply in RCPT order as soon as its
   status is available, without waiting for later deliveries or `LMTPData` to
   return. Unset statuses still use the backend's final result; transaction
@@ -18,9 +36,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Checked RFC 4954 §5 MAIL `AUTH=` syntax (server decoding, malformed values,
   unauthenticated clients, client encoding and a client-to-server round trip)
   and §6 host failure replies (534/538/535/530/454) with wire tests.
+
+- Seven more RFC 5321 core rows: server identification in HELO/EHLO,
+  local-part case, address-literal HELO/EHLO, NOOP parameters, commands
+  allowed at any time and client timeouts, each with a wire test; the
+  server's own command timeout is n/a (host configuration).
+
+- RFC 2034 (ENHANCEDSTATUSCODES) checklist section: nine rows, seven mapped
+  to new wire tests.
+
+- Checked RFC 3207 STARTTLS policy rows: immediate TLS-state decisions by
+  both peers, QUIT after a rejected negotiation, TLS required for selected
+  hosts, opportunistic TLS and post-TLS capability changes.
+
 - Wire proofs for PLAIN over verified TLS, backend MAIL storage refusals (452),
   and default SMTPUTF8, RRVS and DELIVERBY command-length allowances. Five
   previously unmapped checklist rows now have executable proofs (281/387).
+- Five previously unmapped transport requirements now have wire proofs:
+  MT-PRIORITY profile grammar and independent DELIVERBY negotiation,
+  STARTTLS at a pipeline boundary, AUTH between completed pipeline groups,
+  and combined DSN commands at the default 2000-octet budget. Host scheduling,
+  content classification and notification responsibilities remain explicit. An
+  additional binary-refusal wire test strengthens the existing body-option
+  safeguard; binary sending remains unsupported.
 
 - README badges for CI, the enforced coverage floor and the checklist
   (276/387 mapped), checked against CHECKLIST.md and the CI `FLOOR` by
