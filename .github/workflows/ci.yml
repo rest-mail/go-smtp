@@ -23,19 +23,15 @@ jobs:
         run: go vet ./...
       - name: build
         run: go build ./...
-      # The shared RFC proof (go-spf's rfc-verification.yml, used by the other
-      # go-* libraries) fails below 95% statement coverage. This job measured
-      # 94.7% on main after the RFC 6409 submission audit (#109), so the floor
-      # is ratcheted to 94.5%, just under it; raise it again as coverage grows
-      # and move to the shared 95% gate once CI clears it. The README coverage
-      # badge shows FLOOR and a test fails if they drift apart. COVERAGE.md says
-      # what is uncovered. cmd/smtp-debug-server is a demo program and is left
-      # out of the figure.
+      # Main CI measured 96.1% after #112 (run 39695295116). Enforce the
+      # same 95% minimum as the shared RFC workflow used by other go-* libraries.
+      # The README badge and TestReadmeBadges track FLOOR; COVERAGE.md records
+      # the measurement and exclusions. The demo cmd/smtp-debug-server is omitted.
       - name: test (race) with coverage
         run: go test -race -count=1 -covermode=atomic -coverprofile=coverage.out . ./internal/...
       - name: coverage floor
         env:
-          FLOOR: '94.5'
+          FLOOR: '95'
         run: |
           total=$(go tool cover -func=coverage.out | awk '/^total:/ { sub(/%/, "", $3); print $3 }')
           echo "Statement coverage: ${total}% (floor ${FLOOR}%)"

@@ -87,7 +87,7 @@ func TestRFC2033BDATRecipientRepliesFlushed(t *testing.T) {
 				}
 				session.advance[0] <- struct{}{}
 				if got, want := readFlushReply(t, br), []string{
-					"452-<slow@example.org> temporarily", "452 4.2.2 over quota",
+					"452-4.2.2 <slow@example.org> temporarily", "452 4.2.2 over quota",
 				}; !reflect.DeepEqual(got, want) {
 					t.Fatalf("second recipient = %q, want %q", got, want)
 				}

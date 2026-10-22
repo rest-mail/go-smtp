@@ -1,5 +1,35 @@
 # Coverage
 
+## Current CI measurement and gate
+
+The latest completed main CI run after #112,
+[39695295116](https://github.com/rest-mail/go-smtp/actions/runs/39695295116),
+measured **96.1%** combined statement coverage on commit
+`5455d4d3a3dbcb88f92a5f2eebe4bed9a7cf3448` (2026-10-21 UTC).
+The library measured **95.9%** and `internal/checklist` **99.3%**,
+using Go 1.27.3 linux/amd64 with the race detector:
+
+```sh
+go test -race -count=1 -covermode=atomic -coverprofile=coverage.out . ./internal/...
+go tool cover -func=coverage.out
+```
+
+CI now fails below **95%**, the same minimum as the shared RFC verification
+workflow used by other `go-*` libraries. The existing go-smtp workflow retains
+its package selection, race tests, checklist check and parser fuzz targets.
+`cmd/smtp-debug-server` is a demo program and is excluded by the package list.
+The README badge shows the enforced floor, rather than a live measured result.
+`TestReadmeBadges` checks that it matches `FLOOR` in
+`.github/workflows/ci.yml` and rejects a floor below 95%.
+
+## Historical audit measurements
+
+The measurements, coverage gaps and floor values below describe earlier audit
+snapshots. They are retained as history; the current measurement and gate are
+above, and later tests (including #112's client error/guard paths) supersede
+some of the historical uncovered-path inventory. Coverage percentages alone
+do not establish complete RFC conformance.
+
 The BDAT LAST reply-flushing follow-up adds gated wire tests for zero-length
 and nonempty LAST chunks, prompt per-recipient replies, duplicate paths,
 multiline failures, unset success/error results, backend panic recovery and
@@ -138,7 +168,7 @@ claimed as library conformance. The 85% gate remains below the 95% target.
 | `internal/checklist/main.go` | `main` | Exiting the process cannot be tested in-process. All of the checker's logic is in `run`, which the tests cover; CI also runs the command itself. |
 | `cmd/smtp-debug-server/main.go` | everything | A demo server for manual testing, not part of the library; not in the figure. |
 
-## Not covered yet
+## Historical uncovered-path inventory
 
 These are known gaps, not exclusions. The functions below are the ones with the
 lowest coverage in the package; the next slots, which check the extensions
