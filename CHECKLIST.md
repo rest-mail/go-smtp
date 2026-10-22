@@ -417,6 +417,10 @@ This slice audits the envelope: the EHLO keyword, the MAIL parameter, UTF-8
 mailboxes and the per-transaction rules for non-ASCII addresses. RFC 6532
 message headers, IDNA lookups and downgrade are host responsibilities; the
 UTF-8 `ORCPT` encoding of RFC 6533 stays in SMTP-EXT-06.
+UTF8-BODY-01 tests explicitly declared content at both top-level and nested
+message headers. UTF8-DOWN-01 installs an actual two-hop rejection policy in
+the test host; neither row claims automatic content classification or relay
+policy. Those remaining duties stay explicit in UTF8-BODY-02/UTF8-DOWN-02.
 
 | ID | Section | Level | Requirement | Tests |
 |----|---------|-------|-------------|-------|
@@ -436,8 +440,10 @@ UTF-8 `ORCPT` encoding of RFC 6533 stays in SMTP-EXT-06.
 | UTF8-CLIENT-04 | 3.4 | SHOULD NOT | The client omits SMTPUTF8 when the envelope does not need it. | `TestSendMail_SMTPUTF8_Autodetect` |
 | UTF8-VRFY-01 | 3.7.4.2 | MUST NOT | VRFY and EXPN replies contain no UTF-8 unless the client sent SMTPUTF8; the server's VRFY reply (252) and EXPN refusal are always ASCII. | `TestRFC6531VrfyRepliesStayASCII` |
 | UTF8-REPLY-01 | 3.7.4.1 | MUST NOT | Without SMTPUTF8 on MAIL, no 251 or 551 reply carries a non-ASCII mailbox. | n/a: host responsibility: the library sends no 251 or 551 itself; a backend returning a custom `SMTPError` chooses its text. |
-| UTF8-BODY-01 | 3.2, 3.1 item 10 | MUST NOT | No RFC 6532 internationalized header is sent to a server without SMTPUTF8. | n/a: gap: Data does not inspect content; callers must set `MailOptions.UTF8` for an internationalized message. |
-| UTF8-DOWN-01 | 3.2 | Normative | A sender facing a server without SMTPUTF8 rejects, bounces or downgrades the message. | n/a: host policy: the client returns an error; there is no queue, bounce or downgrade implementation. |
+| UTF8-BODY-01 | 3.2, 3.1 item 10 | MUST NOT | A host declaring an internationalized message with `MailOptions.UTF8`, even with an ASCII envelope and nested MIME headers, cannot send it to an unadvertised next hop; an advertising hop receives the flag and unchanged content. | `TestRFC6531DeclaredInternationalizedHeaders` |
+| UTF8-BODY-02 | 3.2, 3.4 | MUST | Identify internationalized headers at every MIME depth and set SMTPUTF8 when required. | n/a: host content classification; Data streams opaque bytes and SendMail only detects envelope addresses. Automatic header inspection or a message classification API needs an owner decision. |
+| UTF8-DOWN-01 | 3.2 | SHOULD | A relay host selecting rejection can turn the outbound refusal of a declared internationalized message into an upstream permanent failure, without leaking the message downstream; ASCII delivery still works. | `TestRFC6531HostRejectsUnsupportedNextHop` |
+| UTF8-DOWN-02 | 3.2 | Normative | Choose rejection, notification, transformation, requeue or an alternate MX according to the sender role and circumstances. | n/a: host queue/routing/content policy; the tested host explicitly chooses rejection. The library has no queue, bounce generator, MIME downgrader or MX selector. |
 | UTF8-DNS-01 | 3.2 | MUST | Domain names looked up in DNS follow IDNA (Unicode-aware lookup or A-labels). | n/a: the library performs no DNS lookups; the host's dialer and routing do. |
 | UTF8-EHLO-03 | 3.7.1 | MUST | EHLO domain names and the server's EHLO response use LDH labels or A-labels. | n/a: host configuration: `Client.Hello` and `Server.Domain` take the name the host supplies. |
 | UTF8-TRACE-01 | 3.7.3, 3.1 item 11 | Normative | Trace fields use the UTF8SMTP/UTF8SMTPA/UTF8SMTPS WITH keywords. | n/a: the library writes no Received fields; the host adds trace headers. |
@@ -554,7 +560,11 @@ Sections refer to [RFC 2033](https://datatracker.ietf.org/doc/html/rfc2033).
 This audits the LMTP differences from ESMTP, including the §4.2 example
 addresses, message and mixed results. Existing SMTP, PIPELINING, DATA and
 CHUNKING parser tests/fuzzers apply to the shared machinery. LMTP introduces
-no separate parser. Successful delivery is a host promise: transport success
+no separate parser. The former combined LMTP-BDAT-06 failure gap is split
+into size-limit, early-backend and short-transfer clauses, each with its own
+wire proof. A fully broken connection cannot guarantee receipt of replies;
+the short-transfer test half-closes the request direction only.
+Successful delivery is a host promise: transport success
 alone does not prove durable storage. The client API returns collected results
 when CloseWithLMTPResponse finishes; it does not expose a streaming callback.
 
@@ -573,11 +583,13 @@ when CloseWithLMTPResponse finishes; it does not expose a streaming callback.
 | LMTP-BDAT-02 | 4.3 | Normative | Duplicate forward-paths and multiline replies retain per-RCPT counting for BDAT LAST. | `TestRFC2033RecipientReplies`, `TestRFC2033BDATRecipientRepliesFlushed` |
 | LMTP-BDAT-03 | 4.3 | Normative | A non-LAST BDAT command returns exactly one reply. | `TestRFC2033RecipientReplies` |
 | LMTP-BDAT-04 | 4.3 | Normative | BDAT LAST expands a fallback backend or unset status result to all accepted recipients. | `TestRFC2033FallbackAndUnsetStatuses`, `TestRFC2033BDATRecipientRepliesFlushed` |
-| LMTP-BDAT-05 | 4.3 | Normative | BDAT LAST with no successful RCPT returns zero replies. | n/a: known gap: the shared SMTP handler drains the chunk and returns 503; LMTP does not yet override it. |
+| LMTP-BDAT-05 | 4.3 | Normative | BDAT LAST with no successful RCPT drains its opaque chunk and returns zero replies, including after all refusals, RSET or a completed transaction. | `TestRFC2033LastWithoutRecipients` |
 | LMTP-EXT-01 | 5 | MUST | The LMTP server implements and advertises PIPELINING. | `TestRFC2033GreetingAndSequence`, `TestRFC2033RecipientReplies` |
 | LMTP-EXT-02 | 5 | MUST | The LMTP server implements and advertises ENHANCEDSTATUSCODES. | `TestRFC2033GreetingAndSequence`, `TestRFC2033RecipientReplies` |
 | LMTP-EXT-03 | 5 | SHOULD | The LMTP server implements 8BITMIME. | `TestRFC2033GreetingAndSequence` |
-| LMTP-BDAT-06 | 4.3 | Normative | Even failed LAST chunks report individual outcomes for accepted recipients. | n/a: known gap: early size-limit/backend/transport errors use the shared single-reply SMTP path rather than the normal LAST per-recipient result path. |
+| LMTP-BDAT-06 | 4.3 | Normative | A size-limit failure on the first or cumulative LAST chunk returns one 552 per accepted RCPT, preserving duplicates and order, then permits another transaction. | `TestRFC2033LastSizeFailureReplies` |
+| LMTP-BDAT-07 | 4.3 | Normative | An early backend refusal of a LAST chunk preserves per-recipient results and drains the remaining chunk; recoverable refusals permit another transaction, while panic or requested termination closes after the results. A fallback backend applies its refusal to every accepted RCPT. | `TestRFC2033LastEarlyBackendFailureReplies`, `TestRFC2033LastEarlyTerminalReplies` |
+| LMTP-BDAT-08 | 4.3 | Normative | A short LAST chunk reports a temporary transfer failure to each accepted RCPT when the reply direction remains writable, then closes rather than reinterpreting incomplete data as commands. | `TestRFC2033LastShortReadReplies` |
 | LMTP-FLUSH-01 | 5 | SHOULD | Send each DATA recipient reply as soon as available, flushing before waiting for a slower recipient. | `TestServer_LMTP_Early` |
 | LMTP-FLUSH-02 | 5 | SHOULD | Send BDAT LAST recipient replies as soon as available, flushing in RCPT order before waiting for slower recipients or the backend's return. | `TestRFC2033BDATRecipientRepliesFlushed` |
 | LMTP-CLIENT-01 | 4.2, 5 | MUST | Preserve received recipient successes and failures when the connection closes before all replies arrive. | `TestRFC2033ClientPartialReplies` |

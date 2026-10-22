@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/rest-mail/go-smtp/actions/workflows/ci.yml/badge.svg)](https://github.com/rest-mail/go-smtp/actions/workflows/ci.yml)
 [![Coverage gate: >=94.5%](https://img.shields.io/badge/coverage%20gate-%3E%3D94.5%25-yellowgreen)](COVERAGE.md)
-[![Checklist: 277/387 mapped](https://img.shields.io/badge/checklist-277%2F387%20mapped-blue)](CHECKLIST.md)
+[![Checklist: 283/391 mapped](https://img.shields.io/badge/checklist-283%2F391%20mapped-blue)](CHECKLIST.md)
 [![Go Reference](https://pkg.go.dev/badge/github.com/rest-mail/go-smtp.svg)](https://pkg.go.dev/github.com/rest-mail/go-smtp)
 
 An ESMTP client and server library written in Go.
@@ -78,7 +78,7 @@ Coverage is in [COVERAGE.md](COVERAGE.md).
 
 The badges at the top are checked by `TestReadmeBadges` in
 `internal/checklist`. The checklist badge counts mapped items over all items:
-the 111 `n/a` rows are in the denominator, so the badge never claims more than
+the 108 `n/a` rows are in the denominator, so the badge never claims more than
 the tests prove. The coverage badge shows the floor CI enforces (`FLOOR` in
 `.github/workflows/ci.yml`), not a measured figure; each CI run prints the
 measured statement coverage.
@@ -194,6 +194,14 @@ limits (552 5.7.16). Client.Mail refuses an explicit priority when the peer does
 not advertise MT-PRIORITY; a relay must explicitly choose fallback and omit the
 option for such a peer. These policy boundaries are recorded in the checklist.
 
+A message with internationalized headers needs `MailOptions.UTF8` even when
+all envelope addresses are ASCII, including headers inside nested MIME
+messages. The streaming client does not inspect content; `SendMail` detects
+envelope addresses only. With the flag set, an unsupported next hop is refused
+before MAIL or content is sent. A relay host must choose how that refusal
+becomes an upstream rejection, notification, retry or transformation; the
+checked two-hop example chooses rejection and then proves ASCII recovery.
+
 LMTP uses LHLO and refuses SMTP HELO/EHLO. `NewClientLMTP` preserves an LHLO
 refusal instead of falling back to HELO. `LMTPSession.LMTPData` can supply
 one status per accepted RCPT, including duplicate paths; unset statuses use
@@ -212,8 +220,12 @@ including unrecognized codes, and returns partial successes and known failures
 alongside transport errors. Treat every unanswered recipient as a temporary failure;
 there are no synthetic per-recipient 4xx entries or streaming callbacks. Its
 address-keyed maps cannot preserve separate duplicate-path outcomes. The
-checklist also records BDAT gaps: no-recipient LAST returns 503 instead
-of zero replies, and early failures use a single SMTP reply.
+server drains BDAT LAST with no accepted recipients and sends zero replies.
+Size-limit, early-backend and short-transfer LAST failures retain one reply
+per accepted RCPT, including duplicates; non-LAST chunks still have one reply.
+A failed transfer closes if unread octets would break command framing. A peer
+that completely loses its connection must still apply the temporary-failure
+rule above to any outcomes it did not receive.
 
 XCLIENT is restricted to connections approved by `TrustXCLIENT`. A successful
 assertion logs out the old backend session, clears SMTP greeting/authentication

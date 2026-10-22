@@ -8,12 +8,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- LMTP BDAT LAST now returns zero replies with no accepted recipients and one
+  reply per accepted RCPT on early size, backend or short-transfer failures.
+  Duplicate recipients and explicit backend outcomes are retained. Ordinary
+  SMTP and non-LAST reply counts are unchanged. Hosts consuming raw LMTP
+  replies must account for these corrected counts (RFC 2033 section 4.3).
+
 - LMTP BDAT LAST flushes each recipient reply in RCPT order as soon as its
   status is available, without waiting for later deliveries or `LMTPData` to
   return. Unset statuses still use the backend's final result; transaction
   reset and subsequent commands wait for the backend to finish.
 
 ### Added
+
+- Six wire-tested RFC 2033/6531 checklist clauses from four formerly combined
+  gaps: zero-recipient LAST, size/backend/short-transfer LAST failures,
+  explicitly declared internationalized headers and host-selected next-hop
+  rejection. Remaining content classification and routing/report policy stay
+  explicit host duties; no new public API or automatic MIME inspection.
 
 - README badges for CI, the enforced coverage floor and the checklist
   (276/387 mapped), checked against CHECKLIST.md and the CI `FLOOR` by
