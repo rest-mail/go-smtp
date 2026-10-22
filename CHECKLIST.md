@@ -15,10 +15,10 @@ trust boundaries; its remaining syntax and metadata-only compatibility gaps
 are explicit.
 STARTTLS (RFC 3207), SIZE (RFC 1870), PIPELINING (RFC 2920),
 CHUNKING/BINARYMIME (RFC 3030), 8BITMIME (RFC 6152), AUTH exchange rules
-(RFC 4954 §4), DSN parameter/protocol and relay transport rules (RFC 3461 §§2–4, 5.1, 5.2.1–5.2.2, 5.4),
+(RFC 4954 §4, MAIL AUTH= syntax of §5 and the failure replies of §6), DSN parameter/protocol and relay transport rules (RFC 3461 §§2–4, 5.1, 5.2.1–5.2.2, 5.4),
 the SMTPUTF8 envelope (RFC 6531), the RRVS parameter (RFC 7293), DELIVERBY
-transport (RFC 2852), MT-PRIORITY transport (RFC 6710) and LMTP
-(RFC 2033) are audited below.
+transport (RFC 2852), MT-PRIORITY transport (RFC 6710), LMTP
+(RFC 2033) and ENHANCEDSTATUSCODES (RFC 2034) are audited below.
 The remaining AUTH and DSN lifecycle rules remain for later slices.
 The combined DSN budget proof exercises the default 2000-octet MAIL and RCPT
 limits with all built-in parameter families enabled, exact backend options and
@@ -52,6 +52,8 @@ SASL challenges retain the independent size rules of RFC 4954 §4.
 | SMTP-SYN-11 | 2.3.8 | Normative | Only CRLF ends a line: a bare LF is not a line end, so `LF.LF` does not end the data (SMTP smuggling). | `TestServer_smtpSmuggling`, `TestServer_LFDotLF`, `TestEODNonStandardSequencesDoNotEndData`, `TestEODCRBeforeCRLFDotEndsData`, `TestEODBDATChunksIgnoreDotSequences`, `TestEODClientDotStuffsAndNormalises` |
 | SMTP-SYN-12 | 2.2.2 | Normative | A MAIL parameter the server does not know is refused, not ignored. | `TestServerUnknownArg` |
 | SMTP-SYN-13 | 2.3.8, 4.1.1 | MUST | A command line ends at CRLF only: a bare LF does not end a command (it is a 500 and the connection is closed, and the text after it is not run), and a bare CR in the middle of a line does not split it into two commands. | `TestEODCommandLineBareLF` |
+| SMTP-SYN-14 | 2.4 | MUST | The local-part of a mailbox is case-sensitive: MAIL and RCPT addresses reach the backend in the case sent, and recipients differing only in case stay distinct. | `TestRFC5321_LocalPartCasePreserved` |
+| SMTP-SYN-15 | 4.1.1.1, 4.1.3 | Normative | HELO and EHLO accept an address literal (`[192.0.2.1]`, `[IPv6:2001:db8::1]`) as the client's name, and the backend sees it as `Conn.Hostname`. | `TestRFC5321_HelloAddressLiteral` |
 
 ## Command order and state (§3.3, §4.1.1.2, §4.1.4)
 
@@ -62,6 +64,7 @@ SASL challenges retain the independent size rules of RFC 4954 §4.
 | SMTP-ORD-03 | 3.3, 4.1.1.4 | MUST | DATA is refused when the transaction has no recipient. | `TestRFC5321_CommandOrder` |
 | SMTP-ORD-04 | 4.1.1.2, 4.1.4 | MUST | A second MAIL inside a transaction is a 503 and leaves the transaction (sender and recipients) intact; after RSET a new MAIL is accepted. | `TestServerNestedMailRejected`, `TestServerResetThenMail` |
 | SMTP-ORD-05 | 4.1.4 | SHOULD | A command out of sequence is answered 503 5.5.1: MAIL or AUTH before HELO/EHLO, RCPT before MAIL, DATA or BDAT without a recipient, a transaction command between BDAT chunks, DATA after BODY=BINARYMIME, and STARTTLS on a TLS connection. | `TestServerBadSequence`, `TestServerSTARTTLSAlreadyTLSBadSequence`, `TestClientBadSequenceError` |
+| SMTP-ORD-06 | 4.1.4 | Normative | NOOP, VRFY, RSET, HELP and EXPN may be sent at any time: before HELO/EHLO, and inside a transaction without changing its sender or recipients (HELP and EXPN get 502, as SMTP-CMD-07). | `TestRFC5321_AnyTimeCommands` |
 
 ## Commands (§4.1.1, §4.5.1)
 
@@ -76,6 +79,7 @@ SASL challenges retain the independent size rules of RFC 4954 §4.
 | SMTP-CMD-07 | 4.2.4 | MUST | A command the server does not implement is a 502 (tested for HELP; SEND, SOML, SAML, EXPN and TURN share the code path). | `TestServer_otherCommands` |
 | SMTP-CMD-08 | 4.2.4 | MUST | An unrecognised command is a 500, and the server answers the next command. | `TestServer_tooManyInvalidCommands`, `TestRFC5321_UnknownAndArgumentErrors` |
 | SMTP-CMD-09 | 4.5.1 | MUST | The minimum implementation (EHLO, HELO, MAIL, RCPT, DATA, RSET, NOOP, QUIT, VRFY) is supported. | `TestServer`, `TestServer_helo`, `TestServer_otherCommands` |
+| SMTP-CMD-10 | 4.1.1.9 | SHOULD | A parameter string given with NOOP is ignored: NOOP with or without one is answered 250 and leaves the transaction as it was. | `TestRFC5321_NoopIgnoresParameter` |
 | SMTP-RSET-01 | 4.1.1.5 | MUST | RSET clears the sender, the recipients and the message data, and is answered 250. | `TestRFC5321_RsetAndSecondEhloClearTransaction`, `TestServer_otherCommands` |
 | SMTP-RSET-02 | 4.1.4 | MUST | A second EHLO or HELO clears the transaction exactly as RSET does. | `TestRFC5321_RsetAndSecondEhloClearTransaction` |
 | SMTP-RCPT-01 | 3.3, 4.1.1.3 | MUST | A transaction may have several recipients; each is answered on its own. | `TestRFC5321_RecipientLimit`, `TestRFC5321_HundredRecipients` |
@@ -103,6 +107,8 @@ SASL challenges retain the independent size rules of RFC 4954 §4.
 | SMTP-LIM-04 | 4.5.3.1.8 | MUST | At least 100 recipients are accepted in one transaction. | `TestRFC5321_HundredRecipients` |
 | SMTP-LIM-05 | 4.5.3.2 | SHOULD | A configured read timeout closes a connection that stops sending, in DATA as well as between commands; the timeout restarts as data arrives. | `TestDataReadTimeoutClosesConnection`, `TestDataBodyReadDeadlineRefresh` |
 | SMTP-LIM-06 | 4.5.3.1.5 | MUST | A server reply line is at most 512 octets, code and CRLF included; RFC 4954 SASL challenges have independent size rules. | `TestRFC5321_ReplyLine512`, `TestRFC5321_MultilineReplyLine512`, `TestRFC5321_BackendReplyLine512`, `TestRFC4954_LongChallengeNotTruncated` |
+| SMTP-LIM-07 | 4.5.3.2 | SHOULD | The client times out a server that stops answering: each command reply within `CommandTimeout` (default 5 minutes), the reply after the final dot within `SubmissionTimeout` (default 12 minutes, over the 10 the RFC asks for). | `TestRFC5321_ClientTimeouts` |
+| SMTP-LIM-08 | 4.5.3.2.7 | SHOULD | The server waits at least 5 minutes for the next command before it times out. | n/a: host configuration; `Server.ReadTimeout` is zero (no timeout) by default, and a host that sets one chooses its length. SMTP-LIM-05 checks a configured timeout. |
 
 ## Replies (§4.2)
 
@@ -111,6 +117,7 @@ SASL challenges retain the independent size rules of RFC 4954 §4.
 | SMTP-REP-01 | 4.2 | MUST | The server greets a new connection with a 220 reply. | `TestServer_helo`, `TestServer` |
 | SMTP-REP-02 | 3.8, 4.2.2 | MUST | A server that must stop answers 421 before closing: on shutdown, and after an internal error. | `TestServerCloseSends421`, `TestServerPanicRecover`, `TestConnReject` |
 | SMTP-REP-03 | 4.2.1 | MUST | The code a backend returns is the reply code, with its text; a plain error is not leaked to the client. | `TestErrorf`, `TestBackendErrorf_StatusNotLeaked`, `TestDataWrappedSMTPError`, `TestMailWrappedSMTPError`, `TestCustomResponse_Mail`, `TestCustomResponse_Rcpt`, `TestCustomResponse_Data`, `TestSMTPErrorTemporary`, `TestRFC5321_BackendReplyLine512` |
+| SMTP-REP-04 | 4.1.1.1, 4.3.1 | MUST | The server identifies itself by its domain: in the 220 greeting and as the first word of the HELO and EHLO replies (`250-mx.example.net Hello client`). | `TestRFC5321_ServerIdentifiesItself` |
 
 ## Connection handling (§3.8, §4.1.1.10), library behaviour
 
@@ -159,9 +166,10 @@ SASL challenges retain the independent size rules of RFC 4954 §4.
 
 This slice checks command framing and the SASL challenge/response exchange,
 including the PLAIN and empty EXTERNAL wire examples of §4.1. It does **not**
-claim a complete RFC 4954 audit. The §5 MAIL AUTH trust/relay rules, §6 policy,
-§7 trace headers and §14 TLS identity requirements remain unaudited. Existing
-MAIL AUTH tests remain in SMTP-EXT-08. The host supplies the actual SASL
+claim a complete RFC 4954 audit. The §5 MAIL AUTH parameter syntax and the
+§6 failure replies are checked; the §5 relay rules for passing AUTH= on,
+other §6 policy, §7 trace headers and §14 TLS identity requirements remain
+unaudited. The host supplies the actual SASL
 mechanisms and credential/identity policy through AuthSession.
 SMTP-AUTH-24 installs a PLAIN backend and a verified STARTTLS client, with
 insecure authentication disabled; the host still configures TLS and credentials.
@@ -193,6 +201,12 @@ insecure authentication disabled; the host still configures TLS and credentials.
 | SMTP-AUTH-23 | RFC 4954 §4 | SHOULD | Authorization identities use SASLprep; failed preparation or an unexpectedly empty prepared identity must fail authentication. | n/a: host responsibility; the transport receives opaque SASL bytes and no authorization identity. Hosts must implement preparation and return a SASL error on failure. |
 | SMTP-AUTH-24 | RFC 4954 §4 | MUST | PLAIN over TLS is available for interoperability. | `TestRFC4954PlainOverTLS` |
 | SMTP-AUTH-25 | RFC 4954 §4 | MUST | AUTH is last in a pipelined group except for eligible one-round-trip mechanisms with an initial response. | n/a: client Auth is synchronous, outside the Pipeliner API; the raw server cannot distinguish a group boundary from buffered continuation bytes. Host-provided mechanisms must not negotiate unsupported security layers. |
+| SMTP-AUTH-26 | RFC 4954 §5 | Normative | The MAIL `AUTH=` value is xtext whose decoded form is an addr-spec or `<>`; the host receives the decoded mailbox (a quoted local-part unquoted, as for the reverse-path), an empty string for `<>` and nil when absent. | `TestRFC4954_MailAuthParameter` |
+| SMTP-AUTH-27 | RFC 4954 §5 | MUST | A server that advertises AUTH accepts the MAIL `AUTH=` parameter even from a client that has not authenticated. | `TestRFC4954_MailAuthParameter`, `TestRFC4954_MailAuthRoundTrip`, `TestServer_authParam` |
+| SMTP-AUTH-28 | RFC 4954 §5 | Normative | An `AUTH=` value that is not valid xtext, or decodes to neither an addr-spec nor `<>`, is a parameter syntax error: 501 5.5.4 before Session.Mail, and the session continues. | `TestRFC4954_MailAuthMalformed`, `TestServer_authParam` |
+| SMTP-AUTH-29 | RFC 4954 §6 | Normative | Host failure replies reach the wire unchanged from the mechanism factory or a SASL step (534 5.7.9, 538 5.7.11, 535 5.7.8, 530 5.7.0); an uncoded failure is the temporary 454 4.7.0, and a later AUTH can still succeed. | `TestRFC4954_HostFailureCodes` |
+| SMTP-AUTH-30 | RFC 4954 §5 | Normative | The client sends the submitter as xtext and an unknown submitter as `AUTH=<>`, never an empty value, and omits the parameter when the server did not advertise AUTH. | `TestRFC4954_ClientMailAuthParameter`, `TestRFC4954_MailAuthRoundTrip` |
+| SMTP-AUTH-31 | RFC 4954 §5 | MUST | A server that does not trust the client's authenticated identity, or whose client has not authenticated, behaves as if `AUTH=<>` was supplied. | n/a: host trust policy, left for the owner; Session.Mail receives the asserted value unchanged, and only the host knows whether its AuthSession succeeded or another trust source (such as XCLIENT) applies. Blanking it in the transport would change what every host sees. |
 
 
 ## STARTTLS (RFC 3207)
@@ -219,18 +233,19 @@ commands; a host's relay and submission policy remains outside this library.
 | TLS-CLIENT-02 | 4.2 | MUST NOT | The client does not attempt STARTTLS while TLS is already active. | `TestRFC3207ClientUpgrade` |
 | TLS-CLIENT-03 | 4 | SHOULD | Abort the connection when a failure prevents a usable TLS handshake; do not resume plaintext SMTP. | `TestRFC3207ClientHandshakeFailure`, `TestRFC3207ClientHandshakeTimeout`, `TestRFC3207ConstructorsVerifyHandshake` |
 | TLS-PIPE-01 | 4 | Normative | STARTTLS is the last command in a pipelined group. | `TestRFC3207StartTLSBetweenGroups` |
-| TLS-POLICY-04 | 4.1, 6 | MUST | Both peers immediately decide whether the achieved authentication and privacy permit continuing. | n/a: host policy through tls.Config (verification, client certificates, protocol and cipher restrictions) and TLSConnectionState; no universal trust policy is imposed by SMTP. Handshake rejection is tested by TLS-CLIENT-03. |
-| TLS-POLICY-05 | 4.1 | SHOULD | A client rejecting an otherwise completed TLS negotiation immediately sends QUIT. | n/a: host policy; the client exposes TLSConnectionState and Quit. Failed TLS negotiation closes the socket instead (TLS-CLIENT-03). |
+| TLS-POLICY-04 | 4.1, 6 | MUST | Both peers immediately decide whether the achieved authentication and privacy permit continuing; a tls.Config VerifyConnection refusal on either side ends the session before any further SMTP command. | `TestRFC3207PeersDecideOnNegotiatedSecurity` |
+| TLS-POLICY-05 | 4.1 | SHOULD | A client rejecting an otherwise completed TLS negotiation immediately sends QUIT; Quit after STARTTLS sends no fresh EHLO first. | `TestRFC3207ClientQuitsAfterRejectedTLS` |
 | TLS-POLICY-06 | 4.1 | SHOULD | A server rejecting an otherwise completed TLS negotiation answers commands other than QUIT with 554. | n/a: not supported yet as a library-wide state; TLSConfig can reject the handshake, and a host backend can reject the subsequent session. |
 | TLS-STATE-01 | 4.2, 6 | MUST | The server resets SMTP state and discards pre-TLS EHLO, authentication, backend session and XCLIENT assertions. | `TestRFC3207ServerDiscardsKnowledge` |
 | TLS-STATE-02 | 4.2, 6 | MUST | The client discards the pre-TLS service extension list and transaction recipients. | `TestRFC3207ClientUpgrade` |
 | TLS-STATE-03 | 4.2 | SHOULD | The client's first SMTP command after a successful negotiation is a fresh EHLO. | `TestRFC3207ClientUpgrade` |
 | TLS-STATE-04 | 4.2 | MUST | Both peers know whether TLS is active and expose the completed negotiation state. | `TestRFC3207ClientUpgrade`, `TestRFC3207ServerDiscardsKnowledge` |
 | TLS-STATE-05 | 4.2 | MUST NOT | The server does not advertise STARTTLS after the TLS handshake. | `TestRFC3207ServerDiscardsKnowledge` |
+| TLS-STATE-06 | 4.2 | MAY | The post-TLS EHLO list may differ from the plaintext one; with AllowInsecureAuth off, AUTH is offered and accepted only over TLS. | `TestRFC3207CapabilitiesChangeAfterTLS` |
 | TLS-SERVER-01 | 4.1, 6 | Normative | A failed server-side TLS handshake ends the connection, preventing further SMTP on a half-upgraded stream. | `TestStartTLSClosesOnHandshakeFailure` |
 | TLS-EXAMPLE-01 | 5 | Normative | The usage example's EHLO, STARTTLS, handshake and encrypted EHLO sequence changes the advertised capabilities. | `TestRFC3207ClientUpgrade`, `TestRFC3207ServerDiscardsKnowledge` |
-| TLS-SEC-01 | 6 | MUST | Selected hosts can require successful TLS negotiation meeting the configured cipher and authentication policy before message transfer. | n/a: client TLS-required constructors enforce negotiation using tls.Config; server per-host enforcement is host backend policy, not a built-in library-wide gate (TLS-POLICY-02). |
-| TLS-SEC-02 | 6 | SHOULD | Opportunistic TLS is also available as a local policy. | n/a: host transport choice; select DialStartTLS or Dial before transferring mail, with retry and downgrade policy outside the library. |
+| TLS-SEC-01 | 6 | MUST | Selected hosts can require successful TLS negotiation meeting the configured cipher and authentication policy before message transfer: TLS-required client constructors refuse missing STARTTLS or a weaker negotiated version, and a host backend can refuse plaintext MAIL from selected clients with 530 5.7.0. | `TestRFC3207RequireTLSForSelectedHosts` |
+| TLS-SEC-02 | 6 | SHOULD | Opportunistic TLS is also available as a local policy: DialStartTLS when STARTTLS is offered, plaintext Dial when it is not. | `TestRFC3207OpportunisticTLS` |
 
 ## 8BITMIME (RFC 6152)
 
@@ -691,3 +706,22 @@ Remaining RFC 6409 audit: port selection, return-path determination, domain and
 header validation, rejection policy, logging, timeouts, extension applicability,
 message modifications and delivery/relay responsibilities. No header rewriting,
 DNS qualification or submission-specific policy is supplied by this change.
+
+## ENHANCEDSTATUSCODES (RFC 2034)
+
+The server always advertises the extension and prefixes its own replies with
+an [RFC 3463](https://www.rfc-editor.org/rfc/rfc3463) status code. Codes a
+backend supplies in an `SMTPError` are sent as given; the rows below say which
+side owns each rule.
+
+| ID | Section | Level | Requirement | Tests |
+|----|---------|-------|-------------|-------|
+| ESC-ADV-01 | 3(2), 3(3) | Normative | EHLO and LHLO advertise the `ENHANCEDSTATUSCODES` keyword once, with no parameter. | `TestRFC2034Advertisement` |
+| ESC-VERB-01 | 3(5) | Normative | The extension defines no verbs or MAIL/RCPT parameters. | n/a: nothing to implement; the server adds no verb or parameter for it, and unknown verbs keep their ordinary 500 reply. |
+| ESC-REPLY-01 | 3(4), 4 | MUST | Every 2xx, 4xx and 5xx line other than the greeting and the HELO/EHLO reply begins its text with `class "." 1*3digit "." 1*3digit` and one or more spaces. | `TestRFC2034EveryReplyLine` |
+| ESC-REPLY-02 | 4 | MUST | The status class agrees with the reply code; a backend `SMTPError` without a status code gets X.0.0 and a plain error gets `554 5.0.0`. | `TestRFC2034EveryReplyLine`, `TestRFC2034MultilineSameCode` |
+| ESC-REPLY-03 | 4 | Normative | 3xx replies (354 after DATA, 334 SASL challenges) carry no status code. | `TestRFC2034EveryReplyLine` |
+| ESC-REPLY-04 | 4, 5 | MUST | Codes are sent whether or not the client used EHLO: before any greeting command and to a HELO client. | `TestRFC2034EveryReplyLine` |
+| ESC-MULTI-01 | 4 | MUST | Every line of a multiline reply begins with the same status code. | `TestRFC2034MultilineSameCode` |
+| ESC-CLIENT-01 | 4 | Normative | The client reads the status code from a reply and removes the repeated code from each line, keeping the multiline text. | `TestRFC2034ClientRoundTrip` |
+| ESC-HOST-01 | 4 | MUST | A backend-supplied status code agrees with its reply code and keeps subject and detail to 1-3 digits. | n/a: host responsibility; the server sends `SMTPError.EnhancedCode` as given, and `NoEnhancedCode` lets an extension omit it. Validating or rewriting host codes would change what hosts send, so it is left to the owner (rest-mail/rest-mail-server#374). |

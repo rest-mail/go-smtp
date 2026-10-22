@@ -449,8 +449,14 @@ func (c *Conn) handleGreet(enhanced bool, arg string) {
 		c.setSession(sess)
 	}
 
+	// RFC 5321 §4.1.1.1: the server identifies itself on the first line of
+	// its HELO and EHLO replies (ehlo-ok-rsp = "250" SP Domain [SP ehlo-greet]).
+	greeting := "Hello " + domain
+	if c.server.Domain != "" {
+		greeting = c.server.Domain + " " + greeting
+	}
 	if !enhanced {
-		c.writeResponse(250, EnhancedCode{2, 0, 0}, fmt.Sprintf("Hello %s", domain))
+		c.writeResponse(250, EnhancedCode{2, 0, 0}, greeting)
 		return
 	}
 
@@ -523,7 +529,7 @@ func (c *Conn) handleGreet(enhanced bool, arg string) {
 		caps = append(caps, fb.Features(c)...)
 	}
 
-	args := []string{"Hello " + domain}
+	args := []string{greeting}
 	args = append(args, caps...)
 	c.writeResponse(250, NoEnhancedCode, args...)
 }
@@ -662,7 +668,8 @@ func (c *Conn) handleMail(arg string) {
 		case "AUTH":
 			value, err := decodeXtext(value)
 			if err != nil || value == "" {
-				c.writeResponse(500, EnhancedCode{5, 5, 4}, "Malformed AUTH parameter value")
+				// RFC 5321 §4.2.2: a syntax error in a parameter is 501, not 500.
+				c.writeResponse(501, EnhancedCode{5, 5, 4}, "Malformed AUTH parameter value")
 				return
 			}
 			if value == "<>" {
@@ -671,7 +678,7 @@ func (c *Conn) handleMail(arg string) {
 				p := parser{s: value}
 				value, err = p.parseMailbox()
 				if err != nil || p.s != "" {
-					c.writeResponse(500, EnhancedCode{5, 5, 4}, "Malformed AUTH parameter mailbox")
+					c.writeResponse(501, EnhancedCode{5, 5, 4}, "Malformed AUTH parameter mailbox")
 					return
 				}
 			}
@@ -1972,14 +1979,17 @@ func (c *Conn) writeResponse(code int, enhCode EnhancedCode, text ...string) {
 	// transform each single line with \n, into separate lines
 	text = strings.Split(strings.Join(text, "\n"), "\n")
 
+	// RFC 2034 §4: the same status code begins the text of every line of a
+	// multiline reply, not only the last.
+	status := ""
+	if enhCode != NoEnhancedCode {
+		status = fmt.Sprintf("%d.%d.%d ", enhCode[0], enhCode[1], enhCode[2])
+	}
 	lastLineIndex := len(text) - 1
 	for i, line := range text {
-		prefix := fmt.Sprintf("%d-", code)
+		prefix := fmt.Sprintf("%d-%s", code, status)
 		if i == lastLineIndex {
-			prefix = fmt.Sprintf("%d ", code)
-			if enhCode != NoEnhancedCode {
-				prefix += fmt.Sprintf("%d.%d.%d ", enhCode[0], enhCode[1], enhCode[2])
-			}
+			prefix = fmt.Sprintf("%d %s", code, status)
 		}
 
 		// RFC 5321 §4.5.3.1.5: count the prefix and CRLF in the 512-octet

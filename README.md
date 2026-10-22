@@ -1,8 +1,8 @@
 # go-smtp
 
 [![CI](https://github.com/rest-mail/go-smtp/actions/workflows/ci.yml/badge.svg)](https://github.com/rest-mail/go-smtp/actions/workflows/ci.yml)
-[![Coverage gate: >=94.5%](https://img.shields.io/badge/coverage%20gate-%3E%3D94.5%25-yellowgreen)](COVERAGE.md)
-[![Checklist: 293/393 mapped](https://img.shields.io/badge/checklist-293%2F393%20mapped-blue)](CHECKLIST.md)
+[![Coverage gate: >=95%](https://img.shields.io/badge/coverage%20gate-%3E%3D95%25-brightgreen)](COVERAGE.md)
+[![Checklist: 316/416 mapped](https://img.shields.io/badge/checklist-316%2F416%20mapped-blue)](CHECKLIST.md)
 [![Go Reference](https://pkg.go.dev/badge/github.com/rest-mail/go-smtp.svg)](https://pkg.go.dev/github.com/rest-mail/go-smtp)
 
 An ESMTP client and server library written in Go.

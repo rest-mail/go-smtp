@@ -297,7 +297,7 @@ func testServerEhlo(t *testing.T, fn ...serverConfigureFunc) (be *backend, s *sm
 	io.WriteString(c, "EHLO localhost\r\n")
 
 	scanner.Scan()
-	if scanner.Text() != "250-Hello localhost" {
+	if scanner.Text() != "250-localhost Hello localhost" {
 		t.Fatal("Invalid EHLO response:", scanner.Text())
 	}
 
@@ -1043,7 +1043,7 @@ func TestServer_anonymousUserOK(t *testing.T) {
 	}
 }
 
-// checklist: SMTP-EXT-08
+// checklist: SMTP-EXT-08 SMTP-AUTH-27 SMTP-AUTH-28
 func TestServer_authParam(t *testing.T) {
 	be, s, c, scanner, _ := testServerEhlo(t)
 	defer s.Close()
@@ -1052,14 +1052,14 @@ func TestServer_authParam(t *testing.T) {
 	// Invalid HEXCHAR
 	io.WriteString(c, "MAIL FROM: root@nsa.gov AUTH=<hey+A>\r\n")
 	scanner.Scan()
-	if !strings.HasPrefix(scanner.Text(), "500 ") {
+	if !strings.HasPrefix(scanner.Text(), "501 ") {
 		t.Fatal("Invalid MAIL response:", scanner.Text())
 	}
 
 	// Invalid HEXCHAR
 	io.WriteString(c, "MAIL FROM: root@nsa.gov AUTH=<he+YYa>\r\n")
 	scanner.Scan()
-	if !strings.HasPrefix(scanner.Text(), "500 ") {
+	if !strings.HasPrefix(scanner.Text(), "501 ") {
 		t.Fatal("Invalid MAIL response:", scanner.Text())
 	}
 
@@ -1893,8 +1893,8 @@ func TestServer_xtextLiteralNonXchar(t *testing.T) {
 
 	for _, tc := range []struct{ cmd, want string }{
 		{"MAIL FROM:<e=mc2@example.com> ENVID=e=mc2", "501 5.5.4"},
-		{"MAIL FROM:<e=mc2@example.com> AUTH=e=mc2@example.com", "500 5.5.4"},
-		{"MAIL FROM:<élisa@example.org> SMTPUTF8 AUTH=élisa@example.org", "500 5.5.4"},
+		{"MAIL FROM:<e=mc2@example.com> AUTH=e=mc2@example.com", "501 5.5.4"},
+		{"MAIL FROM:<élisa@example.org> SMTPUTF8 AUTH=élisa@example.org", "501 5.5.4"},
 		{"MAIL FROM:<e=mc2@example.com> ENVID=e+3Dmc2 AUTH=e+3Dmc2@example.com", "250 "},
 		{"RCPT TO:<e=mc2@example.com> ORCPT=rfc822;e=mc2@example.com", "501 5.5.4"},
 		{"RCPT TO:<e=mc2@example.com> ORCPT=rfc822;e+3Dmc2@example.com", "250 "},
