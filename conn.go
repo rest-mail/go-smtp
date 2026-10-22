@@ -415,6 +415,15 @@ func (c *Conn) handleGreet(enhanced bool, arg string) {
 		c.writeResponse(501, EnhancedCode{5, 5, 2}, "Domain/address argument required for HELO")
 		return
 	}
+	// RFC 6710 section 7 restricts the advertised policy to 1..20 ASCII
+	// letters, digits, hyphen, underscore or dot. Empty omits the policy.
+	// Refuse a bad configuration rather than advertising a different policy.
+	profile := string(c.server.MtPriorityProfile)
+	if enhanced && c.server.EnableMTPRIORITY && (len(profile) > 20 ||
+		strings.Trim(profile, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.") != "") {
+		c.writeResponse(451, EnhancedCode{4, 3, 5}, "Invalid MT-PRIORITY policy configuration")
+		return
+	}
 	// c.helo is populated before NewSession so
 	// NewSession can access it via Conn.Hostname.
 	c.helo = domain
@@ -440,8 +449,14 @@ func (c *Conn) handleGreet(enhanced bool, arg string) {
 		c.setSession(sess)
 	}
 
+	// RFC 5321 §4.1.1.1: the server identifies itself on the first line of
+	// its HELO and EHLO replies (ehlo-ok-rsp = "250" SP Domain [SP ehlo-greet]).
+	greeting := "Hello " + domain
+	if c.server.Domain != "" {
+		greeting = c.server.Domain + " " + greeting
+	}
 	if !enhanced {
-		c.writeResponse(250, EnhancedCode{2, 0, 0}, fmt.Sprintf("Hello %s", domain))
+		c.writeResponse(250, EnhancedCode{2, 0, 0}, greeting)
 		return
 	}
 
@@ -514,7 +529,7 @@ func (c *Conn) handleGreet(enhanced bool, arg string) {
 		caps = append(caps, fb.Features(c)...)
 	}
 
-	args := []string{"Hello " + domain}
+	args := []string{greeting}
 	args = append(args, caps...)
 	c.writeResponse(250, NoEnhancedCode, args...)
 }
@@ -661,7 +676,8 @@ func (c *Conn) handleMail(arg string) {
 		case "AUTH":
 			value, err := decodeXtext(value)
 			if err != nil || value == "" {
-				c.writeResponse(500, EnhancedCode{5, 5, 4}, "Malformed AUTH parameter value")
+				// RFC 5321 §4.2.2: a syntax error in a parameter is 501, not 500.
+				c.writeResponse(501, EnhancedCode{5, 5, 4}, "Malformed AUTH parameter value")
 				return
 			}
 			if value == "<>" {
@@ -670,7 +686,7 @@ func (c *Conn) handleMail(arg string) {
 				p := parser{s: value}
 				value, err = p.parseMailbox()
 				if err != nil || p.s != "" {
-					c.writeResponse(500, EnhancedCode{5, 5, 4}, "Malformed AUTH parameter mailbox")
+					c.writeResponse(501, EnhancedCode{5, 5, 4}, "Malformed AUTH parameter mailbox")
 					return
 				}
 			}
@@ -919,7 +935,9 @@ func decodeTypedAddress(val string) (DSNAddressType, string, error) {
 		return "", "", err
 	}
 
-	return DSNAddressType(aType), aAddr, nil
+	// Preserve the original type spelling for relays (RFC 3461 section
+	// 5.2.1(d)); normalization above is only for choosing the decoder.
+	return DSNAddressType(tv[0]), aAddr, nil
 }
 
 func encodeXtext(raw string) string {
@@ -1568,15 +1586,18 @@ func (c *Conn) handleBdat(arg string) {
 	// announced length before replying, including chunks already pipelined
 	// after a failed transaction or BDAT LAST (RFC 3030 §2).
 	if !c.fromReceived || len(c.recipients) == 0 {
-		if c.discardBdat(int64(size)) {
-			c.writeResponse(503, EnhancedCode{5, 5, 1}, "Missing RCPT TO command.")
+		if c.discardBdat(int64(size), last) {
+			c.writeBdatFailure(last, 503, EnhancedCode{5, 5, 1}, "Missing RCPT TO command.")
+		}
+		if c.server.LMTP && last {
+			c.reset()
 		}
 		return
 	}
 
 	if c.server.MaxMessageBytes > 0 && int64(size) > c.server.MaxMessageBytes-c.bytesReceived {
-		if c.discardBdat(int64(size)) {
-			c.writeResponse(552, EnhancedCode{5, 3, 4}, "Max message size exceeded")
+		if c.discardBdat(int64(size), last) {
+			c.writeBdatFailure(last, 552, EnhancedCode{5, 3, 4}, "Max message size exceeded")
 		}
 		c.reset()
 		return
@@ -1676,12 +1697,12 @@ func (c *Conn) handleBdat(arg string) {
 			// Mirror the DATA path: reply with a clean, generic status and close.
 			// The raw net error is logged, never sent to the client.
 			c.server.ErrorLog.Printf("BDAT chunk read timed out from %v: %v", c.conn.RemoteAddr(), err)
-			c.writeResponse(errBodyTimeout.Code, errBodyTimeout.EnhancedCode, errBodyTimeout.Message)
+			c.writeBdatFailure(last, errBodyTimeout.Code, errBodyTimeout.EnhancedCode, errBodyTimeout.Message)
 			c.closeAfterReplies()
 		case err == errPanic || isTerminating(err):
 			// A panic or a backend-requested termination: send the mapped status
 			// (already generic) and drop the connection.
-			c.writeResponse(dataErrorToStatus(err))
+			c.writeBdatBackendResult(last, err)
 			c.closeAfterReplies()
 		case drainErr != nil:
 			// The announced chunk could not be fully read from the client (a
@@ -1690,13 +1711,12 @@ func (c *Conn) handleBdat(arg string) {
 			// leaking the raw transport error or misparsing the unread octets as
 			// commands.
 			c.server.ErrorLog.Printf("BDAT chunk read error from %v: %v", c.conn.RemoteAddr(), err)
-			c.writeResponse(errBodyReadFailed.Code, errBodyReadFailed.EnhancedCode, errBodyReadFailed.Message)
+			c.writeBdatFailure(last, errBodyReadFailed.Code, errBodyReadFailed.EnhancedCode, errBodyReadFailed.Message)
 			c.closeAfterReplies()
 		default:
-			// The backend rejected the chunk early but it was fully drained from
-			// the client, so the stream is still framed. Report the backend's
-			// status and continue accepting commands.
-			c.writeResponse(dataErrorToStatus(err))
+			// A backend refusal with a fully drained chunk keeps the command
+			// stream framed and retains any explicit recipient outcomes.
+			c.writeBdatBackendResult(last, err)
 		}
 
 		c.reset()
@@ -1745,21 +1765,49 @@ func (c *Conn) handleBdat(arg string) {
 // chunk. Flush prior envelope replies first, but send this chunk's failure only
 // after all its octets have arrived. Body deadlines and command limits apply as
 // on the normal transfer path; a partial discard makes the connection unusable.
-func (c *Conn) discardBdat(size int64) bool {
+func (c *Conn) discardBdat(size int64, last bool) bool {
 	c.flush()
 	c.bodyReadDeadline = c.server.ReadTimeout
 	_, err := io.CopyN(io.Discard, c.text.R, size)
 	c.bodyReadDeadline = 0
 	if err != nil {
 		if isBodyReadTimeout(err) {
-			c.writeResponse(errBodyTimeout.Code, errBodyTimeout.EnhancedCode, errBodyTimeout.Message)
+			c.writeBdatFailure(last, errBodyTimeout.Code, errBodyTimeout.EnhancedCode, errBodyTimeout.Message)
 		} else {
-			c.writeResponse(errBodyReadFailed.Code, errBodyReadFailed.EnhancedCode, errBodyReadFailed.Message)
+			c.writeBdatFailure(last, errBodyReadFailed.Code, errBodyReadFailed.EnhancedCode, errBodyReadFailed.Message)
 		}
 		c.closeAfterReplies()
 		return false
 	}
 	return true
+}
+
+func (c *Conn) writeBdatBackendResult(last bool, err error) {
+	if c.server.LMTP && last {
+		// The worker fills unset statuses before closing its reader, including
+		// on panic, so all these results are already available.
+		for i, rcpt := range c.recipients {
+			code, enhanced, message := dataErrorToStatus(<-c.bdatStatus.status[i])
+			c.writeResponse(code, enhanced, "<"+rcpt+"> "+message)
+			c.flush()
+		}
+		return
+	}
+	c.writeResponse(dataErrorToStatus(err))
+}
+
+// writeBdatFailure preserves RFC 2033 section 4.3 reply counting on early
+// failure paths too. With no accepted recipients an LMTP LAST has no replies;
+// ordinary SMTP and non-LAST chunks retain their single reply.
+func (c *Conn) writeBdatFailure(last bool, code int, enhanced EnhancedCode, message string) {
+	if c.server.LMTP && last {
+		for _, rcpt := range c.recipients {
+			c.writeResponse(code, enhanced, "<"+rcpt+"> "+message)
+			c.flush()
+		}
+		return
+	}
+	c.writeResponse(code, enhanced, message)
 }
 
 // ErrDataReset is returned by Reader pased to Data function if client does not
@@ -1969,14 +2017,17 @@ func (c *Conn) writeResponse(code int, enhCode EnhancedCode, text ...string) {
 	// transform each single line with \n, into separate lines
 	text = strings.Split(strings.Join(text, "\n"), "\n")
 
+	// RFC 2034 §4: the same status code begins the text of every line of a
+	// multiline reply, not only the last.
+	status := ""
+	if enhCode != NoEnhancedCode {
+		status = fmt.Sprintf("%d.%d.%d ", enhCode[0], enhCode[1], enhCode[2])
+	}
 	lastLineIndex := len(text) - 1
 	for i, line := range text {
-		prefix := fmt.Sprintf("%d-", code)
+		prefix := fmt.Sprintf("%d-%s", code, status)
 		if i == lastLineIndex {
-			prefix = fmt.Sprintf("%d ", code)
-			if enhCode != NoEnhancedCode {
-				prefix += fmt.Sprintf("%d.%d.%d ", enhCode[0], enhCode[1], enhCode[2])
-			}
+			prefix = fmt.Sprintf("%d %s", code, status)
 		}
 
 		// RFC 5321 §4.5.3.1.5: count the prefix and CRLF in the 512-octet
