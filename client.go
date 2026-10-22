@@ -1089,10 +1089,10 @@ func (c *Client) Noop() error {
 // If Quit fails the connection is not closed, Close should be used
 // in this case.
 func (c *Client) Quit() error {
-	// After STARTTLS the greeting is done but no EHLO has been sent. A client
+	// After STARTTLS the greeting succeeded but no EHLO has been sent. A client
 	// rejecting the negotiated security quits at once (RFC 3207 §4.1), so QUIT
 	// does not first send a fresh EHLO.
-	if !c.didGreet || c.didHello {
+	if !c.didGreet || c.greetError != nil || c.didHello {
 		if err := c.hello(); err != nil {
 			return err
 		}
