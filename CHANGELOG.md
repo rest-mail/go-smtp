@@ -24,6 +24,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   local-part case, address-literal HELO/EHLO, NOOP parameters, commands
   allowed at any time and client timeouts, each with a wire test; the
   server's own command timeout is n/a (host configuration).
+- Wire proofs for PLAIN over verified TLS, backend MAIL storage refusals (452),
+  and default SMTPUTF8, RRVS and DELIVERBY command-length allowances. Five
+  previously unmapped checklist rows now have executable proofs (281/387).
 
 - README badges for CI, the enforced coverage floor and the checklist
   (276/387 mapped), checked against CHECKLIST.md and the CI `FLOOR` by
