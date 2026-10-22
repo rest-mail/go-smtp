@@ -415,6 +415,15 @@ func (c *Conn) handleGreet(enhanced bool, arg string) {
 		c.writeResponse(501, EnhancedCode{5, 5, 2}, "Domain/address argument required for HELO")
 		return
 	}
+	// RFC 6710 section 7 restricts the advertised policy to 1..20 ASCII
+	// letters, digits, hyphen, underscore or dot. Empty omits the policy.
+	// Refuse a bad configuration rather than advertising a different policy.
+	profile := string(c.server.MtPriorityProfile)
+	if enhanced && c.server.EnableMTPRIORITY && (len(profile) > 20 ||
+		strings.Trim(profile, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.") != "") {
+		c.writeResponse(451, EnhancedCode{4, 3, 5}, "Invalid MT-PRIORITY policy configuration")
+		return
+	}
 	// c.helo is populated before NewSession so
 	// NewSession can access it via Conn.Hostname.
 	c.helo = domain
