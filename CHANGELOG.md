@@ -33,6 +33,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   sending a fresh EHLO, so a client rejecting the negotiated security quits
   at once (RFC 3207 §4.1).
 
+- LMTP BDAT LAST now returns zero replies with no accepted recipients and one
+  reply per accepted RCPT on early size, backend or short-transfer failures.
+  Duplicate recipients and explicit backend outcomes are retained. Ordinary
+  SMTP and non-LAST reply counts are unchanged. Hosts consuming raw LMTP
+  replies must account for these corrected counts (RFC 2033 section 4.3).
+
 - Invalid enabled MT-PRIORITY policy names now receive EHLO/LHLO
   `451 4.3.5` before backend session creation, instead of advertising values
   outside RFC 6710's ASCII grammar or its 20-octet limit. An empty name still
@@ -69,6 +75,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Checked RFC 3207 STARTTLS policy rows: immediate TLS-state decisions by
   both peers, QUIT after a rejected negotiation, TLS required for selected
   hosts, opportunistic TLS and post-TLS capability changes.
+
+- Six wire-tested RFC 2033/6531 checklist clauses from four formerly combined
+  gaps: zero-recipient LAST, size/backend/short-transfer LAST failures,
+  explicitly declared internationalized headers and host-selected next-hop
+  rejection. Remaining content classification and routing/report policy stay
+  explicit host duties; no new public API or automatic MIME inspection.
 
 - Wire proofs for PLAIN over verified TLS, backend MAIL storage refusals (452),
   and default SMTPUTF8, RRVS and DELIVERBY command-length allowances. Five
