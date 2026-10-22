@@ -19,6 +19,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Wire proofs for PLAIN over verified TLS, backend MAIL storage refusals (452),
+  and default SMTPUTF8, RRVS and DELIVERBY command-length allowances. Five
+  previously unmapped checklist rows now have executable proofs (281/387).
 - Five previously unmapped transport requirements now have wire proofs:
   MT-PRIORITY profile grammar and independent DELIVERBY negotiation,
   STARTTLS at a pipeline boundary, AUTH between completed pipeline groups,
