@@ -15,6 +15,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Wire proofs for PLAIN over verified TLS, backend MAIL storage refusals (452),
+  and default SMTPUTF8, RRVS and DELIVERBY command-length allowances. Five
+  previously unmapped checklist rows now have executable proofs (281/387).
+
 - README badges for CI, the enforced coverage floor and the checklist
   (276/387 mapped), checked against CHECKLIST.md and the CI `FLOOR` by
   `TestReadmeBadges`. The CI coverage floor rises from 85% to 94.5%.
