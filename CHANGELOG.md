@@ -18,6 +18,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Checked RFC 4954 §5 MAIL `AUTH=` syntax (server decoding, malformed values,
   unauthenticated clients, client encoding and a client-to-server round trip)
   and §6 host failure replies (534/538/535/530/454) with wire tests.
+- Wire proofs for PLAIN over verified TLS, backend MAIL storage refusals (452),
+  and default SMTPUTF8, RRVS and DELIVERBY command-length allowances. Five
+  previously unmapped checklist rows now have executable proofs (281/387).
 
 - README badges for CI, the enforced coverage floor and the checklist
   (276/387 mapped), checked against CHECKLIST.md and the CI `FLOOR` by
