@@ -20,6 +20,15 @@ the SMTPUTF8 envelope (RFC 6531), the RRVS parameter (RFC 7293), DELIVERBY
 transport (RFC 2852), MT-PRIORITY transport (RFC 6710) and LMTP
 (RFC 2033) are audited below.
 The remaining AUTH and DSN lifecycle rules remain for later slices.
+The combined DSN budget proof exercises the default 2000-octet MAIL and RCPT
+limits with all built-in parameter families enabled, exact backend options and
+BDAT delivery. Hosts overriding MaxLineLength or adding custom capabilities
+must budget those configurations themselves. Binary sending remains n/a:
+the client has no BDAT sender, and explicit binary requests are refused even
+when BINARYMIME is advertised (MIME-CLIENT-03). Callers remain responsible for
+classifying opaque DATA content (MIME-POLICY-01). PIPE-CLIENT-08 and TLS-PIPE-01
+check synchronous AUTH and STARTTLS exchanges at completed group boundaries;
+custom extension commands have no queue API.
 RFC 6409 submission authentication (§4.3) is checked below; its remaining
 requirements are not yet audited. Reply line lengths (§4.5.3.1.5)
 are checked by SMTP-LIM-06;
@@ -209,7 +218,7 @@ commands; a host's relay and submission policy remains outside this library.
 | TLS-CLIENT-01 | 4 | MUST | After 220, negotiate TLS before any further SMTP commands; report success only after the handshake and certificate verification complete. | `TestRFC3207ClientUpgrade`, `TestRFC3207ClientHandshakeFailure`, `TestRFC3207ClientHandshakeTimeout`, `TestRFC3207ConstructorsVerifyHandshake` |
 | TLS-CLIENT-02 | 4.2 | MUST NOT | The client does not attempt STARTTLS while TLS is already active. | `TestRFC3207ClientUpgrade` |
 | TLS-CLIENT-03 | 4 | SHOULD | Abort the connection when a failure prevents a usable TLS handshake; do not resume plaintext SMTP. | `TestRFC3207ClientHandshakeFailure`, `TestRFC3207ClientHandshakeTimeout`, `TestRFC3207ConstructorsVerifyHandshake` |
-| TLS-PIPE-01 | 4 | Normative | STARTTLS is the last command in a pipelined group. | n/a: the client pipeline API has no STARTTLS operation; startTLS sends a standalone command. TestStartTLSReplySentBeforeHandshake covers the server accepting STARTTLS last in a group. |
+| TLS-PIPE-01 | 4 | Normative | STARTTLS is the last command in a pipelined group. | `TestRFC3207StartTLSBetweenGroups` |
 | TLS-POLICY-04 | 4.1, 6 | MUST | Both peers immediately decide whether the achieved authentication and privacy permit continuing; a tls.Config VerifyConnection refusal on either side ends the session before any further SMTP command. | `TestRFC3207PeersDecideOnNegotiatedSecurity` |
 | TLS-POLICY-05 | 4.1 | SHOULD | A client rejecting an otherwise completed TLS negotiation immediately sends QUIT; Quit after STARTTLS sends no fresh EHLO first. | `TestRFC3207ClientQuitsAfterRejectedTLS` |
 | TLS-POLICY-06 | 4.1 | SHOULD | A server rejecting an otherwise completed TLS negotiation answers commands other than QUIT with 554. | n/a: not supported yet as a library-wide state; TLSConfig can reject the handshake, and a host backend can reject the subsequent session. |
@@ -245,7 +254,7 @@ requires the caller to supply content suitable for the negotiated transport.
 | MIME-DATA-04 | 1, 3 | Normative | DATA permits lines of at least 1000 octets including CRLF. | `TestRFC6152ServerExample` |
 | MIME-CLIENT-01 | 3 | Normative | The client negotiates before using BODY=8BITMIME. | `TestRFC6152ClientBodyOptions`, `TestRFC6152ClientPreservesOctets` |
 | MIME-CLIENT-02 | 3 | MUST NOT | An explicit 8-bit request fails when the peer lacks support. | `TestRFC6152ClientBodyOptions` |
-| MIME-CLIENT-03 | 1, 3 | Normative | 8BITMIME does not authorize BINARYMIME transport. | `TestRFC6152ClientBodyOptions`, `TestRFC6152ServerBodyGrammar` |
+| MIME-CLIENT-03 | 1, 3 | Normative | 8BITMIME does not authorize BINARYMIME transport. | `TestRFC6152ClientBodyOptions`, `TestRFC6152ServerBodyGrammar`, `TestRFC3030ClientRefusesBinaryOnWire` |
 | MIME-POLICY-01 | 3 | MUST NOT | Send no high-bit content without negotiated support. | n/a: gap: default Mail/SendMail and Data do not inspect content; callers must ensure 7-bit content for an unextended peer. Explicit Body8BitMIME is protected by MIME-CLIENT-02. |
 | MIME-RELAY-01 | 3 | MUST | Accepted 8-bit mail retains its octets through delivery. | n/a: backend storage/delivery responsibility; tests prove bytes presented to Session.Data only. |
 | MIME-RELAY-02 | 3 | Normative | A relay facing an unextended next hop converts or fails delivery. | n/a: host routing, retry and delivery-failure policy; no MIME converter or queue is supplied. |
@@ -319,7 +328,7 @@ does not automatically choose that recovery or the host's retry policy.
 | PIPE-CLIENT-05 | 3.1 | Normative | Check DATA even when every RCPT failed; if DATA is accepted, recovery sends only a dot and checks the final response. | `TestRFC2920EmptyDataRecovery`, `TestRFC2920EmptyDataWriter` |
 | PIPE-CLIENT-06 | 3.1 | Normative | Only permitted commands occur inside a group; EHLO, DATA, VRFY, EXPN, TURN, QUIT and NOOP end a group. | `TestPipeline_Integration` |
 | PIPE-CLIENT-07 | 3.1 | MUST | A blocking client checks the actual TCP window and keeps each group within it, or processes replies while writing. | n/a: not supported yet; Pipeliner assumes a fixed 4096-byte window, does not discover the actual window and does not read concurrently. Existing congestion tests prove only that configured window, not arbitrary transports or oversized single commands. Tracked by rest-mail/rest-mail-server#374. |
-| PIPE-CLIENT-08 | 3.1 | Normative | Additional extension commands end a group unless their defining extension allows otherwise. | n/a: the client pipeline API exposes only RSET, MAIL and RCPT. Other commands use synchronous Client methods after Wait; extensions without client methods cannot be queued. |
+| PIPE-CLIENT-08 | 3.1 | Normative | Additional extension commands end a group unless their defining extension allows otherwise. | `TestRFC2920ExtensionCommandBetweenGroups` |
 | PIPE-SERVER-01 | 3.2(1) | MUST | Respond to commands in received order. | `TestRFC2920SynchronizationFlush`, `TestRFC2920Examples`, `TestPipelinedRepliesShareOneWrite` |
 | PIPE-SERVER-02 | 3.2(2) | SHOULD | Buffer responses to grouped transaction commands for transmission together. | `TestPipelinedRepliesShareOneWrite` |
 | PIPE-SERVER-03 | 3.2(3) | SHOULD | Accept DATA if and only if at least one RCPT was accepted, even when the last RCPT failed. | `TestRFC2920Examples` |
@@ -371,7 +380,7 @@ validating the enclosed MIME object remains the caller's responsibility.
 | CHUNK-EXAMPLE-02 | 4.2 | Normative | Transfer the binary example's two chunk lengths (100000 and 324), two recipients and zero-length LAST; placeholder content is deterministic binary data. | `TestRFC3030Examples` |
 | CHUNK-LIMIT-01 | 2 | Normative | The count grammar has no specified maximum. | n/a: current implementation accepts at most 2^32-1 octets per chunk; larger messages must use multiple chunks. Counts beyond that range receive 501. This is a documented implementation limitation, not full grammar conformance. |
 | CHUNK-CLIENT-01 | 2, 3 | MUST | Send BDAT only after CHUNKING; stop sending after a failed chunk and issue RSET after failure, DATA mixing or a command after LAST. | n/a: no BDAT client API; external senders own these rules. The server drains already-pipelined chunks, but does not enforce a mandatory RSET latch. |
-| BINARY-CLIENT-01 | 3 | MUST | Never send binary material without BINARYMIME negotiation and BODY=BINARYMIME. | n/a: no binary client sender; Client.Mail refuses BodyBinaryMIME even when advertised, as tested by MIME-CLIENT-03. External BDAT senders must negotiate. |
+| BINARY-CLIENT-01 | 3 | MUST | Never send binary material without BINARYMIME negotiation and BODY=BINARYMIME. | n/a: no binary/BDAT client sender exists; explicit BodyBinaryMIME is refused even when advertised (MIME-CLIENT-03). External BDAT senders must negotiate, and callers must classify opaque DATA content. |
 | BINARY-HOST-01 | 2, 3 | MUST | Canonicalize text MIME parts to CRLF and use the canonical representation for their content type. | n/a: transport treats bytes as opaque; the sender prepares valid MIME, including text charset rules. |
 | BINARY-HOST-02 | 3 | MUST | Storage, delivery and relay preserve every bit of accepted binary messages. | n/a: backend reader preservation is tested; storage and next-hop transport are host responsibilities. EnableBINARYMIME must reflect those capabilities. |
 | BINARY-HOST-03 | 3 | MUST | When the next hop lacks BINARYMIME, any MIME conversion must be lossless and produce valid 7bit/8bit MIME without nested transfer encodings, or use delivery-failure policy. | n/a: the library has no MIME converter, queue or binary client sender; host routing and notification policy remain unaudited. |
@@ -408,7 +417,7 @@ encoding remains in SMTP-EXT-06, not this RFC 3461 ASCII-address audit.
 | DSN-HOST-03 | 5.2, 5.2.1 | MUST | Preserve recipient requests and envelope metadata when relaying, and never issue a DSN for a null sender. | n/a: no relay queue or notification generator; host must carry options across inbound/outbound sessions and suppress report loops. |
 | DSN-HOST-04 | 5.2.2–5.2.6 | MUST | Honor delivery, delay, failure, foreign gateway and non-DSN next-hop reporting rules. | n/a: the host owns delivery/retries/reporting; a client omits DSN options for a non-DSN peer without reporting that downgrade, so callers must inspect Extension("DSN") and implement fallback policy. |
 | DSN-HOST-05 | 5.2.7–5.3 | MUST | Apply mailing-list, alias, confidential-forwarding and multi-recipient report rules; translate local/gateway requests and strip local control headers. | n/a: no alias/list expansion, gateway conversion or message-header processing in this transport library; host lifecycle audit remains. |
-| DSN-HOST-06 | 5.4 | MUST | Accept command lines large enough for all enabled extension combinations. | n/a: default 2000-octet command budget covers the tested DSN minima; hosts overriding MaxLineLength or adding capabilities must budget their combined maximum. No universal extension-combination audit is claimed. |
+| DSN-HOST-06 | 5.4 | MUST | Accept command lines large enough for all enabled extension combinations. | `TestRFC3461CombinedCommandBudget` |
 | DSN-HOST-07 | 6.1 | MUST | Reports use a null sender, the original envelope sender as recipient, no RET, and only NEVER if NOTIFY is specified. | n/a: a caller constructing a DSN owns its envelope; generic MAIL/RCPT cannot distinguish reports from ordinary messages. |
 | DSN-HOST-08 | 6.2–6.3 | MUST | Generate multipart delivery-status reports with the requested content and required envelope/recipient fields. | n/a: no report MIME generator in this library; host must implement and test report content, confidentiality and field requirements. |
 
@@ -537,7 +546,7 @@ to the backend. These host duties and configuration gaps are explicit below.
 | PRI-STATUS-01 | 4.1, 5, 10 | Normative | Preserve backend policy refusal codes, including X.7.15 for a too-low priority and 552 X.7.16 for priority-specific size limits; refusal does not start a transaction. | `TestRFC6710BackendStatuses` |
 | PRI-STATUS-02 | 4.1, 10 | SHOULD | A backend can report reassignment with a custom 250 X.3.6 and the new priority at the start of the text, while accepting the transaction. | `TestRFC6710BackendStatuses` |
 | PRI-LMTP-01 | 3(7), 6 | Normative | LMTP can advertise the extension and expose the original requested priority to a host delivery/filtering engine. | `TestRFC6710LongMailAndLMTP` |
-| PRI-PROFILE-01 | 7, 10.1(1) | Normative | A policy name is 1..20 ASCII letters, digits, hyphen, underscore or dot. | n/a: known configuration gap: MtPriorityProfile is advertised verbatim; the host must supply a valid name. |
+| PRI-PROFILE-01 | 7, 10.1(1) | Normative | A policy name is 1..20 ASCII letters, digits, hyphen, underscore or dot. | `TestRFC6710ProfileGrammarOnWire` |
 | PRI-TRACE-01 | 4.1(2), 7 | SHOULD | Include the PRIORITY clause when inserting Received trace fields. | n/a: host constructs Received fields; transport does not edit message headers. |
 | PRI-LOG-01 | 4.1(3) | SHOULD | Include the received priority in transaction logs. | n/a: host owns message transaction logging and receives the exact priority in Mail. |
 | PRI-DEFAULT-01 | 4.1(5) | Normative | Without an explicit priority use site policy, with default 0. | n/a: Mail receives nil; host chooses policy and must apply the default. |
@@ -548,12 +557,12 @@ to the backend. These host duties and configuration gaps are explicit below.
 | PRI-GATEWAY-01 | 4.5 | SHOULD | Foreign gateways map equivalent priorities or follow non-conforming-peer rules. | n/a: no foreign gateway in this transport library. |
 | PRI-DSN-01 | 4.6 | SHOULD | Generated delivery reports use the source message's priority. | n/a: host generates DSNs and retains the original metadata. |
 | PRI-DSN-02 | 4.6 | Normative | Relayed DSNs follow ordinary priority authorization rules rather than automatic elevation. | n/a: host owns message classification and policy; transport does not inspect DATA for DSNs. |
-| PRI-LEVEL-01 | 5 | MUST | Implement every distinct level of the selected assignment policy, rounding unsupported service classes upward (capped at the highest) internally. | n/a: host owns the scheduling/service-class policy; selecting a profile name alone supplies no scheduling implementation. |
+| PRI-LEVEL-01 | 5 | MUST | Implement every distinct level of the selected assignment policy, rounding unsupported service classes upward (capped at the highest) internally. | n/a: the transport has no queue or service-class scheduler; a syntactically valid advertised profile does not implement its priority levels. The host must implement the selected policy. |
 | PRI-ORDER-01 | 5.1 | Normative | Prefer higher-priority queued messages, retaining ordinary ordering within each level; retry/expiration intervals may be more aggressive. | n/a: transport has no queue, scheduler, retry or expiration machinery. |
 | PRI-GREY-01 | 5.1 | Normative | Authorized priority senders avoid greylisting except for explicit policy restrictions or misconfiguration. | n/a: greylisting and source trust policy belong to the host. |
-| PRI-TIME-01 | 5.2 | Normative | DELIVERBY and priority can be combined without requiring either extension to enable the other. | n/a: host selects deadlines per priority; the example tests only verify combined parameter transport. |
+| PRI-TIME-01 | 5.2 | Normative | DELIVERBY and priority can be combined without requiring either extension to enable the other. | `TestRFC6710IndependentDeliverByOnWire` |
 | PRI-MX-01 | 9.1 | Normative | Configure MX peers consistently or disable priority service to avoid inconsistent delivery. | n/a: DNS and multi-server deployment configuration are outside this library. |
-| PRI-POLICY-01 | 9.2, 10.1–10.2, Apps. A–C | Normative | Document and consistently deploy the assignment policy, its levels, retry/expiry/size limits and trust rules; register additional policies as appropriate. | n/a: host deployment and policy-registration duties; the built-in constants name policies without implementing their schedulers. |
+| PRI-POLICY-01 | 9.2, 10.1–10.2, Apps. A–C | Normative | Document and consistently deploy the assignment policy, its levels, retry/expiry/size limits and trust rules; register additional policies as appropriate. | n/a: deployment documentation, consistent site policy and IANA registration belong to the host/operator; validating the advertised name does not register or implement a policy. |
 
 
 ## LMTP (RFC 2033)
