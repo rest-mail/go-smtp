@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/rest-mail/go-smtp/actions/workflows/ci.yml/badge.svg)](https://github.com/rest-mail/go-smtp/actions/workflows/ci.yml)
 [![Coverage gate: >=95%](https://img.shields.io/badge/coverage%20gate-%3E%3D95%25-brightgreen)](COVERAGE.md)
-[![Checklist: 355/573 mapped](https://img.shields.io/badge/checklist-355%2F573%20mapped-blue)](CHECKLIST.md)
+[![Checklist: 356/573 mapped](https://img.shields.io/badge/checklist-356%2F573%20mapped-blue)](CHECKLIST.md)
 [![Go Reference](https://pkg.go.dev/badge/github.com/rest-mail/go-smtp.svg)](https://pkg.go.dev/github.com/rest-mail/go-smtp)
 
 An ESMTP client and server library written in Go.
@@ -79,7 +79,7 @@ Coverage is in [COVERAGE.md](COVERAGE.md).
 
 The badges at the top are checked by `TestReadmeBadges` in
 `internal/checklist`. The checklist badge counts mapped items over all items:
-the 218 `n/a` rows are in the denominator, so the badge never claims more than
+the 217 `n/a` rows are in the denominator, so the badge never claims more than
 the tests prove. The coverage badge shows the floor CI enforces (`FLOOR` in
 `.github/workflows/ci.yml`), not a measured figure; each CI run prints the
 measured statement coverage.
@@ -239,7 +239,8 @@ A backend may retain an identity pointer: later assertions use a copy.
 The [Postfix XCLIENT checklist](CHECKLIST.md#postfix-xclient-session-state-and-trust-boundaries)
 records incomplete compatibility: asserted HELO does not satisfy the new
 SMTP greeting requirement and PROTO does not select effective protocol state.
-Values remain literal (no xtext decoding),
+Values are xtext-decoded as Postfix does: `+HH` becomes its octet, a `+`
+without two hex digits gets 501 and other octets stay literal. Per-attribute
 address/protocol/sentinel validation is not implemented, and PORT/DESTADDR/DESTPORT
 are accepted but not surfaced or advertised. The host must validate attributes,
 map LOGIN to its own identity policy, apply relay/access rules and reset cached

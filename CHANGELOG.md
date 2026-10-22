@@ -15,6 +15,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- XCLIENT attribute values are now xtext-decoded (Postfix XCLIENT, RFC 1891):
+  `LOGIN=user+2Btag@example.com` asserts `user+tag@example.com`, and a `+`
+  without two hex digits gets `501` and leaves the identity unchanged. Other
+  octets stay literal, as in Postfix.
 - A MAIL or RCPT path with a second `@` in its domain, such as
   `<user@@example.net>`, now gets `501` instead of reaching the backend. No
   RFC 5321 domain or address literal contains `@` (RFC 6409 §5.1 asks

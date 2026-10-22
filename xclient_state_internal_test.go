@@ -112,11 +112,13 @@ func TestXClientRefusedDuringTransaction(t *testing.T) {
 	}
 }
 
-// checklist: XC-SYNTAX-01 XC-SYNTAX-02 XC-STATE-06
+// checklist: XC-SYNTAX-01 XC-SYNTAX-02 XC-SYNTAX-03 XC-STATE-06
 func TestXClientRejectedCommandIsAtomic(t *testing.T) {
 	for _, bad := range []string{
 		"XCLIENT", "XCLIENT NAME=changed.example BROKEN", "XCLIENT HELO=changed.example UNKNOWN=value",
 		"XCLIENT LOGIN=mallory NAME=changed.example ADDR",
+		"XCLIENT NAME=changed.example LOGIN=user+tag@example.com", "XCLIENT LOGIN=mallory HELO=a+2",
+		"XCLIENT NAME=changed.example PORT=+ZZ",
 	} {
 		t.Run(bad, func(t *testing.T) {
 			var conn *Conn
@@ -138,6 +140,28 @@ func TestXClientRejectedCommandIsAtomic(t *testing.T) {
 			}
 			xclientCommand(t, raw, br, "MAIL FROM:<a@example.com>", "250")
 		})
+	}
+}
+
+// checklist: XC-SYNTAX-03
+func TestXClientDecodesXtextValues(t *testing.T) {
+	var conn *Conn
+	_, raw, br, _ := newFlushTestConn(t, func(s *Server) {
+		enableTestXClient(s)
+		s.Backend = BackendFunc(func(c *Conn) (Session, error) {
+			conn = c
+			return flushAuthSession{}, nil
+		})
+	})
+	xclientCommand(t, raw, br, "XCLIENT LOGIN=user+2Btag+3Dx@example.com ADDR=IPV6+3A2001:db8::1 "+
+		"NAME=caf+c3+a9.example HELO=[UNAVAILABLE] PROTO=ESMTP PORT=25+32+35", "220")
+	xclientCommand(t, raw, br, "EHLO proxy.example", "250")
+	want := XClientAttrs{
+		Login: "user+tag=x@example.com", Addr: "IPV6:2001:db8::1", Name: "caf\u00e9.example",
+		Helo: "[UNAVAILABLE]", Proto: "ESMTP",
+	}
+	if got := *conn.XClient(); got != want {
+		t.Fatalf("XClient() = %+v, want %+v", got, want)
 	}
 }
 

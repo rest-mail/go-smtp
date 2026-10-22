@@ -137,3 +137,49 @@ func FuzzEncodeXtext(f *testing.F) {
 		}
 	})
 }
+
+// xclientValueGrammar is xtext as Postfix decodes XCLIENT values: a '+' must
+// start a hexchar; every other octet stands for itself.
+var xclientValueGrammar = regexp.MustCompile(`^(?:[^+]|\+[0-9A-Fa-f]{2})*$`)
+
+// checklist: XC-SYNTAX-03
+func FuzzDecodeXClientValue(f *testing.F) {
+	for _, seed := range []string{
+		"", "alice", "user+2Btag+3Dx@example.com", "IPV6+3A2001:db8::1", "+c3+a9",
+		"+", "+A", "+AG", "+G0", "a+", "a+2", "++2B", "user+tag@example.com",
+		"client\u0085example", "alice ", "a=b", "\x00", "\xff",
+		referenceEncodeXtext(allOctets()), strings.ToLower(referenceEncodeXtext(allOctets())),
+	} {
+		f.Add(seed)
+	}
+	f.Fuzz(func(t *testing.T, val string) {
+		if len(val) > maxParserFuzzInput {
+			t.Skip()
+		}
+		got, ok := decodeXClientValue(val)
+		if ok != xclientValueGrammar.MatchString(val) {
+			t.Fatalf("decodeXClientValue(%q) ok = %v, want %v", val, ok, !ok)
+		}
+		if !ok {
+			return
+		}
+		want := hexcharRe.ReplaceAllStringFunc(val, func(h string) string {
+			b, err := hex.DecodeString(h[1:])
+			if err != nil {
+				panic(err)
+			}
+			return string(b)
+		})
+		if got != want {
+			t.Fatalf("decodeXClientValue(%q) = %q, want %q", val, got, want)
+		}
+		// A valid xtext decodes exactly as the strict RFC 3461 decoder does.
+		if strict, err := decodeXtext(val); err == nil && strict != got {
+			t.Fatalf("decodeXClientValue(%q) = %q, decodeXtext = %q", val, got, strict)
+		}
+		// What a proxy encodes comes back unchanged.
+		if again, ok := decodeXClientValue(referenceEncodeXtext(val)); !ok || again != val {
+			t.Fatalf("decodeXClientValue(encode(%q)) = (%q, %v)", val, again, ok)
+		}
+	})
+}

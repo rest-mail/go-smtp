@@ -55,6 +55,7 @@ jobs:
           go test -run='^$' -fuzz='^FuzzParseForwardPath$' -fuzztime=10s -parallel=1 .
           go test -run='^$' -fuzz='^FuzzDecodeXtext$' -fuzztime=10s -parallel=1 .
           go test -run='^$' -fuzz='^FuzzEncodeXtext$' -fuzztime=10s -parallel=1 .
+          go test -run='^$' -fuzz='^FuzzDecodeXClientValue$' -fuzztime=10s -parallel=1 .
           go test -run='^$' -fuzz='^FuzzDecodeUTF8AddrXtext$' -fuzztime=10s -parallel=1 .
           go test -run='^$' -fuzz='^FuzzEncodeUTF8AddrXtext$' -fuzztime=10s -parallel=1 .
           go test -run='^$' -fuzz='^FuzzEncodeUTF8AddrUnitext$' -fuzztime=10s -parallel=1 .
