@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- Checked wire-level proof of historical HELO/EHLO identifying-suffix
+  interoperability (RFC 5321 §4.1.1.1), including LHLO, backend identity,
+  transaction reset, capability framing and delivery. Runtime behavior is
+  unchanged.
+
 ### Fixed
 
 - A SASL response line during AUTH is no longer limited by `MaxLineLength`
@@ -15,6 +22,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   the bound. An over-long response still gets `500 5.5.6` and the connection
   closes. The client side remains a known gap (SMTP-AUTH-32).
 
+- When an LMTP connection fails during the DATA replies,
+  `CloseWithLMTPResponse` now returns a temporary `451 4.4.2` failure in its
+  `LMTPDataError` for each recipient left without a reply, joined with the
+  transport error. Before, those recipients were missing from both results
+  (RFC 2033 §5).
 - A MAIL or RCPT path with a second `@` in its domain, such as
   `<user@@example.net>`, now gets `501` instead of reaching the backend. No
   RFC 5321 domain or address literal contains `@` (RFC 6409 §5.1 asks

@@ -135,6 +135,8 @@ func parseArgs(s string) (map[string]esmtpArg, error) {
 	return argMap, nil
 }
 
+// parseHelloArgument discards the historical identifying suffix tolerated by
+// RFC 5321 §4.1.1.1. Only the domain/address literal identifies the client.
 func parseHelloArgument(arg string) (string, error) {
 	domain := arg
 	if idx := strings.IndexAny(arg, " \t"); idx >= 0 {

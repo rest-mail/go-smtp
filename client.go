@@ -812,7 +812,10 @@ func (cmd *DataCommand) CloseWithResponse() (*DataResponse, error) {
 // server responses. It can only be called when the LMTP protocol is used.
 // Every 2xx final recipient reply is treated as successful completion.
 //
-// If server returns an error, it will be of type LMTPDataError.
+// If server returns an error, it will be of type LMTPDataError. If the
+// connection fails before every recipient has a reply, the transport error is
+// joined with an LMTPDataError that holds a temporary 451 4.4.2 failure for
+// each recipient left without one (RFC 2033 §5).
 func (cmd *DataCommand) CloseWithLMTPResponse() (map[string]*DataResponse, error) {
 	if !cmd.client.lmtp {
 		return nil, errors.New("smtp: CloseWithLMTPResponse used without an LMTP client")
@@ -837,10 +840,14 @@ func (cmd *DataCommand) CloseWithLMTPResponse() (map[string]*DataResponse, error
 			if errors.As(err, &smtpErr) {
 				lmtpErr[rcpt] = smtpErr
 			} else {
-				if len(lmtpErr) > 0 {
-					return resp, errors.Join(err, lmtpErr)
+				// RFC 2033 §5: a recipient without a reply when the
+				// connection fails must be treated as a temporary failure.
+				for _, rcpt := range cmd.client.rcpts[i:] {
+					if _, ok := lmtpErr[rcpt]; !ok {
+						lmtpErr[rcpt] = lmtpNoReplyError()
+					}
 				}
-				return resp, err
+				return resp, errors.Join(err, lmtpErr)
 			}
 		} else {
 			resp[rcpt] = &DataResponse{StatusText: msg}
@@ -887,6 +894,16 @@ type DataResponse struct {
 	// StatusText is the status text returned by the server. It may contain
 	// tracking information.
 	StatusText string
+}
+
+// lmtpNoReplyError stands in for a recipient reply that never arrived because
+// the connection failed first.
+func lmtpNoReplyError() *SMTPError {
+	return &SMTPError{
+		Code:         451,
+		EnhancedCode: EnhancedCode{4, 4, 2},
+		Message:      "Connection lost before the recipient reply",
+	}
 }
 
 // LMTPDataError is a collection of errors returned by an LMTP server for a
