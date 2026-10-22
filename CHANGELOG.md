@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- Multiline server replies repeat the enhanced status code on every line, as
+  RFC 2034 §4 requires; it used to appear on the last line only, so a client
+  reading the first line (including this package's) found no status code.
+
 - `Client.Quit` after STARTTLS sends QUIT immediately instead of first
   sending a fresh EHLO, so a client rejecting the negotiated security quits
   at once (RFC 3207 §4.1).
@@ -16,12 +20,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   `451 4.3.5` before backend session creation, instead of advertising values
   outside RFC 6710's ASCII grammar or its 20-octet limit. An empty name still
   omits the policy; a disabled extension ignores the unused configuration.
+
 - LMTP BDAT LAST flushes each recipient reply in RCPT order as soon as its
   status is available, without waiting for later deliveries or `LMTPData` to
   return. Unset statuses still use the backend's final result; transaction
   reset and subsequent commands wait for the backend to finish.
 
 ### Added
+
+- RFC 2034 (ENHANCEDSTATUSCODES) checklist section: nine rows, seven mapped
+  to new wire tests.
 
 - Checked RFC 3207 STARTTLS policy rows: immediate TLS-state decisions by
   both peers, QUIT after a rejected negotiation, TLS required for selected

@@ -17,8 +17,8 @@ STARTTLS (RFC 3207), SIZE (RFC 1870), PIPELINING (RFC 2920),
 CHUNKING/BINARYMIME (RFC 3030), 8BITMIME (RFC 6152), AUTH exchange rules
 (RFC 4954 §4), DSN parameter/protocol rules (RFC 3461 §§2–4, 5.1, 5.4),
 the SMTPUTF8 envelope (RFC 6531), the RRVS parameter (RFC 7293), DELIVERBY
-transport (RFC 2852), MT-PRIORITY transport (RFC 6710) and LMTP
-(RFC 2033) are audited below.
+transport (RFC 2852), MT-PRIORITY transport (RFC 6710), LMTP
+(RFC 2033) and ENHANCEDSTATUSCODES (RFC 2034) are audited below.
 The remaining AUTH and DSN lifecycle rules remain for later slices.
 The combined DSN budget proof exercises the default 2000-octet MAIL and RCPT
 limits with all built-in parameter families enabled, exact backend options and
@@ -678,3 +678,22 @@ Remaining RFC 6409 audit: port selection, return-path determination, domain and
 header validation, rejection policy, logging, timeouts, extension applicability,
 message modifications and delivery/relay responsibilities. No header rewriting,
 DNS qualification or submission-specific policy is supplied by this change.
+
+## ENHANCEDSTATUSCODES (RFC 2034)
+
+The server always advertises the extension and prefixes its own replies with
+an [RFC 3463](https://www.rfc-editor.org/rfc/rfc3463) status code. Codes a
+backend supplies in an `SMTPError` are sent as given; the rows below say which
+side owns each rule.
+
+| ID | Section | Level | Requirement | Tests |
+|----|---------|-------|-------------|-------|
+| ESC-ADV-01 | 3(2), 3(3) | Normative | EHLO and LHLO advertise the `ENHANCEDSTATUSCODES` keyword once, with no parameter. | `TestRFC2034Advertisement` |
+| ESC-VERB-01 | 3(5) | Normative | The extension defines no verbs or MAIL/RCPT parameters. | n/a: nothing to implement; the server adds no verb or parameter for it, and unknown verbs keep their ordinary 500 reply. |
+| ESC-REPLY-01 | 3(4), 4 | MUST | Every 2xx, 4xx and 5xx line other than the greeting and the HELO/EHLO reply begins its text with `class "." 1*3digit "." 1*3digit` and one or more spaces. | `TestRFC2034EveryReplyLine` |
+| ESC-REPLY-02 | 4 | MUST | The status class agrees with the reply code; a backend `SMTPError` without a status code gets X.0.0 and a plain error gets `554 5.0.0`. | `TestRFC2034EveryReplyLine`, `TestRFC2034MultilineSameCode` |
+| ESC-REPLY-03 | 4 | Normative | 3xx replies (354 after DATA, 334 SASL challenges) carry no status code. | `TestRFC2034EveryReplyLine` |
+| ESC-REPLY-04 | 4, 5 | MUST | Codes are sent whether or not the client used EHLO: before any greeting command and to a HELO client. | `TestRFC2034EveryReplyLine` |
+| ESC-MULTI-01 | 4 | MUST | Every line of a multiline reply begins with the same status code. | `TestRFC2034MultilineSameCode` |
+| ESC-CLIENT-01 | 4 | Normative | The client reads the status code from a reply and removes the repeated code from each line, keeping the multiline text. | `TestRFC2034ClientRoundTrip` |
+| ESC-HOST-01 | 4 | MUST | A backend-supplied status code agrees with its reply code and keeps subject and detail to 1-3 digits. | n/a: host responsibility; the server sends `SMTPError.EnhancedCode` as given, and `NoEnhancedCode` lets an extension omit it. Validating or rewriting host codes would change what hosts send, so it is left to the owner (rest-mail/rest-mail-server#374). |
