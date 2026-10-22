@@ -117,6 +117,16 @@ func (c *Conn) init() {
 	c.text = textproto.NewConn(rwc)
 }
 
+// handleHelp answers HELP with a 214 reply that points the client at the
+// greeting command, which lists the extensions this server offers.
+func (c *Conn) handleHelp() {
+	greet := "EHLO"
+	if c.server.LMTP {
+		greet = "LHLO"
+	}
+	c.writeResponse(214, EnhancedCode{2, 0, 0}, fmt.Sprintf("Send %v to list the supported extensions", greet))
+}
+
 // Commands are dispatched to the appropriate handler functions.
 func (c *Conn) handle(cmd string, arg string) {
 	// If panic happens during command handling - send 421 response
@@ -138,9 +148,14 @@ func (c *Conn) handle(cmd string, arg string) {
 
 	cmd = strings.ToUpper(cmd)
 	switch cmd {
-	case "SEND", "SOML", "SAML", "EXPN", "HELP", "TURN":
+	case "SEND", "SOML", "SAML", "EXPN", "TURN":
 		// These commands are not implemented in any state
 		c.writeResponse(502, EnhancedCode{5, 5, 1}, fmt.Sprintf("%v command not implemented", cmd))
+	case "HELP":
+		// RFC 5321 §4.1.1.8: HELP SHOULD work without arguments and is valid
+		// in any state (§4.1.4). An argument MAY ask for more specific help;
+		// it gets the same general reply.
+		c.handleHelp()
 	case "HELO", "EHLO", "LHLO":
 		lmtp := cmd == "LHLO"
 		enhanced := lmtp || cmd == "EHLO"

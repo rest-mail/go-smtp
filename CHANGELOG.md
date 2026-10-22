@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- `HELP`, with or without an argument, now gets a `214` reply that points the
+  client at `EHLO` (or `LHLO` on an LMTP server) instead of `502`. RFC 5321
+  §4.1.1.8 says servers SHOULD support HELP without arguments.
+
 - A MAIL or RCPT path with a second `@` in its domain, such as
   `<user@@example.net>`, now gets `501` instead of reaching the backend. No
   RFC 5321 domain or address literal contains `@` (RFC 6409 §5.1 asks
