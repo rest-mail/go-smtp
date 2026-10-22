@@ -604,6 +604,14 @@ func (c *Conn) handleMail(arg string) {
 				c.writeResponse(504, EnhancedCode{5, 5, 4}, "REQUIRETLS is not implemented")
 				return
 			}
+			if arg.hasValue {
+				c.writeResponse(501, EnhancedCode{5, 5, 4}, "REQUIRETLS does not accept a value")
+				return
+			}
+			if state, ok := c.TLSConnectionState(); !ok || !state.HandshakeComplete {
+				c.writeResponse(530, EnhancedCode{5, 7, 0}, "REQUIRETLS requires a TLS connection")
+				return
+			}
 			opts.RequireTLS = true
 		case "BODY":
 			value = strings.ToUpper(value)

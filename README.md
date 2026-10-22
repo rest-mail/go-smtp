@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/rest-mail/go-smtp/actions/workflows/ci.yml/badge.svg)](https://github.com/rest-mail/go-smtp/actions/workflows/ci.yml)
 [![Coverage gate: >=94.5%](https://img.shields.io/badge/coverage%20gate-%3E%3D94.5%25-yellowgreen)](COVERAGE.md)
-[![Checklist: 277/387 mapped](https://img.shields.io/badge/checklist-277%2F387%20mapped-blue)](CHECKLIST.md)
+[![Checklist: 285/411 mapped](https://img.shields.io/badge/checklist-285%2F411%20mapped-blue)](CHECKLIST.md)
 [![Go Reference](https://pkg.go.dev/badge/github.com/rest-mail/go-smtp.svg)](https://pkg.go.dev/github.com/rest-mail/go-smtp)
 
 An ESMTP client and server library written in Go.
@@ -78,7 +78,7 @@ Coverage is in [COVERAGE.md](COVERAGE.md).
 
 The badges at the top are checked by `TestReadmeBadges` in
 `internal/checklist`. The checklist badge counts mapped items over all items:
-the 111 `n/a` rows are in the denominator, so the badge never claims more than
+the 126 `n/a` rows are in the denominator, so the badge never claims more than
 the tests prove. The coverage badge shows the floor CI enforces (`FLOOR` in
 `.github/workflows/ci.yml`), not a measured figure; each CI run prints the
 measured statement coverage.
@@ -238,6 +238,25 @@ established authorization in `Session.Mail`, returning `ErrAuthRequired` otherwi
 (as in `ExampleServer`). This error sends `530 5.7.0`. Binding to port 587 does
 not select a submission mode, and `AllowInsecureAuth` only permits plaintext AUTH;
 it does not require authentication. Other RFC 6409 requirements remain unaudited.
+
+### REQUIRETLS transport scope
+
+
+The [RFC 8689 checklist](CHECKLIST.md#requiretls-rfc-8689) checks the envelope
+parameter and its TLS-only transport. The server refuses valued REQUIRETLS
+parameters with 501 5.5.4 and plaintext requests with 530 5.7.0. Both synchronous
+and pipelined clients refuse explicit REQUIRETLS over plaintext, even if a
+peer advertised it. Hosts using `MailOptions.RequireTLS` must establish TLS
+first and configure certificate/hostname verification; the flag does not
+override `tls.Config` or prove DNSSEC, MTA-STS or DANE validation.
+
+Enable `Server.EnableREQUIRETLS` only when the host persists and honors the
+received tag across storage, alias expansion and onward delivery. The library
+does not parse `TLS-Required: No`, implement TLS-optional policy, generate
+reports, override RET=FULL for bounces or choose the null-sender fallback.
+Those remain explicit host duties and API gaps, rather than full RFC 8689
+conformance claims. Hosts overriding `MaxLineLength` must budget all enabled
+extensions themselves.
 
 ## Relationship with net/smtp
 

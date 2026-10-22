@@ -18,7 +18,8 @@ CHUNKING/BINARYMIME (RFC 3030), 8BITMIME (RFC 6152), AUTH exchange rules
 (RFC 4954 §4), DSN parameter/protocol rules (RFC 3461 §§2–4, 5.1, 5.4),
 the SMTPUTF8 envelope (RFC 6531), the RRVS parameter (RFC 7293), DELIVERBY
 transport (RFC 2852), MT-PRIORITY transport (RFC 6710) and LMTP
-(RFC 2033) are audited below.
+(RFC 2033) are audited below. REQUIRETLS envelope transport (RFC 8689) is
+audited separately, with explicit header, trust and relay policy limits.
 The remaining AUTH and DSN lifecycle rules remain for later slices.
 RFC 6409 submission authentication (§4.3) is checked below; its remaining
 requirements are not yet audited. Reply line lengths (§4.5.3.1.5)
@@ -661,3 +662,43 @@ Remaining RFC 6409 audit: port selection, return-path determination, domain and
 header validation, rejection policy, logging, timeouts, extension applicability,
 message modifications and delivery/relay responsibilities. No header rewriting,
 DNS qualification or submission-specific policy is supplied by this change.
+
+
+## REQUIRETLS (RFC 8689)
+
+Sections refer to [RFC 8689](https://www.rfc-editor.org/rfc/rfc8689).
+This audits the previously unlisted REQUIRETLS envelope transport. Enabling
+`EnableREQUIRETLS` is a host promise to implement onward handling; a TLS socket
+and a boolean alone do not implement the RFC. The tests use certificate-verified
+TLS and actual SMTP commands, including ordinary and pipelined client MAIL.
+Header interpretation, trust/routing policy, storage and reports remain explicit
+host responsibilities or unsupported features below. The Appendix A.1 envelope
+addresses and STARTTLS/MAIL/RCPT/DATA sequence are exercised; its illustrative
+reply text and extra post-handshake greeting are not protocol requirements.
+
+| ID | Section | Level | Requirement | Tests |
+|----|---------|-------|-------------|-------|
+| REQTLS-EHLO-01 | 2, 7 | Normative | Advertise parameterless REQUIRETLS only when enabled and over TLS; a disabled server refuses the parameter. | `TestRFC8689Advertisement` |
+| REQTLS-SYN-01 | 2(4,8) | Normative | REQUIRETLS is a case-insensitive, value-free MAIL parameter; reject values (including empty), duplicates and use on RCPT without accepting the invalid request. | `TestRFC8689ParameterGrammar` |
+| REQTLS-TLS-01 | 2 | MUST | REQUIRETLS is used only in a TLS-protected session; a plaintext request is refused without starting a transaction. | `TestRFC8689ServerRefusesPlaintext` |
+| REQTLS-RECEIVE-01 | 4.1 | MUST | Expose the received REQUIRETLS tag to the backend for that message; RSET, EHLO and completed delivery do not apply it to a later untagged message. | `TestRFC8689ReceiptAndReset` |
+| REQTLS-LEN-01 | 2(5) | Normative | Allow 11 extra octets on MAIL, with the default command budget. | `TestRFC8689MailLength` |
+| REQTLS-CLIENT-01 | 2, 4.2.1(4) | MUST | A client refuses an explicit REQUIRETLS request before sending MAIL over plaintext, even if an unsafe peer advertised it; the same guard protects pipelined MAIL. | `TestRFC8689ClientRefusesPlaintext` |
+| REQTLS-CLIENT-02 | 2, 4.2.1(5) | MUST | Send the REQUIRETLS MAIL parameter only when the TLS peer advertises support; otherwise return an error without queuing or writing that MAIL. | `TestRFC8689ClientNegotiation` |
+| REQTLS-EXAMPLE-01 | App. A.1 (example) | Normative | Transfer the example's roger@example.org to editor@example.net envelope over verified TLS with REQUIRETLS and DATA. | `TestRFC8689ClientNegotiation` |
+| REQTLS-TRUST-01 | 2, 4.2.1(1–2) | MUST | Validate MX names through DNSSEC or MTA-STS before requiring TLS. | n/a: host routing duty; the library connects to a supplied address and performs no MX, DNSSEC or MTA-STS lookup. |
+| REQTLS-TRUST-02 | 2, 4.2.1(4) | MUST | Authenticate the server certificate, including the selected MX hostname, with trusted PKIX or DANE. | n/a: tls.Config and host validation policy own trust; RequireTLS enforces a completed TLS session but cannot attest to a custom verifier or DANE policy. InsecureSkipVerify without a validating callback remains unsafe and is not blocked. |
+| REQTLS-TRUST-03 | 4.2.1 | SHOULD | Apply current TLS security recommendations during negotiation. | n/a: host supplies protocol, cipher and certificate policy in tls.Config; no REQUIRETLS-specific security profile is imposed. |
+| REQTLS-STORE-01 | 4.1 | MUST | Persist the tag and retain it for every locally aliased or redistributed instance. | n/a: backend queue, durable storage and recipient expansion are outside the library; receipt exposes MailOptions.RequireTLS only. |
+| REQTLS-HEADER-01 | 3 | MUST NOT | Generate multiple TLS-Required headers; the field has the sole value No. | n/a: no message-header parser or generator; the host must validate and construct headers. |
+| REQTLS-HEADER-02 | 4.1, 4.3 | MUST | Tag TLS-Required: No messages accordingly when REQUIRETLS is absent, ignoring the header when REQUIRETLS is present. | n/a: opaque DATA is not interpreted; MailOptions has no TLS-optional tri-state. Hosts must parse content and prioritize the envelope tag themselves. |
+| REQTLS-OPTIONAL-01 | 3, 4.2.2 | MUST | For TLS-optional mail resolve the server, attempt STARTTLS and permit policy override/fallback; report failure when the server insists on TLS. | n/a: host controls routing, retry, downgrade and notification policy; the transport has no TLS-Required header handling or automatic fallback. |
+| REQTLS-RELAY-01 | 4.2.1, 4.3 | MUST | Preserve the requirement on onward relay and submission only after all trust and negotiation checks pass. | n/a: the client serializes a supplied tag, but host queue/relay code must retain it and perform DNS/certificate policy checks; no automatic relay is provided. |
+| REQTLS-FAIL-01 | 4.2.1 | MUST | After security/support failure, QUIT and try the remaining MX hosts; never transmit the protected message to an unsuitable route and generate a non-delivery report if none qualify. | n/a: no MX iteration, retry queue or report generator; client errors are returned to the host, which chooses QUIT or another permitted ordinary transaction. |
+| REQTLS-FAIL-02 | 4.2.1, 7 | SHOULD | Report 5.7.30 for missing REQUIRETLS and 5.7.10 for failed TLS establishment. | n/a: these are host-generated non-delivery status codes; local negotiation errors do not synthesize a DSN. |
+| REQTLS-DELIVERY-01 | 4.4 | SHOULD | Protect end-user retrieval according to RFC 8314. | n/a: IMAP, POP and webmail deployment are outside this SMTP transport. |
+| REQTLS-BOUNCE-01 | 5 | MUST | Protect resulting bounces with REQUIRETLS and use an empty reverse-path. | n/a: host classifies/generates bounces and chooses their envelope; generic Mail cannot identify a report. |
+| REQTLS-BOUNCE-02 | 5 | MUST | Treat REQUIRETLS bounces as RET=HDRS, disregarding RET=FULL. | n/a: host report generator decides included content; the transport exposes both options without rewriting the received request. |
+| REQTLS-BOUNCE-03 | 5 | SHOULD NOT | Discard null-sender bounces solely because the next hop lacks REQUIRETLS. | n/a: host must explicitly choose the bounce exception; the client conservatively refuses any explicit unsupported RequireTLS option, including a null sender. |
+| REQTLS-REORIGIN-01 | 6 | Normative | Apply incoming TLS requirements to reoriginated messages to the extent feasible. | n/a: mailing lists, vacation responders and other mediators are host applications. |
+| REQTLS-CONTENT-01 | 8.3 | MUST | Use end-to-end content encryption when intermediate MTAs must not see sensitive content. | n/a: REQUIRETLS protects hops only; OpenPGP/S/MIME content construction is outside this library. |

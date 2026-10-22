@@ -535,6 +535,9 @@ func (c *Client) buildMailCmd(from string, opts *MailOptions) (string, error) {
 		fmt.Fprintf(&sb, " SIZE=%v", opts.Size)
 	}
 	if opts != nil && opts.RequireTLS {
+		if state, ok := c.TLSConnectionState(); !ok || !state.HandshakeComplete {
+			return "", errors.New("smtp: REQUIRETLS requires a TLS connection")
+		}
 		if _, ok := c.ext["REQUIRETLS"]; ok {
 			sb.WriteString(" REQUIRETLS")
 		} else {

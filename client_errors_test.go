@@ -185,16 +185,16 @@ func isSMTPCode(code int) func(error) bool {
 	}
 }
 
-// RFC 8689 §4.1: REQUIRETLS is only sent to a server that advertised it.
+// RFC 8689 §2: an advertisement alone never authorizes plaintext REQUIRETLS.
 //
 // checklist: SMTP-CLI-07
 func TestClientMailRequireTLS(t *testing.T) {
 	c, wrote := newMailParamClient("REQUIRETLS")
-	if err := c.Mail("a@example.org", &MailOptions{RequireTLS: true}); err != nil {
-		t.Fatalf("Mail: %v", err)
+	if err := c.Mail("a@example.org", &MailOptions{RequireTLS: true}); err == nil {
+		t.Fatal("Mail accepted REQUIRETLS on a plaintext connection")
 	}
-	if got, want := wrote.String(), "MAIL FROM:<a@example.org> REQUIRETLS\r\n"; got != want {
-		t.Errorf("sent %q, want %q", got, want)
+	if wrote.Len() != 0 {
+		t.Errorf("sent %q, want nothing", wrote.String())
 	}
 
 	c, wrote = newMailParamClient()

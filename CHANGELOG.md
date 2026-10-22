@@ -8,12 +8,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- REQUIRETLS MAIL parameters reject values, including empty values, with
+  501 5.5.4. Enabled servers reject plaintext REQUIRETLS with 530 5.7.0.
+  Synchronous and pipelined clients reject explicit REQUIRETLS unless TLS
+  has completed, even when a plaintext peer advertises the capability.
+
 - LMTP BDAT LAST flushes each recipient reply in RCPT order as soon as its
   status is available, without waiting for later deliveries or `LMTPData` to
   return. Unset statuses still use the backend's final result; transaction
   reset and subsequent commands wait for the backend to finish.
 
 ### Added
+
+- RFC 8689 REQUIRETLS envelope checklist and certificate-verified wire tests
+  for advertisement, grammar, TLS-only use, per-message tags, reset, extended
+  MAIL length, client negotiation and the Appendix A.1 envelope. Header,
+  trust/routing, queue and bounce responsibilities remain explicit.
 
 - README badges for CI, the enforced coverage floor and the checklist
   (276/387 mapped), checked against CHECKLIST.md and the CI `FLOOR` by
