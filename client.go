@@ -193,7 +193,7 @@ func (c *Client) greet() error {
 	defer c.conn.SetDeadline(time.Time{})
 
 	c.didGreet = true
-	_, _, err := c.readResponse(220)
+	_, _, err := c.readResponse(2)
 	if err != nil {
 		c.greetError = err
 		c.text.Close()
@@ -271,7 +271,7 @@ func (c *Client) cmd(expectCode int, format string, args ...interface{}) (int, s
 // server does not support ehlo.
 func (c *Client) helo() error {
 	c.ext = nil
-	_, _, err := c.cmd(250, "HELO %s", c.localName)
+	_, _, err := c.cmd(2, "HELO %s", c.localName)
 	return err
 }
 
@@ -283,7 +283,7 @@ func (c *Client) ehlo() error {
 		cmd = "LHLO"
 	}
 
-	_, msg, err := c.cmd(250, "%s %s", cmd, c.localName)
+	_, msg, err := c.cmd(2, "%s %s", cmd, c.localName)
 	if err != nil {
 		return err
 	}
@@ -321,7 +321,7 @@ func (c *Client) startTLS(config *tls.Config) error {
 	if err := c.hello(); err != nil {
 		return err
 	}
-	_, _, err := c.cmd(220, "STARTTLS")
+	_, _, err := c.cmd(2, "STARTTLS")
 	if err != nil {
 		return err
 	}
@@ -381,7 +381,7 @@ func (c *Client) Verify(addr string) error {
 	if err := c.hello(); err != nil {
 		return err
 	}
-	_, _, err := c.cmd(250, "VRFY %s", addr)
+	_, _, err := c.cmd(2, "VRFY %s", addr)
 	return err
 }
 
@@ -482,7 +482,7 @@ func (c *Client) Mail(from string, opts *MailOptions) error {
 	if err != nil {
 		return err
 	}
-	if _, _, err = c.cmd(250, "%s", cmd); err != nil {
+	if _, _, err = c.cmd(2, "%s", cmd); err != nil {
 		return err
 	}
 	// A new transaction has begun; drop any recipients left over from a
@@ -639,7 +639,7 @@ func (c *Client) Rcpt(to string, opts *RcptOptions) error {
 	if err != nil {
 		return err
 	}
-	if _, _, err := c.cmd(25, "%s", cmd); err != nil {
+	if _, _, err := c.cmd(2, "%s", cmd); err != nil {
 		return err
 	}
 	c.rcpts = append(c.rcpts, to)
@@ -775,7 +775,7 @@ func (cmd *DataCommand) CloseWithResponse() (*DataResponse, error) {
 	cmd.client.conn.SetDeadline(time.Now().Add(cmd.client.SubmissionTimeout))
 	defer cmd.client.conn.SetDeadline(time.Time{})
 
-	_, msg, err := cmd.client.readResponse(250)
+	_, msg, err := cmd.client.readResponse(2)
 	if err != nil {
 		cmd.closeErr = err
 		return nil, err
@@ -896,7 +896,7 @@ func (lmtpErr LMTPDataError) Unwrap() []error {
 // writing sends an empty message (only the dot terminator). A call to
 // Data must be preceded by one or more calls to Rcpt.
 func (c *Client) Data() (*DataCommand, error) {
-	_, _, err := c.cmd(354, "DATA")
+	_, _, err := c.cmd(3, "DATA")
 	if err != nil {
 		return nil, err
 	}
@@ -1061,7 +1061,7 @@ func (c *Client) Reset() error {
 	if err := c.hello(); err != nil {
 		return err
 	}
-	if _, _, err := c.cmd(250, "RSET"); err != nil {
+	if _, _, err := c.cmd(2, "RSET"); err != nil {
 		return err
 	}
 
@@ -1080,7 +1080,7 @@ func (c *Client) Noop() error {
 	if err := c.hello(); err != nil {
 		return err
 	}
-	_, _, err := c.cmd(250, "NOOP")
+	_, _, err := c.cmd(2, "NOOP")
 	return err
 }
 
@@ -1092,7 +1092,7 @@ func (c *Client) Quit() error {
 	if err := c.hello(); err != nil {
 		return err
 	}
-	_, _, err := c.cmd(221, "QUIT")
+	_, _, err := c.cmd(2, "QUIT")
 	if err != nil {
 		return err
 	}

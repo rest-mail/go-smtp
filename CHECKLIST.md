@@ -71,6 +71,7 @@ SASL challenges retain the independent size rules of RFC 4954 §4.
 | SMTP-RSET-02 | 4.1.4 | MUST | A second EHLO or HELO clears the transaction exactly as RSET does. | `TestRFC5321_RsetAndSecondEhloClearTransaction` |
 | SMTP-RCPT-01 | 3.3, 4.1.1.3 | MUST | A transaction may have several recipients; each is answered on its own. | `TestRFC5321_RecipientLimit`, `TestRFC5321_HundredRecipients` |
 | SMTP-RCPT-02 | 4.5.3.1.8 | SHOULD | A server that limits recipients answers the ones over the limit 452 4.5.3, and the accepted ones stay in the transaction. | `TestRFC5321_RecipientLimit` |
+| SMTP-RCPT-03 | 3.6.1, 4.1.1.3 | MUST | The server accepts a source route in a forward-path or reverse-path and ignores it: the backend gets only the mailbox, with no route hosts. | `TestRFC5321_SourceRouteIgnored` |
 
 ## Message data (§4.1.1.4, §4.5.2)
 
@@ -83,6 +84,7 @@ SASL challenges retain the independent size rules of RFC 4954 §4.
 | SMTP-DATA-05 | 2.3.8 | Normative | The data is delivered as received: line endings are not rewritten, and an empty body is a valid message. | `TestServer_EmptyMessage`, `TestServer_LFDotLF` |
 | SMTP-DATA-06 | 4.5.3.1.6 | MUST | A text line of at least 1000 octets is accepted in DATA, whatever the command line limit is. | `TestServer_MaxLineLengthBoundsCommandsNotData` |
 | SMTP-DATA-07 | 4.1.1.4, 2.3.8, 4.5.2 | MUST | The data ends only at `<CRLF>.<CRLF>`: `LF.LF`, `CR.CR`, `LF.CRLF`, `CRLF.LF` and a CR after the leading dot (`CRLF.CR`) are content, never run as commands; a stray CR before the real `<CRLF>.<CRLF>` does not hide it, so the message ends there. | `TestEODNonStandardSequencesDoNotEndData`, `TestEODCRBeforeCRLFDotEndsData` |
+| SMTP-DATA-08 | 3.3 | MUST | When every RCPT was rejected, DATA gets 503 (or 554) and nothing is taken as message data; a client that gets a 5yz (or any non-3yz) reply to DATA sends no message data. | `TestRFC5321_DataAfterAllRecipientsRejected`, `TestRFC5321_ClientFirstDigitFailures` |
 
 ## Size limits and timeouts (§4.5.3)
 
@@ -126,6 +128,9 @@ SASL challenges retain the independent size rules of RFC 4954 §4.
 | SMTP-CLI-06 | 4.1.1.5 | MUST | A new MAIL starts with no recipients from the one before, and RSET clears them. | `TestClientMailClearsRcpts`, `TestPipelinerMailClearsRcpts`, `TestPipeline_Reset` |
 | SMTP-CLI-07 | 2.2.2 | MUST | The client does not send a MAIL parameter the server did not advertise, or one out of range. | `TestClientMailParamsUnadvertised`, `TestClientMailParamsOutOfRange`, `TestClientMailRequireTLS` |
 | SMTP-CLI-08 | n/a | Normative | The client can tell whether a connection it kept is still healthy before it reuses it. | `TestCheckConn_HealthyPlaintext`, `TestCheckConn_ServerClosedPlaintext`, `TestCheckConn_UnsolicitedData`, `TestCheckConn_BufferedData`, `TestCheckConn_TLS` |
+| SMTP-CLI-09 | 4.2.1, 4.3.2 | MUST | The client acts on the first digit of a reply code only: an unlisted 2yz (such as 252 to VRFY, 251 to MAIL, 299 to RCPT) is success, an unlisted 3yz to DATA is the go-ahead, and an unlisted 4yz or 5yz is an error with that code; the text is not consulted, and an empty text is accepted. Pipelined MAIL and RCPT follow the same rule. | `TestRFC5321_ClientFirstDigitOnly`, `TestRFC5321_ClientFirstDigitFailures`, `TestRFC5321_PipelinerFirstDigitOnly` |
+| SMTP-CLI-10 | 4.1.1.10, 3.8 | MUST | Quit sends QUIT before it closes the connection, and waits for the reply before closing. | `TestRFC5321_ClientQuitWaitsForReply` |
+| SMTP-CLI-11 | 4.2.1 | MUST | A reply with no text at all (a bare `250` with no space) is acceptable to the client. | n/a: known gap, left for the owner; replies are read with Go's `net/textproto`, which rejects a code line shorter than four characters as "short response". Accepting it needs a reply reader of our own. Senders SHOULD NOT send bare codes (4.2.1), and `250 ` with an empty text is accepted (SMTP-CLI-09). |
 
 ## Extensions (one row each; clause-by-clause checks come in later slots)
 
