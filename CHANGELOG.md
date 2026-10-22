@@ -8,6 +8,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- Command parsing tolerates trailing ASCII spaces and tabs before CRLF
+  (RFC 5321 §4.1.1). A single space after `NOOP`, `RSET`, `DATA` or `QUIT`
+  previously returned 501; trailing tabs could also prevent dispatch.
+  SMTPUTF8 argument bytes and message body whitespace are preserved.
+
 - REQUIRETLS MAIL parameters reject values, including empty values, with
   501 5.5.4. Enabled servers reject plaintext REQUIRETLS with 530 5.7.0.
   Synchronous and pipelined clients reject explicit REQUIRETLS unless TLS
