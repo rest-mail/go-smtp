@@ -154,6 +154,8 @@ claim a complete RFC 4954 audit. The §5 MAIL AUTH trust/relay rules, §6 policy
 §7 trace headers and §14 TLS identity requirements remain unaudited. Existing
 MAIL AUTH tests remain in SMTP-EXT-08. The host supplies the actual SASL
 mechanisms and credential/identity policy through AuthSession.
+SMTP-AUTH-24 installs a PLAIN backend and a verified STARTTLS client, with
+insecure authentication disabled; the host still configures TLS and credentials.
 
 | ID | Section | Level | Requirement | Tests |
 |----|---------|-------|-------------|-------|
@@ -180,7 +182,7 @@ mechanisms and credential/identity policy through AuthSession.
 | SMTP-AUTH-21 | RFC 4954 §4 | MUST | SASL security layers reset SMTP knowledge on both sides and TLS wraps SASL when both layers are active. | n/a: not supported; the go-sasl interface supplies authentication exchanges only, without a connection security-layer adapter. |
 | SMTP-AUTH-22 | RFC 4954 §4 | MUST | Supported mechanism challenge/response sizes are accepted independently of SMTP command line limits. | n/a: known gap; server continuations still share MaxLineLength (default 2000), and client challenges share its reply limit. A separate bounded SASL buffer is needed. |
 | SMTP-AUTH-23 | RFC 4954 §4 | SHOULD | Authorization identities use SASLprep; failed preparation or an unexpectedly empty prepared identity must fail authentication. | n/a: host responsibility; the transport receives opaque SASL bytes and no authorization identity. Hosts must implement preparation and return a SASL error on failure. |
-| SMTP-AUTH-24 | RFC 4954 §4 | MUST | PLAIN over TLS is available for interoperability. | n/a: host responsibility; applications must install a PLAIN AuthSession and a TLS configuration, and clients must supply a PLAIN sasl.Client. This exchange slice tests framing separately from TLS, not a complete PLAIN/TLS deployment. |
+| SMTP-AUTH-24 | RFC 4954 §4 | MUST | PLAIN over TLS is available for interoperability. | `TestRFC4954PlainOverTLS` |
 | SMTP-AUTH-25 | RFC 4954 §4 | MUST | AUTH is last in a pipelined group except for eligible one-round-trip mechanisms with an initial response. | n/a: client Auth is synchronous, outside the Pipeliner API; the raw server cannot distinguish a group boundary from buffered continuation bytes. Host-provided mechanisms must not negotiate unsupported security layers. |
 
 
@@ -260,6 +262,11 @@ require a resource check. Values beyond the signed 64-bit API range receive
 552 even when no administrator limit is configured. The client exposes SIZE
 and SMTP errors; queueing, notifications and retry policy belong to its host.
 The §8 example is a protocol test with backend-supplied recipient failures.
+SIZE-REPLY-03 proves a backend storage refusal reaches the wire as 452 and
+does not start a transaction; storage accounting remains a backend duty.
+The SMTPUTF8, RRVS and DELIVERBY length proofs use the default 2000-octet
+command budget. Hosts lowering MaxLineLength must still budget every enabled
+extension combination; these tests do not claim a universal combination audit.
 
 | ID | Section | Level | Requirement | Tests |
 |----|---------|-------|-------------|-------|
@@ -277,7 +284,7 @@ The §8 example is a protocol test with backend-supplied recipient failures.
 | SIZE-DATA-03 | 6.1, 6.3 | MAY | An underestimate may be accepted if the actual message still fits the server's fixed maximum. | `TestRFC1870DataOctets` |
 | SIZE-REPLY-01 | 4, 6.1, 7 | Normative | Refuse a declaration above the fixed maximum with 552 before DATA; equality is accepted. | `TestRFC1870Declarations` |
 | SIZE-REPLY-02 | 6.4 | MAY | A backend may refuse individual recipients with temporary 452 or permanent 552 without discarding other accepted recipients. | `TestRFC1870Example` |
-| SIZE-REPLY-03 | 6.1 | MAY | Temporary storage shortage may be refused with 452 at MAIL time. | n/a: backend storage policy; Session.Mail can return SMTPError 452. The library has no storage allocator. |
+| SIZE-REPLY-03 | 6.1 | MAY | Temporary storage shortage may be refused with 452 at MAIL time. | `TestRFC1870TemporaryStorageRefusal` |
 | SIZE-REPLY-04 | 6.3 | SHOULD NOT | After accepting an estimate, do not issue a size-based 552 for content no larger than that estimate. | `TestRFC1870DataOctets` |
 | SIZE-CLIENT-03 | 6.2, 6.4 | Normative | Preserve temporary and permanent errors from MAIL, RCPT, DATA and the final content response for host policy. | `TestRFC1870ClientFailures` |
 | SIZE-POLICY-01 | 6.2 | SHOULD | After MAIL 452, reset or quit and retry later. | n/a: host queue and retry policy; the client returns SMTPError and exposes Reset/Quit. |
@@ -439,7 +446,7 @@ UTF-8 `ORCPT` encoding of RFC 6533 stays in SMTP-EXT-06.
 | UTF8-MAIL-01 | 3.1 item 4, 3.4 | MUST | The MAIL parameter SMTPUTF8 does not accept a value; one is refused with 501 5.5.4. | `TestRFC6531ServerEnvelope`, `TestRFC6531ServerParameterValue` |
 | UTF8-MAIL-02 | 3.1 item 4 | Normative | The parameter is accepted case-insensitively and reaches the backend as `MailOptions.UTF8`; it is refused with 504 when not advertised. | `TestRFC6531ServerEnvelope`, `TestRFC6531ServerDisabled`, `TestRFC6531ServerParameterValue` |
 | UTF8-MAIL-03 | 3.1 item 4, 3.4 | MUST NOT | `SMTPUTF8=` with an empty value is refused. | `TestRFC6531ServerParameterValue` |
-| UTF8-MAIL-04 | 3.1 item 5 | Normative | The MAIL command line may be 10 octets longer to carry the parameter. | n/a: the default command limit (`MaxLineLength` 2000) is above RFC 5321's 512 plus 10; a host lowering it below 522 owns that choice. |
+| UTF8-MAIL-04 | 3.1 item 5 | Normative | The MAIL command line may be 10 octets longer to carry the parameter. | `TestRFCExtendedCommandBudgets` |
 | UTF8-ADDR-01 | 3.2, 3.3 | MUST | A server announcing SMTPUTF8 accepts a UTF-8 string wherever a mailbox appears, and passes it to the backend unchanged. | `TestRFC6531ServerEnvelope` |
 | UTF8-ADDR-02 | 3.5 | Normative | Without SMTPUTF8 on MAIL, a non-ASCII reverse-path gets 550 5.6.7 and a non-ASCII forward-path gets 553 5.6.7, whether or not the extension is enabled. | `TestRFC6531ServerEnvelope`, `TestRFC6531ServerDisabled` |
 | UTF8-ADDR-03 | 3.2; RFC 3629 | MUST | Addresses are UTF-8 strings: a mailbox with invalid UTF-8 octets is refused with 501 5.5.2. | `TestRFC6531ServerEnvelope` |
@@ -473,7 +480,7 @@ the timestamp and the no-support action in `RcptOptions`.
 | RRVS-SYN-03 | 3.1 | Normative | The only no-support actions are `;R` and `;C`; any other suffix, including an empty one, gets 501 5.5.4. | `TestRFC7293ParseArgument`, `TestServerRRVS` |
 | RRVS-SRV-01 | 3.1, 5.1.1 | MUST | The timestamp (in UTC) and the action reach the backend, and an absent action stays absent, so a relay can preserve it as sent. | `TestRFC7293Server`, `TestServerRRVS` |
 | RRVS-SRV-02 | 3.1 | Normative | The parameter is refused with 504 5.5.4 when RRVS is not advertised. | `TestRFC7293Server` |
-| RRVS-LEN-01 | 3.1 | Normative | The RCPT command line may be 33 octets longer to carry the parameter. | n/a: the default command limit (`MaxLineLength` 2000) is above RFC 5321's 512 plus 33; a host lowering it below 545 owns that choice. |
+| RRVS-LEN-01 | 3.1 | Normative | The RCPT command line may be 33 octets longer to carry the parameter. | `TestRFCExtendedCommandBudgets` |
 | RRVS-CLI-01 | 3.1 | MUST NOT | The client sends the timestamp in UTC without time-secfrac, and a no-support action only when the caller set one; an unknown action or a year outside 0000–9999 is refused before writing. | `TestRFC7293Client`, `TestClientRRVS` |
 | RRVS-CLI-02 | 5.1.1, 6 | MUST | To a server without RRVS, the client refuses a recipient whose action is reject or absent, without writing anything. | `TestRFC7293Client` |
 | RRVS-CLI-03 | 5.1.1, 6 | Normative | With the action `C`, the client sends the recipient to a server without RRVS without the parameter. | `TestRFC7293Client` |
@@ -502,7 +509,7 @@ passing a relative duration to `Session.Mail` does not enforce a deadline.
 | BY-CLI-01 | 3, 4.1.4.1 | MUST NOT | Return-mode mail is not sent when its remaining time is below the next hop's advertised minimum. | `TestRFC2852ClientMinimum` |
 | BY-CLI-02 | 2, 4.1.4.1 | Normative | Parse the minimum before future comma-separated options; refuse malformed minima for return mode without writing MAIL. | `TestRFC2852ClientMinimum` |
 | BY-EXAMPLE-01 | 6 | Normative | Accept the 120-second original and 98-second relayed envelopes; refuse the 240-second next-hop minimum and accept 30. | `TestRFC2852Server`, `TestRFC2852ClientMinimum` |
-| BY-LEN-01 | 2(5) | Normative | Allow 17 extra octets on MAIL for BY. | n/a: default MaxLineLength is 2000, above 512 plus 17; hosts lowering it must budget all enabled extensions. |
+| BY-LEN-01 | 2(5) | Normative | Allow 17 extra octets on MAIL for BY. | `TestRFCExtendedCommandBudgets` |
 | BY-CLOCK-01 | 4 | Normative | Convert relative time to an absolute deadline on receipt, without extending ordinary retention or treating it as a delivery start time. | n/a: host owns the clock and queue; Mail receives only a duration and must capture receipt time. |
 | BY-DSN-01 | 4.1.1 | Normative | Successful delivery honors requested SUCCESS notifications. | n/a: host owns DSN generation and recipient notification options. |
 | BY-DSN-02 | 4.1.2 | MUST | Before expiry, permanent failure produces failed DSNs for recipients with default or FAILURE notification policy. | n/a: host owns delivery outcome and DSN generation. |
