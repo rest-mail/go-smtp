@@ -21,6 +21,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - RFC 2034 (ENHANCEDSTATUSCODES) checklist section: nine rows, seven mapped
   to new wire tests.
+- Wire proofs for PLAIN over verified TLS, backend MAIL storage refusals (452),
+  and default SMTPUTF8, RRVS and DELIVERBY command-length allowances. Five
+  previously unmapped checklist rows now have executable proofs (281/387).
 
 - README badges for CI, the enforced coverage floor and the checklist
   (276/387 mapped), checked against CHECKLIST.md and the CI `FLOOR` by
