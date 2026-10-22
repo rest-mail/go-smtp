@@ -8,6 +8,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- REQUIRETLS MAIL parameters reject values, including empty values, with
+  501 5.5.4. Enabled servers reject plaintext REQUIRETLS with 530 5.7.0.
+  Synchronous and pipelined clients reject explicit REQUIRETLS unless TLS
+  has completed, even when a plaintext peer advertises the capability.
+
 - The client acts on the first digit of a reply code only (RFC 5321 §4.2.1,
   §4.3.2). A 252 to VRFY, a 251 to MAIL, any other 2yz completion, and any 3yz
   to DATA now succeed; before, every command but RCPT needed its exact code
@@ -57,6 +62,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   reset and subsequent commands wait for the backend to finish.
 
 ### Added
+
+- RFC 8689 REQUIRETLS envelope checklist and certificate-verified wire tests
+  for advertisement, grammar, TLS-only use, per-message tags, reset, extended
+  MAIL length, client negotiation and the Appendix A.1 envelope. Header,
+  trust/routing, queue and bounce responsibilities remain explicit.
 
 - Two checked RFC 5321 §§4.5.3.2/4.5.3.2.5 DATA timeout rows, with per-buffer
   renewal, SMTP/LMTP framing, blocked-write, error and configuration tests.
