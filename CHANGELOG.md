@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- `Client.Quit` after STARTTLS sends QUIT immediately instead of first
+  sending a fresh EHLO, so a client rejecting the negotiated security quits
+  at once (RFC 3207 §4.1).
+
 - Invalid enabled MT-PRIORITY policy names now receive EHLO/LHLO
   `451 4.3.5` before backend session creation, instead of advertising values
   outside RFC 6710's ASCII grammar or its 20-octet limit. An empty name still
@@ -18,6 +22,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   reset and subsequent commands wait for the backend to finish.
 
 ### Added
+
+- Checked RFC 3207 STARTTLS policy rows: immediate TLS-state decisions by
+  both peers, QUIT after a rejected negotiation, TLS required for selected
+  hosts, opportunistic TLS and post-TLS capability changes.
 
 - Wire proofs for PLAIN over verified TLS, backend MAIL storage refusals (452),
   and default SMTPUTF8, RRVS and DELIVERBY command-length allowances. Five

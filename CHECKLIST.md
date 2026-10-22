@@ -219,18 +219,19 @@ commands; a host's relay and submission policy remains outside this library.
 | TLS-CLIENT-02 | 4.2 | MUST NOT | The client does not attempt STARTTLS while TLS is already active. | `TestRFC3207ClientUpgrade` |
 | TLS-CLIENT-03 | 4 | SHOULD | Abort the connection when a failure prevents a usable TLS handshake; do not resume plaintext SMTP. | `TestRFC3207ClientHandshakeFailure`, `TestRFC3207ClientHandshakeTimeout`, `TestRFC3207ConstructorsVerifyHandshake` |
 | TLS-PIPE-01 | 4 | Normative | STARTTLS is the last command in a pipelined group. | `TestRFC3207StartTLSBetweenGroups` |
-| TLS-POLICY-04 | 4.1, 6 | MUST | Both peers immediately decide whether the achieved authentication and privacy permit continuing. | n/a: host policy through tls.Config (verification, client certificates, protocol and cipher restrictions) and TLSConnectionState; no universal trust policy is imposed by SMTP. Handshake rejection is tested by TLS-CLIENT-03. |
-| TLS-POLICY-05 | 4.1 | SHOULD | A client rejecting an otherwise completed TLS negotiation immediately sends QUIT. | n/a: host policy; the client exposes TLSConnectionState and Quit. Failed TLS negotiation closes the socket instead (TLS-CLIENT-03). |
+| TLS-POLICY-04 | 4.1, 6 | MUST | Both peers immediately decide whether the achieved authentication and privacy permit continuing; a tls.Config VerifyConnection refusal on either side ends the session before any further SMTP command. | `TestRFC3207PeersDecideOnNegotiatedSecurity` |
+| TLS-POLICY-05 | 4.1 | SHOULD | A client rejecting an otherwise completed TLS negotiation immediately sends QUIT; Quit after STARTTLS sends no fresh EHLO first. | `TestRFC3207ClientQuitsAfterRejectedTLS` |
 | TLS-POLICY-06 | 4.1 | SHOULD | A server rejecting an otherwise completed TLS negotiation answers commands other than QUIT with 554. | n/a: not supported yet as a library-wide state; TLSConfig can reject the handshake, and a host backend can reject the subsequent session. |
 | TLS-STATE-01 | 4.2, 6 | MUST | The server resets SMTP state and discards pre-TLS EHLO, authentication, backend session and XCLIENT assertions. | `TestRFC3207ServerDiscardsKnowledge` |
 | TLS-STATE-02 | 4.2, 6 | MUST | The client discards the pre-TLS service extension list and transaction recipients. | `TestRFC3207ClientUpgrade` |
 | TLS-STATE-03 | 4.2 | SHOULD | The client's first SMTP command after a successful negotiation is a fresh EHLO. | `TestRFC3207ClientUpgrade` |
 | TLS-STATE-04 | 4.2 | MUST | Both peers know whether TLS is active and expose the completed negotiation state. | `TestRFC3207ClientUpgrade`, `TestRFC3207ServerDiscardsKnowledge` |
 | TLS-STATE-05 | 4.2 | MUST NOT | The server does not advertise STARTTLS after the TLS handshake. | `TestRFC3207ServerDiscardsKnowledge` |
+| TLS-STATE-06 | 4.2 | MAY | The post-TLS EHLO list may differ from the plaintext one; with AllowInsecureAuth off, AUTH is offered and accepted only over TLS. | `TestRFC3207CapabilitiesChangeAfterTLS` |
 | TLS-SERVER-01 | 4.1, 6 | Normative | A failed server-side TLS handshake ends the connection, preventing further SMTP on a half-upgraded stream. | `TestStartTLSClosesOnHandshakeFailure` |
 | TLS-EXAMPLE-01 | 5 | Normative | The usage example's EHLO, STARTTLS, handshake and encrypted EHLO sequence changes the advertised capabilities. | `TestRFC3207ClientUpgrade`, `TestRFC3207ServerDiscardsKnowledge` |
-| TLS-SEC-01 | 6 | MUST | Selected hosts can require successful TLS negotiation meeting the configured cipher and authentication policy before message transfer. | n/a: client TLS-required constructors enforce negotiation using tls.Config; server per-host enforcement is host backend policy, not a built-in library-wide gate (TLS-POLICY-02). |
-| TLS-SEC-02 | 6 | SHOULD | Opportunistic TLS is also available as a local policy. | n/a: host transport choice; select DialStartTLS or Dial before transferring mail, with retry and downgrade policy outside the library. |
+| TLS-SEC-01 | 6 | MUST | Selected hosts can require successful TLS negotiation meeting the configured cipher and authentication policy before message transfer: TLS-required client constructors refuse missing STARTTLS or a weaker negotiated version, and a host backend can refuse plaintext MAIL from selected clients with 530 5.7.0. | `TestRFC3207RequireTLSForSelectedHosts` |
+| TLS-SEC-02 | 6 | SHOULD | Opportunistic TLS is also available as a local policy: DialStartTLS when STARTTLS is offered, plaintext Dial when it is not. | `TestRFC3207OpportunisticTLS` |
 
 ## 8BITMIME (RFC 6152)
 
