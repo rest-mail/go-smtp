@@ -81,7 +81,7 @@ type Server struct {
 	EnableMTPRIORITY bool
 	// Priority assignment policy name advertised with MT-PRIORITY. The host
 	// must supply 1..20 ASCII letters, digits, '-', '_' or '.' (RFC 6710
-	// section 7); the transport does not validate this configuration.
+	// section 7); EHLO/LHLO returns 451 4.3.5 if an enabled policy is invalid.
 	// An empty value omits the name; clients assume the MIXER policy.
 	MtPriorityProfile PriorityProfile
 
