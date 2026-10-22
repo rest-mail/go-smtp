@@ -57,6 +57,10 @@ type MailOptions struct {
 	//
 	// The message should be rejected if it can't be transmitted
 	// with TLS.
+	// Client MAIL (including pipelined MAIL) requires completed TLS and an
+	// advertised REQUIRETLS capability. The caller must configure certificate
+	// validation and perform any required DNSSEC/MTA-STS/DANE routing checks.
+	// Servers expose the received tag; hosts must persist and honor it.
 	RequireTLS bool
 
 	// The message envelope or message header contains UTF-8-encoded strings.
@@ -156,7 +160,9 @@ type RcptOptions struct {
 	// unspecified; the transport does not generate notifications.
 	Notify []DSNNotify
 
-	// Original recipient set by client.
+	// Original recipient set by client. The server preserves the address type
+	// spelling for relays; compare it case-insensitively. The client accepts
+	// case-insensitive RFC822/UTF-8 types and retains the supplied spelling.
 	OriginalRecipientType DSNAddressType
 	OriginalRecipient     string
 

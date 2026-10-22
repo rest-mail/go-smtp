@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/rest-mail/go-smtp/actions/workflows/ci.yml/badge.svg)](https://github.com/rest-mail/go-smtp/actions/workflows/ci.yml)
 [![Coverage gate: >=95%](https://img.shields.io/badge/coverage%20gate-%3E%3D95%25-brightgreen)](COVERAGE.md)
-[![Checklist: 309/419 mapped](https://img.shields.io/badge/checklist-309%2F419%20mapped-blue)](CHECKLIST.md)
+[![Checklist: 341/467 mapped](https://img.shields.io/badge/checklist-341%2F467%20mapped-blue)](CHECKLIST.md)
 [![Go Reference](https://pkg.go.dev/badge/github.com/rest-mail/go-smtp.svg)](https://pkg.go.dev/github.com/rest-mail/go-smtp)
 
 An ESMTP client and server library written in Go.
@@ -34,6 +34,7 @@ An ESMTP client and server library written in Go.
 ### Client API
 
 * Command batching with `Client.Pipeline()` — pipelines `RSET`/`MAIL`/`RCPT` per [RFC 2920] to cut round-trips on high-throughput senders
+* `Client.DataTransferTimeout` — a fresh timeout for each DATA network write, including the final flush (default 3 minutes); `SubmissionTimeout` separately bounds the final response. A failed body write is retained; close the connection rather than retrying or terminating a partial message.
 * `Client.CheckConn()` — detect a server-closed idle/pooled connection without sending a command (STARTTLS-safe)
 
 ## The RFC checklist
@@ -43,8 +44,8 @@ server and client core), RFC 3207 (STARTTLS), RFC 1870 (SIZE),
 RFC 2920 (PIPELINING), RFC 3030 (CHUNKING/BINARYMIME) and
 RFC 6152 (8BITMIME) item by item, plus individual
 AUTH exchange requirements from RFC 4954 §4 and the DSN parameter/protocol
-rules from RFC 3461 §§2–4, 5.1 and 5.4, and the SMTPUTF8 envelope rules
-from RFC 6531 (including refusal of `SMTPUTF8=`) and the RRVS parameter
+and relay transport rules from RFC 3461 §§2–4, 5.1, 5.2.1–5.2.2 and 5.4,
+and the SMTPUTF8 envelope rules from RFC 6531 (including refusal of `SMTPUTF8=`) and the RRVS parameter
 from RFC 7293, DELIVERBY transport from RFC 2852 and MT-PRIORITY transport
 from RFC 6710, LMTP from RFC 2033, and Postfix XCLIENT session state and
 trust boundaries (a non-IETF extension with explicit syntax gaps), plus the
@@ -78,7 +79,7 @@ Coverage is in [COVERAGE.md](COVERAGE.md).
 
 The badges at the top are checked by `TestReadmeBadges` in
 `internal/checklist`. The checklist badge counts mapped items over all items:
-the 110 `n/a` rows are in the denominator, so the badge never claims more than
+the 126 `n/a` rows are in the denominator, so the badge never claims more than
 the tests prove. The coverage badge shows the floor CI enforces (`FLOOR` in
 `.github/workflows/ci.yml`), not a measured figure; each CI run prints the
 measured statement coverage.
@@ -194,6 +195,14 @@ limits (552 5.7.16). Client.Mail refuses an explicit priority when the peer does
 not advertise MT-PRIORITY; a relay must explicitly choose fallback and omit the
 option for such a peer. These policy boundaries are recorded in the checklist.
 
+A message with internationalized headers needs `MailOptions.UTF8` even when
+all envelope addresses are ASCII, including headers inside nested MIME
+messages. The streaming client does not inspect content; `SendMail` detects
+envelope addresses only. With the flag set, an unsupported next hop is refused
+before MAIL or content is sent. A relay host must choose how that refusal
+becomes an upstream rejection, notification, retry or transformation; the
+checked two-hop example chooses rejection and then proves ASCII recovery.
+
 LMTP uses LHLO and refuses SMTP HELO/EHLO. `NewClientLMTP` preserves an LHLO
 refusal instead of falling back to HELO. `LMTPSession.LMTPData` can supply
 one status per accepted RCPT, including duplicate paths; unset statuses use
@@ -212,8 +221,12 @@ including unrecognized codes, and returns partial successes and known failures
 alongside transport errors. Treat every unanswered recipient as a temporary failure;
 there are no synthetic per-recipient 4xx entries or streaming callbacks. Its
 address-keyed maps cannot preserve separate duplicate-path outcomes. The
-checklist also records BDAT gaps: no-recipient LAST returns 503 instead
-of zero replies, and early failures use a single SMTP reply.
+server drains BDAT LAST with no accepted recipients and sends zero replies.
+Size-limit, early-backend and short-transfer LAST failures retain one reply
+per accepted RCPT, including duplicates; non-LAST chunks still have one reply.
+A failed transfer closes if unread octets would break command framing. A peer
+that completely loses its connection must still apply the temporary-failure
+rule above to any outcomes it did not receive.
 
 XCLIENT is restricted to connections approved by `TrustXCLIENT`. A successful
 assertion logs out the old backend session, clears SMTP greeting/authentication
@@ -238,6 +251,25 @@ established authorization in `Session.Mail`, returning `ErrAuthRequired` otherwi
 (as in `ExampleServer`). This error sends `530 5.7.0`. Binding to port 587 does
 not select a submission mode, and `AllowInsecureAuth` only permits plaintext AUTH;
 it does not require authentication. Other RFC 6409 requirements remain unaudited.
+
+### REQUIRETLS transport scope
+
+
+The [RFC 8689 checklist](CHECKLIST.md#requiretls-rfc-8689) checks the envelope
+parameter and its TLS-only transport. The server refuses valued REQUIRETLS
+parameters with 501 5.5.4 and plaintext requests with 530 5.7.0. Both synchronous
+and pipelined clients refuse explicit REQUIRETLS over plaintext, even if a
+peer advertised it. Hosts using `MailOptions.RequireTLS` must establish TLS
+first and configure certificate/hostname verification; the flag does not
+override `tls.Config` or prove DNSSEC, MTA-STS or DANE validation.
+
+Enable `Server.EnableREQUIRETLS` only when the host persists and honors the
+received tag across storage, alias expansion and onward delivery. The library
+does not parse `TLS-Required: No`, implement TLS-optional policy, generate
+reports, override RET=FULL for bounces or choose the null-sender fallback.
+Those remain explicit host duties and API gaps, rather than full RFC 8689
+conformance claims. Hosts overriding `MaxLineLength` must budget all enabled
+extensions themselves.
 
 ## Relationship with net/smtp
 

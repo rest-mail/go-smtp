@@ -112,8 +112,10 @@ func TestBasic(t *testing.T) {
 		t.Fatalf("MAIL should require authentication")
 	}
 
-	if err := c.Verify("user1@gmail.com"); err == nil {
-		t.Fatalf("First VRFY: expected no verification")
+	// 252 "cannot VRFY user, but will accept message" is a positive reply
+	// (RFC 5321 §3.5.3); the client acts on the first digit (§4.2.1).
+	if err := c.Verify("user1@gmail.com"); err != nil {
+		t.Fatalf("First VRFY: 252 is a positive reply, got %s", err)
 	}
 	if err := c.Verify("user2@gmail.com>\r\nDATA\r\nAnother injected message body\r\n.\r\nQUIT\r\n"); err == nil {
 		t.Fatalf("VRFY should have failed due to a message injection attempt")

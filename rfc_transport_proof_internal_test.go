@@ -408,7 +408,7 @@ func TestRFC3461CombinedCommandBudget(t *testing.T) {
 		t.Fatalf("RCPT calls=%d", len(rcpts))
 	}
 	r := <-rcpts
-	if r.OriginalRecipient != original || r.OriginalRecipientType != DSNAddressTypeRFC822 || !reflect.DeepEqual(r.Notify, []DSNNotify{DSNNotifySuccess, DSNNotifyFailure, DSNNotifyDelayed}) || !r.RequireRecipientValidSince.Equal(time.Date(2014, 5, 19, 22, 57, 43, 0, time.UTC)) || r.RequireRecipientValidSinceAction != RRVSActionReject {
+	if r.OriginalRecipient != original || r.OriginalRecipientType != DSNAddressType("rfc822") || !reflect.DeepEqual(r.Notify, []DSNNotify{DSNNotifySuccess, DSNNotifyFailure, DSNNotifyDelayed}) || !r.RequireRecipientValidSince.Equal(time.Date(2014, 5, 19, 22, 57, 43, 0, time.UTC)) || r.RequireRecipientValidSinceAction != RRVSActionReject {
 		t.Fatalf("RCPT options=%+v", r)
 	}
 	writeFlushBatch(t, raw, fmt.Sprintf("BDAT %d LAST\r\n%s", len(body), body))

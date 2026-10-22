@@ -90,7 +90,7 @@ func TestRFC3461Parameters(t *testing.T) {
 				if tc.code == "250 " && (!reflect.DeepEqual(opts.Notify, tc.notify) || opts.OriginalRecipient != tc.original) {
 					t.Fatalf("RCPT options = %+v", opts)
 				}
-				if tc.original != "" && opts.OriginalRecipientType != smtp.DSNAddressTypeRFC822 {
+				if tc.original != "" && !strings.EqualFold(string(opts.OriginalRecipientType), string(smtp.DSNAddressTypeRFC822)) {
 					t.Fatalf("address type = %s", opts.OriginalRecipientType)
 				}
 				// Start the next transaction directly, without RSET, to prove
