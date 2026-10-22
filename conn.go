@@ -162,6 +162,10 @@ func (c *Conn) handle(cmd string, arg string) {
 	case "NOOP":
 		c.writeResponse(250, EnhancedCode{2, 0, 0}, "I have successfully done nothing")
 	case "RSET": // Reset session
+		if arg != "" {
+			c.writeResponse(501, EnhancedCode{5, 5, 4}, "RSET does not accept parameters")
+			return
+		}
 		c.reset()
 		c.writeResponse(250, EnhancedCode{2, 0, 0}, "Session reset")
 	case "BDAT":
@@ -169,6 +173,10 @@ func (c *Conn) handle(cmd string, arg string) {
 	case "DATA":
 		c.handleData(arg)
 	case "QUIT":
+		if arg != "" {
+			c.writeResponse(501, EnhancedCode{5, 5, 4}, "QUIT does not accept parameters")
+			return
+		}
 		c.writeResponse(221, EnhancedCode{2, 0, 0}, "Bye")
 		c.closeAfterReplies()
 	case "AUTH":

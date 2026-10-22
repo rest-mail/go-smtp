@@ -48,6 +48,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   §4.1.1.1 requires; it used to be `250-Hello client.example.org`. Tests that
   match the exact reply text need updating.
 
+- RSET and QUIT with arguments now return 501 without clearing the active
+  transaction or closing the connection (RFC 5321 §§4.1.1, 4.3.2).
+
 - Multiline server replies repeat the enhanced status code on every line, as
   RFC 2034 §4 requires; it used to appear on the last line only, so a client
   reading the first line (including this package's) found no status code.
@@ -96,6 +99,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   local-part case, address-literal HELO/EHLO, NOOP parameters, commands
   allowed at any time and client timeouts, each with a wire test; the
   server's own command timeout is n/a (host configuration).
+
+- Dated line-by-line RFC 5321 sections 3–4 audit: 105 additional checklist
+  rows, 13 mapped to wire proofs and 92 with explicit host/unsupported
+  reasons. Five new wire tests cover command syntax/state, opaque content
+  above 64 KiB, quoted mailbox equivalence, HELO framing and client exchanges.
+  Existing open checklist slices are identified for merge reconciliation.
 
 - RFC 2034 (ENHANCEDSTATUSCODES) checklist section: nine rows, seven mapped
   to new wire tests.
