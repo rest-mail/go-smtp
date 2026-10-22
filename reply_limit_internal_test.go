@@ -63,13 +63,14 @@ func TestRFC5321_ReplyLine512(t *testing.T) {
 }
 
 // Each logical line, including lines introduced by a backend's newline, has
-// its own budget; the enhanced status stays on the final line as before.
+// its own budget, counting the enhanced status RFC 2034 §4 repeats on every
+// line.
 //
 // checklist: SMTP-LIM-06
 func TestRFC5321_MultilineReplyLine512(t *testing.T) {
 	long := strings.Repeat("x", 4096)
 	got := renderLimitReply(t, 550, EnhancedCode{5, 1, 1}, long+"\nshort", long)
-	want := "550-" + strings.Repeat("x", 506) + "\r\n550-short\r\n550 5.1.1 " + strings.Repeat("x", 500) + "\r\n"
+	want := "550-5.1.1 " + strings.Repeat("x", 500) + "\r\n550-5.1.1 short\r\n550 5.1.1 " + strings.Repeat("x", 500) + "\r\n"
 	if got != want {
 		t.Fatalf("multiline reply = %q, want %q", got, want)
 	}
