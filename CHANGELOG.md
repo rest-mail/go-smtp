@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- RSET and QUIT with arguments now return 501 without clearing the active
+  transaction or closing the connection (RFC 5321 §§4.1.1, 4.3.2).
+
 - Multiline server replies repeat the enhanced status code on every line, as
   RFC 2034 §4 requires; it used to appear on the last line only, so a client
   reading the first line (including this package's) found no status code.
@@ -27,6 +30,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   reset and subsequent commands wait for the backend to finish.
 
 ### Added
+
+- Dated line-by-line RFC 5321 sections 3–4 audit: 105 additional checklist
+  rows, 13 mapped to wire proofs and 92 with explicit host/unsupported
+  reasons. Five new wire tests cover command syntax/state, opaque content
+  above 64 KiB, quoted mailbox equivalence, HELO framing and client exchanges.
+  Existing open checklist slices are identified for merge reconciliation.
 
 - RFC 2034 (ENHANCEDSTATUSCODES) checklist section: nine rows, seven mapped
   to new wire tests.
