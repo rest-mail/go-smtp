@@ -26,6 +26,7 @@ type Client struct {
 	// connection later
 	conn       net.Conn
 	text       *textproto.Conn
+	lineLimit  *lineLimitReader // bounds reply lines read from conn
 	serverName string
 	lmtp       bool
 	ext        map[string]string // supported extensions
@@ -48,9 +49,24 @@ type Client struct {
 	// Time to wait for responses after final dot.
 	SubmissionTimeout time.Duration
 
+	// MaxAuthChallengeLength bounds each reply line read during AUTH, such as
+	// one 334 challenge, CRLF included. RFC 4954 §4 makes challenge sizes
+	// independent of the reply line limit, so the 2000-octet reply limit does
+	// not apply to them.
+	// Zero means 64 KiB, enough for large GSSAPI tokens; a negative value
+	// means no limit.
+	MaxAuthChallengeLength int
+
 	// Logger for all network activity.
 	DebugWriter io.Writer
 }
+
+// replyLineLimit is the reply line limit: the doubled maximum line length per
+// RFC 5321 (Section 4.5.3.1.6).
+const replyLineLimit = 2000
+
+// defaultMaxAuthChallengeLength is the default Client.MaxAuthChallengeLength.
+const defaultMaxAuthChallengeLength = 64 << 10
 
 // 30 seconds was chosen as it's the same duration as http.DefaultTransport's
 // timeout.
@@ -164,11 +180,11 @@ func (c *Client) setConn(conn net.Conn) {
 	var r io.Reader = conn
 	var w io.Writer = clientDataWriter{c}
 
-	r = &lineLimitReader{
-		R: conn,
-		// Doubled maximum line length per RFC 5321 (Section 4.5.3.1.6)
-		LineLimit: 2000,
+	c.lineLimit = &lineLimitReader{
+		R:         conn,
+		LineLimit: replyLineLimit,
 	}
+	r = c.lineLimit
 
 	r = io.TeeReader(r, clientDebugWriter{c})
 	w = io.MultiWriter(w, clientDebugWriter{c})
@@ -400,6 +416,17 @@ func (c *Client) Auth(a sasl.Client) error {
 	if err := c.hello(); err != nil {
 		return err
 	}
+	// RFC 4954 §4: challenge sizes are independent of the reply line limit,
+	// so the exchange reads its replies under their own bound.
+	limit := c.MaxAuthChallengeLength
+	if limit == 0 {
+		limit = defaultMaxAuthChallengeLength
+	} else if limit < 0 {
+		limit = 0
+	}
+	c.lineLimit.LineLimit = limit
+	defer func() { c.lineLimit.LineLimit = replyLineLimit }()
+
 	encoding := base64.StdEncoding
 	mech, resp, err := a.Start()
 	if err != nil {
