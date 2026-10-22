@@ -42,9 +42,10 @@ func wireTrim(s string) string {
 	return s
 }
 
-// checklist: SMTP-SYN-05
+// checklist: SMTP-SYN-05 SMTP-SYN-16
 func FuzzParseCmd(f *testing.F) {
 	for _, seed := range []string{
+		"NOOP ", "DATA\t", "RSET\t\t", "QUIT ", "STARTTLS\t", "XCLIENT\t", "NOOP x\u00a0 ", "NOOP x\r ",
 		"", "\r\n", "A", "NOOP", "noop\r\n", "HELOx", "EHLO café.example\r\n",
 		"MAIL FROM:<élisa@example.org> SMTPUTF8", "NOOP \xff=ſ", "DATA\x00",
 		"sTaRtTlS", "STARTTLS ignored", "STARTTLSx", "ſTARTTLS", "STARTTLſ", "ſtarttls ignored",
@@ -60,7 +61,12 @@ func FuzzParseCmd(f *testing.F) {
 		if err != nil {
 			return
 		}
-		wire := strings.TrimRight(line, "\r\n")
+		wire := strings.TrimRight(strings.TrimRight(line, "\r\n"), " \t")
+		// Adding trailing WSP must preserve dispatch and every argument byte.
+		paddedCmd, paddedArg, paddedErr := parseCmd(wire + " \t\r\n")
+		if paddedErr != nil || paddedCmd != cmd || paddedArg != arg {
+			t.Fatalf("trailing WSP changed parsing: (%q, %q, %v), want (%q, %q, nil)", paddedCmd, paddedArg, paddedErr, cmd, arg)
+		}
 		verb, rest, hasArgs := strings.Cut(wire, " ")
 		for i := 0; i < len(verb); i++ {
 			if verb[i] >= 0x80 {
@@ -91,7 +97,7 @@ func FuzzParseCmd(f *testing.F) {
 		if hasArgs {
 			lower += " " + rest
 		}
-		lowerCmd, lowerArg, lowerErr := parseCmd(lower)
+		lowerCmd, lowerArg, lowerErr := parseCmd(lower + " \t\r\n")
 		if lowerErr != nil || lowerCmd != cmd || lowerArg != arg {
 			t.Fatalf("ASCII case changed parsing: (%q, %q, %v)", lowerCmd, lowerArg, lowerErr)
 		}

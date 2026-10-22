@@ -47,7 +47,9 @@ type Server struct {
 	EnableSMTPUTF8 bool
 
 	// Advertise REQUIRETLS (RFC 8689) capability.
-	// Should be used only if backend supports it.
+	// Advertised only over TLS. Enable only when the backend persists and
+	// honors the tag across onward delivery, aliases and reports. TLS-Required
+	// header interpretation and routing/trust policy belong to the host.
 	EnableREQUIRETLS bool
 
 	// Advertise BINARYMIME (RFC 3030) capability.
