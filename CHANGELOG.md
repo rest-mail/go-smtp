@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- Checked wire-level proof of historical HELO/EHLO identifying-suffix
+  interoperability (RFC 5321 §4.1.1.1), including LHLO, backend identity,
+  transaction reset, capability framing and delivery. Runtime behavior is
+  unchanged.
+
 ### Fixed
 
 - DATA body writes could block indefinitely before Close. The client now
