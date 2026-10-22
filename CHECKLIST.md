@@ -84,8 +84,9 @@ SASL challenges retain the independent size rules of RFC 4954 §4.
 | SMTP-CMD-08 | 4.2.4 | MUST | An unrecognised command is a 500, and the server answers the next command. | `TestServer_tooManyInvalidCommands`, `TestRFC5321_UnknownAndArgumentErrors` |
 | SMTP-CMD-09 | 4.5.1 | MUST | The minimum implementation (EHLO, HELO, MAIL, RCPT, DATA, RSET, NOOP, QUIT, VRFY) is supported. | `TestServer`, `TestServer_helo`, `TestServer_otherCommands` |
 | SMTP-CMD-10 | 4.1.1.9 | SHOULD | A parameter string given with NOOP is ignored: NOOP with or without one is answered 250 and leaves the transaction as it was. | `TestRFC5321_NoopIgnoresParameter` |
+| SMTP-CMD-11 | 4.1.1.1; RFC 2033 §4.1 | MAY | Tolerate the historical identifying suffix after the greeting domain/address literal; keep only the identity in the reply and backend, preserving greeting/reset and delivery semantics for HELO, EHLO and LHLO. | `TestRFC5321HelloIdentifyingSuffix` |
 | SMTP-RSET-01 | 4.1.1.5 | MUST | RSET clears the sender, the recipients and the message data, and is answered 250. | `TestRFC5321_RsetAndSecondEhloClearTransaction`, `TestServer_otherCommands` |
-| SMTP-RSET-02 | 4.1.4 | MUST | A second EHLO or HELO clears the transaction exactly as RSET does. | `TestRFC5321_RsetAndSecondEhloClearTransaction` |
+| SMTP-RSET-02 | 4.1.4 | MUST | A second EHLO or HELO clears the transaction exactly as RSET does. | `TestRFC5321_RsetAndSecondEhloClearTransaction`, `TestRFC5321HelloIdentifyingSuffix` |
 | SMTP-RCPT-01 | 3.3, 4.1.1.3 | MUST | A transaction may have several recipients; each is answered on its own. | `TestRFC5321_RecipientLimit`, `TestRFC5321_HundredRecipients` |
 | SMTP-RCPT-02 | 4.5.3.1.8, 4.5.3.1.10 | MUST | A server that limits recipients answers the ones over the limit 452 4.5.3, and the accepted ones stay in the transaction. | `TestRFC5321_RecipientLimit` |
 | SMTP-RCPT-03 | 3.6.1, 4.1.1.3 | MUST | The server accepts a source route in a forward-path or reverse-path and ignores it: the backend gets only the mailbox, with no route hosts. | `TestRFC5321_SourceRouteIgnored` |
@@ -634,7 +635,7 @@ when CloseWithLMTPResponse finishes; it does not expose a streaming callback.
 
 | ID | Section | Level | Requirement | Tests |
 |----|---------|-------|-------------|-------|
-| LMTP-HELLO-01 | 4.1 | Normative | LHLO replaces EHLO, has its extension semantics and requires a domain; MAIL requires a successful greeting. | `TestRFC2033GreetingAndSequence` |
+| LMTP-HELLO-01 | 4.1 | Normative | LHLO replaces EHLO, has its extension semantics and requires a domain; MAIL requires a successful greeting. | `TestRFC2033GreetingAndSequence`, `TestRFC5321HelloIdentifyingSuffix` |
 | LMTP-HELLO-02 | 4.1 | MUST NOT | An LMTP server must not accept HELO or EHLO (500 recommended); SMTP refuses LHLO to detect configuration mistakes. | `TestRFC2033GreetingAndSequence` |
 | LMTP-HELLO-03 | 4.1 | Normative | The LMTP client uses LHLO and does not downgrade to SMTP HELO on a 500 or 502 refusal. | `TestRFC2033ClientNoSMTPFallback` |
 | LMTP-DATA-01 | 4.2 | MUST | DATA without any successful RCPT fails with 503, including when all recipients were refused or a prior transaction has ended. | `TestRFC2033GreetingAndSequence`, `TestRFC2033RecipientReplies` |
@@ -658,7 +659,7 @@ when CloseWithLMTPResponse finishes; it does not expose a streaming callback.
 | LMTP-FLUSH-02 | 5 | SHOULD | Send BDAT LAST recipient replies as soon as available, flushing in RCPT order before waiting for slower recipients or the backend's return. | `TestRFC2033BDATRecipientRepliesFlushed` |
 | LMTP-CLIENT-01 | 4.2, 5 | MUST | Preserve received recipient successes and failures when the connection closes before all replies arrive. | `TestRFC2033ClientPartialReplies` |
 | LMTP-CLIENT-02 | 4.2 | Normative | The client consumes multiline replies as one response before matching the next recipient. | `TestRFC2033ClientPartialReplies`, `TestRFC2033ClientPositiveCompletion` |
-| LMTP-CLIENT-03 | 5 | MUST | On disconnect treat recipients without replies as temporary failures. | n/a: known API gap: partial results and the transport error are returned, but no synthetic 4xx entry is added for unanswered recipients; caller must treat them as temporary failures. |
+| LMTP-CLIENT-03 | 5 | MUST | On disconnect treat recipients without replies as temporary failures. | `TestRFC2033ClientUnansweredRecipientsTemporary` |
 | LMTP-CLIENT-04 | 5 | SHOULD | Deliver received results to the caller as they arrive. | n/a: current synchronous API collects results until completion or failure; no per-reply callback. |
 | LMTP-CLIENT-06 | 4, 4.2 | Normative | Classify every 2xx final recipient reply as positive completion. | `TestRFC2033ClientPositiveCompletion`, `TestRFC2033ClientClosePositiveCompletion`, `TestRFC2033ClientPartialReplies` |
 | LMTP-CLIENT-05 | 4.2, 4.3 | Normative | Expose independent outcomes for duplicate accepted paths. | n/a: known API limitation: wire replies are consumed separately but result maps are keyed by address, so duplicate outcomes may collapse; use distinct transactions when each outcome must be retained. |
