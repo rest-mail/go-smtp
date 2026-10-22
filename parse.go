@@ -384,6 +384,11 @@ func (p *parser) parseMailbox() (string, error) {
 		if isCTL(ch) {
 			return "", fmt.Errorf("control byte in domain")
 		}
+		// Neither Domain nor address-literal (RFC 5321 §4.1.2) can hold
+		// another "@"; a second one means the mailbox is malformed.
+		if ch == '@' {
+			return "", fmt.Errorf("malformed domain")
+		}
 		p.readByte()
 		sb.WriteByte(ch)
 	}

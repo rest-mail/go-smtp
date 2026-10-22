@@ -8,6 +8,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- A MAIL or RCPT path with a second `@` in its domain, such as
+  `<user@@example.net>`, now gets `501` instead of reaching the backend. No
+  RFC 5321 domain or address literal contains `@` (RFC 6409 §5.1 asks
+  submission servers to reject such envelope syntax). CHECKLIST.md now records
+  the rest of RFC 6409 section by section.
+
 - Command parsing tolerates trailing ASCII spaces and tabs before CRLF
   (RFC 5321 §4.1.1). A single space after `NOOP`, `RSET`, `DATA` or `QUIT`
   previously returned 501; trailing tabs could also prevent dispatch.
