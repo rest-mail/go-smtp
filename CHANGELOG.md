@@ -8,6 +8,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- A MAIL or RCPT path with a second `@` in its domain, such as
+  `<user@@example.net>`, now gets `501` instead of reaching the backend. No
+  RFC 5321 domain or address literal contains `@` (RFC 6409 §5.1 asks
+  submission servers to reject such envelope syntax). CHECKLIST.md now records
+  the rest of RFC 6409 section by section.
+
 - The first line of the HELO and EHLO replies now starts with the server's
   domain (`250-mx.example.net Hello client.example.org`), as RFC 5321
   §4.1.1.1 requires; it used to be `250-Hello client.example.org`. Tests that

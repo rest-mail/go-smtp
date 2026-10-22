@@ -29,8 +29,9 @@ when BINARYMIME is advertised (MIME-CLIENT-03). Callers remain responsible for
 classifying opaque DATA content (MIME-POLICY-01). PIPE-CLIENT-08 and TLS-PIPE-01
 check synchronous AUTH and STARTTLS exchanges at completed group boundaries;
 custom extension commands have no queue API.
-RFC 6409 submission authentication (§4.3) is checked below; its remaining
-requirements are not yet audited. Reply line lengths (§4.5.3.1.5)
+RFC 6409 submission is audited section by section below: authentication (§4.3),
+envelope syntax (§5.1), the extension set (§7) and address preservation (§8.8)
+are checked; the rest are host duties. Reply line lengths (§4.5.3.1.5)
 are checked by SMTP-LIM-06;
 SASL challenges retain the independent size rules of RFC 4954 §4.
 
@@ -680,11 +681,28 @@ The tests use a backend with that policy and a plaintext in-memory pipe.
 | SUB-AUTH-02 | RFC 6409 §4.3 | MUST | By default, reject unauthenticated MAIL unless independent authentication or authorization is established. | n/a: host policy; the generic relay/submission server has no submission mode. Backends must enforce this in Mail; the test backend demonstrates the contract, not automatic enforcement. |
 | SUB-AUTH-03 | RFC 6409 §§4.3, 7 | MUST | Submission supports AUTH; independently authorized sessions may submit without it. DATA and BDAT use the same authorized envelope. | `TestRFC6409SubmissionAuthentication` |
 | SUB-NULL-01 | RFC 6409 §3.2 | MUST NOT | A null reverse path alone does not cause submission rejection. | `TestRFC6409SubmissionAuthentication` |
+| SUB-PORT-01 | RFC 6409 §3.1 | MAY | Port 587 carries submissions; a site may designate port 25 hosts as MSAs. | n/a: listener address is host configuration; the server treats every port alike, so a submission listener needs a submission backend (SUB-AUTH-02). |
+| SUB-RET-01 | RFC 6409 §3.2 | SHOULD | Reject immediately (550 to MAIL) when no return path to the submitting user can be determined. | n/a: host policy; Backend Mail sees the reverse path and AUTH state and returns the SMTPError. |
+| SUB-CODE-01 | RFC 6409 §§4.1, 6.1–6.3 | Normative | 554 rejects improper MAIL, RCPT or DATA; 550 5.7.1/5.7.0 rejects on submission rights, permissions or site policy. | n/a: these rejections are backend decisions; codes a backend supplies in an SMTPError are sent as given (ESC rows). |
+| SUB-FQDN-01 | RFC 6409 §4.2 | MUST | Ensure every envelope domain, and every header address domain if the message text is examined, is fully qualified; reject incomplete multi-level domains rather than expand them. | n/a: the server does no DNS or domain qualification and never expands domains; Backend Mail and Rcpt must reject unqualified domains with 554. |
+| SUB-SYN-01 | RFC 6409 §5.1 | SHOULD | Reject a MAIL or RCPT command whose envelope address has illegal syntax with 501. | `TestRFC6409SubmissionExtensions` |
+| SUB-SYN-02 | RFC 6409 §5.1 | SHOULD | If the message text is examined, reject illegal header address syntax with 554 after end-of-data. | n/a: the server passes message content to the backend unexamined; header checks are the backend's. |
+| SUB-LOG-01 | RFC 6409 §5.2 | SHOULD | Log message errors, especially client misconfiguration, with limits against log flooding. | n/a: host duty; Server.ErrorLog receives only server-side failures, and client-error logging policy belongs to the backend. |
+| SUB-TIME-01 | RFC 6409 §5.3 | SHOULD | Respond to every command, even DATA, in under 2 minutes. | n/a: reply latency is set by the backend's Mail, Rcpt and Data calls; ReadTimeout and WriteTimeout are host configuration. |
+| SUB-OPT-01 | RFC 6409 §§6.4–6.5 | MAY | Permit reduced authentication for postmaster, and convert character sets or encodings. | n/a: optional host policy; the server delivers Postmaster paths (SMTP rows) and never converts content. |
+| SUB-EXT-01 | RFC 6409 §7 | MUST | Offer PIPELINING, ENHANCEDSTATUSCODES, DSN and 8BITMIME (SHOULD) and AUTH (MUST). | `TestRFC6409SubmissionExtensions` |
+| SUB-EXT-02 | RFC 6409 §7 | MUST NOT | Offer neither ETRN nor ATRN on submission. | `TestRFC6409SubmissionExtensions` |
+| SUB-EXT-03 | RFC 6409 §7 | MUST NOT | Do not use the 521 reply code on submission. | n/a: no server path sends 521; a code a backend supplies is the host's. |
+| SUB-EXT-04 | RFC 6409 §7 | SHOULD | Future SMTP extensions say whether they are valid on the submission port. | n/a: a duty for extension authors, not an implementation. |
+| SUB-MOD-01 | RFC 6409 §8.8 | MUST NOT | Do not rewrite a forward-pointing (destination) address against RFC 5321's local-part rules. | `TestRFC6409SubmissionExtensions` |
+| SUB-MOD-02 | RFC 6409 §§8, 8.1–8.7 | MUST | Forwarded or delivered messages conform to RFC 5321/5322; an added Sender holds a valid address; add Message-ID if missing; Date, transfer encoding, signing, encryption and alias resolution are optional. | n/a: the server never modifies submitted content or adds header fields; any modification, and conformance of what is relayed onward, is the backend's. |
 
-Remaining RFC 6409 audit: port selection, return-path determination, domain and
-header validation, rejection policy, logging, timeouts, extension applicability,
-message modifications and delivery/relay responsibilities. No header rewriting,
-DNS qualification or submission-specific policy is supplied by this change.
+RFC 6409 has now been read section by section (§§1–12). Its explicit
+requirements each have a row above; port selection, return-path policy, domain
+qualification, logging, latency and message modification are host duties. The
+server supplies the transport: the §7 extension set, 501 for malformed envelope
+paths, and paths passed to the backend unchanged. Enabling DSN is still the
+host's choice (`EnableDSN`); the test enables it.
 
 ## ENHANCEDSTATUSCODES (RFC 2034)
 
