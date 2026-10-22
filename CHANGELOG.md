@@ -8,6 +8,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- DATA body writes could block indefinitely before Close. The client now
+  applies `DataTransferTimeout` to each network write, including the final
+  flush, and retains a write failure so a partial message cannot be retried or
+  completed accidentally. SMTP and LMTP share this behavior. The default is
+  three minutes; a nonpositive value disables it. `SubmissionTimeout` now
+  controls only the final reply, independently of writing the body/terminator.
+
 - Preserve received ORCPT address-type spelling through relay: decoding no longer
   uppercases the type, and the outbound client accepts supported types in any
   ASCII letter case while retaining the supplied spelling. Hosts comparing
@@ -37,6 +44,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   reset and subsequent commands wait for the backend to finish.
 
 ### Added
+
+- Two checked RFC 5321 §§4.5.3.2/4.5.3.2.5 DATA timeout rows, with per-buffer
+  renewal, SMTP/LMTP framing, blocked-write, error and configuration tests.
 
 - Six RFC 3461 relay transport checklist mappings, split from the previously
   combined host rows: ENVID, RET, per-recipient NOTIFY, original ORCPT, optional

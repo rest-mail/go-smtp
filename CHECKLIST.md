@@ -109,6 +109,16 @@ SASL challenges retain the independent size rules of RFC 4954 §4.
 | SMTP-LIM-06 | 4.5.3.1.5 | MUST | A server reply line is at most 512 octets, code and CRLF included; RFC 4954 SASL challenges have independent size rules. | `TestRFC5321_ReplyLine512`, `TestRFC5321_MultilineReplyLine512`, `TestRFC5321_BackendReplyLine512`, `TestRFC4954_LongChallengeNotTruncated` |
 | SMTP-LIM-07 | 4.5.3.2 | SHOULD | The client times out a server that stops answering: each command reply within `CommandTimeout` (default 5 minutes), the reply after the final dot within `SubmissionTimeout` (default 12 minutes, over the 10 the RFC asks for). | `TestRFC5321_ClientTimeouts` |
 | SMTP-LIM-08 | 4.5.3.2.7 | SHOULD | The server waits at least 5 minutes for the next command before it times out. | n/a: host configuration; `Server.ReadTimeout` is zero (no timeout) by default, and a host that sets one chooses its length. SMTP-LIM-05 checks a configured timeout. |
+| SMTP-LIM-09 | 4.5.3.2, 4.5.3.2.5 | MUST | Arm a fresh timeout on each DATA network buffer, including the terminating flush; stalled writes fail without terminating a partial message as complete. | `TestRFC5321DataWriteDeadlinePerBuffer`, `TestRFC5321DataWriteStallTimeout`, `TestRFC5321DataWriteDeadlineErrorsAndDisabled`, `TestDataCloseHonoursWriteDeadline` |
+| SMTP-LIM-10 | 4.5.3.2, 4.5.3.2.5 | SHOULD | DATA block timeouts are configurable without recompilation, default to 3 minutes, and remain independent of the final-response timer. | `TestRFC5321DataWriteDeadlinePerBuffer`, `TestRFC5321DataWriteDeadlineErrorsAndDisabled` |
+
+`Client.DataTransferTimeout` covers each underlying network write during DATA
+(and LMTP DATA), including content flushed by Close and the final dot. The
+default is three minutes; a nonpositive value explicitly disables this timer.
+`SubmissionTimeout` independently bounds the final server response. This does
+not bound caller content production or debug logging, and the client has no
+BDAT sender. Applications must close a connection after a failed body write;
+the DATA writer retains the error and refuses further writes or termination.
 
 ## Replies (§4.2)
 

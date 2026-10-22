@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/rest-mail/go-smtp/actions/workflows/ci.yml/badge.svg)](https://github.com/rest-mail/go-smtp/actions/workflows/ci.yml)
 [![Coverage gate: >=95%](https://img.shields.io/badge/coverage%20gate-%3E%3D95%25-brightgreen)](COVERAGE.md)
-[![Checklist: 316/416 mapped](https://img.shields.io/badge/checklist-316%2F416%20mapped-blue)](CHECKLIST.md)
+[![Checklist: 318/418 mapped](https://img.shields.io/badge/checklist-318%2F418%20mapped-blue)](CHECKLIST.md)
 [![Go Reference](https://pkg.go.dev/badge/github.com/rest-mail/go-smtp.svg)](https://pkg.go.dev/github.com/rest-mail/go-smtp)
 
 An ESMTP client and server library written in Go.
@@ -34,6 +34,7 @@ An ESMTP client and server library written in Go.
 ### Client API
 
 * Command batching with `Client.Pipeline()` — pipelines `RSET`/`MAIL`/`RCPT` per [RFC 2920] to cut round-trips on high-throughput senders
+* `Client.DataTransferTimeout` — a fresh timeout for each DATA network write, including the final flush (default 3 minutes); `SubmissionTimeout` separately bounds the final response. A failed body write is retained; close the connection rather than retrying or terminating a partial message.
 * `Client.CheckConn()` — detect a server-closed idle/pooled connection without sending a command (STARTTLS-safe)
 
 ## The RFC checklist

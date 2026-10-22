@@ -199,14 +199,14 @@ func TestServerCloseSends421(t *testing.T) {
 // terminating flush must be bounded by a write deadline so a wedged peer that
 // stops reading cannot block the close write forever.
 //
-// checklist: SMTP-SRV-02
+// checklist: SMTP-SRV-02 SMTP-LIM-09
 func TestDataCloseHonoursWriteDeadline(t *testing.T) {
 	cconn, sconn := net.Pipe()
 	defer func() { _ = cconn.Close() }()
 	defer func() { _ = sconn.Close() }()
 
 	c := NewClient(cconn)
-	c.SubmissionTimeout = 100 * time.Millisecond
+	c.DataTransferTimeout = 100 * time.Millisecond
 
 	// Build a DATA writer directly, skipping the DATA handshake. net.Pipe is
 	// unbuffered, so with nothing reading sconn the terminating flush blocks
