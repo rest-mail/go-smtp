@@ -15,6 +15,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   three minutes; a nonpositive value disables it. `SubmissionTimeout` now
   controls only the final reply, independently of writing the body/terminator.
 
+- Preserve received ORCPT address-type spelling through relay: decoding no longer
+  uppercases the type, and the outbound client accepts supported types in any
+  ASCII letter case while retaining the supplied spelling. Hosts comparing
+  `RcptOptions.OriginalRecipientType` must now compare it case-insensitively.
+
 - The first line of the HELO and EHLO replies now starts with the server's
   domain (`250-mx.example.net Hello client.example.org`), as RFC 5321
   §4.1.1.1 requires; it used to be `250-Hello client.example.org`. Tests that
@@ -42,6 +47,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - Two checked RFC 5321 §§4.5.3.2/4.5.3.2.5 DATA timeout rows, with per-buffer
   renewal, SMTP/LMTP framing, blocked-write, error and configuration tests.
+
+- Six RFC 3461 relay transport checklist mappings, split from the previously
+  combined host rows: ENVID, RET, per-recipient NOTIFY, original ORCPT, optional
+  host-added ORCPT and omission of parameters for a non-DSN next hop. Real SMTP
+  wire tests cover ordinary and pipelined outbound delivery. Queueing, routing
+  and report-generation duties remain explicitly outside transport coverage.
+
+- Checked RFC 4954 §5 MAIL `AUTH=` syntax (server decoding, malformed values,
+  unauthenticated clients, client encoding and a client-to-server round trip)
+  and §6 host failure replies (534/538/535/530/454) with wire tests.
 
 - Seven more RFC 5321 core rows: server identification in HELO/EHLO,
   local-part case, address-literal HELO/EHLO, NOOP parameters, commands
@@ -134,6 +149,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   unsupported enforcement modes are explicitly recorded.
 
 ### Fixed
+
+- The client sends `AUTH=<>` for an unknown submitter (an empty
+  `MailOptions.Auth`) instead of the invalid empty `AUTH=` (RFC 4954 §5).
+
+- The server answers a malformed MAIL `AUTH=` value with 501 5.5.4, the
+  parameter syntax error of RFC 5321 §4.2.2, instead of 500.
 
 - `ErrAuthRequired` now replies with 530 instead of 502, as required for
   unauthenticated submission by RFC 6409 section 4.3 and RFC 4954 section 6.

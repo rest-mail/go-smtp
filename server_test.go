@@ -1043,7 +1043,7 @@ func TestServer_anonymousUserOK(t *testing.T) {
 	}
 }
 
-// checklist: SMTP-EXT-08
+// checklist: SMTP-EXT-08 SMTP-AUTH-27 SMTP-AUTH-28
 func TestServer_authParam(t *testing.T) {
 	be, s, c, scanner, _ := testServerEhlo(t)
 	defer s.Close()
@@ -1052,14 +1052,14 @@ func TestServer_authParam(t *testing.T) {
 	// Invalid HEXCHAR
 	io.WriteString(c, "MAIL FROM: root@nsa.gov AUTH=<hey+A>\r\n")
 	scanner.Scan()
-	if !strings.HasPrefix(scanner.Text(), "500 ") {
+	if !strings.HasPrefix(scanner.Text(), "501 ") {
 		t.Fatal("Invalid MAIL response:", scanner.Text())
 	}
 
 	// Invalid HEXCHAR
 	io.WriteString(c, "MAIL FROM: root@nsa.gov AUTH=<he+YYa>\r\n")
 	scanner.Scan()
-	if !strings.HasPrefix(scanner.Text(), "500 ") {
+	if !strings.HasPrefix(scanner.Text(), "501 ") {
 		t.Fatal("Invalid MAIL response:", scanner.Text())
 	}
 
@@ -1701,7 +1701,7 @@ func TestServerDSN(t *testing.T) {
 	if val := opts[0].Notify; val == nil || len(val) != 1 || val[0] != smtp.DSNNotifyNever {
 		t.Fatal("Invalid NOTIFY parameter value:", val)
 	}
-	if val := opts[0].OriginalRecipientType; val != smtp.DSNAddressTypeRFC822 {
+	if val := opts[0].OriginalRecipientType; val != "Rfc822" {
 		t.Fatal("Invalid ORCPT address type:", val)
 	}
 	if val := opts[0].OriginalRecipient; val != dsnEmailRFC822 {
@@ -1710,7 +1710,7 @@ func TestServerDSN(t *testing.T) {
 	if val := opts[1].Notify; val == nil || len(val) != 2 || val[0] != smtp.DSNNotifyFailure || val[1] != smtp.DSNNotifyDelayed {
 		t.Fatal("Invalid NOTIFY parameter value:", val)
 	}
-	if val := opts[1].OriginalRecipientType; val != smtp.DSNAddressTypeUTF8 {
+	if val := opts[1].OriginalRecipientType; val != "Utf-8" {
 		t.Fatal("Invalid ORCPT address type:", val)
 	}
 	if val := opts[1].OriginalRecipient; val != dsnEmailUTF8 {
@@ -1870,7 +1870,7 @@ func TestServerDSNwithSMTPUTF8(t *testing.T) {
 	if val := opts[2].Notify; val == nil || len(val) != 1 || val[0] != smtp.DSNNotifySuccess {
 		t.Fatal("Invalid NOTIFY parameter value:", val)
 	}
-	if val := opts[2].OriginalRecipientType; val != smtp.DSNAddressTypeUTF8 {
+	if val := opts[2].OriginalRecipientType; val != "utf-8" {
 		t.Fatal("Invalid ORCPT address type:", val)
 	}
 	if val := opts[2].OriginalRecipient; val != dsnEmailUTF8 {
@@ -1893,8 +1893,8 @@ func TestServer_xtextLiteralNonXchar(t *testing.T) {
 
 	for _, tc := range []struct{ cmd, want string }{
 		{"MAIL FROM:<e=mc2@example.com> ENVID=e=mc2", "501 5.5.4"},
-		{"MAIL FROM:<e=mc2@example.com> AUTH=e=mc2@example.com", "500 5.5.4"},
-		{"MAIL FROM:<élisa@example.org> SMTPUTF8 AUTH=élisa@example.org", "500 5.5.4"},
+		{"MAIL FROM:<e=mc2@example.com> AUTH=e=mc2@example.com", "501 5.5.4"},
+		{"MAIL FROM:<élisa@example.org> SMTPUTF8 AUTH=élisa@example.org", "501 5.5.4"},
 		{"MAIL FROM:<e=mc2@example.com> ENVID=e+3Dmc2 AUTH=e+3Dmc2@example.com", "250 "},
 		{"RCPT TO:<e=mc2@example.com> ORCPT=rfc822;e=mc2@example.com", "501 5.5.4"},
 		{"RCPT TO:<e=mc2@example.com> ORCPT=rfc822;e+3Dmc2@example.com", "250 "},

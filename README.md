@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/rest-mail/go-smtp/actions/workflows/ci.yml/badge.svg)](https://github.com/rest-mail/go-smtp/actions/workflows/ci.yml)
 [![Coverage gate: >=95%](https://img.shields.io/badge/coverage%20gate-%3E%3D95%25-brightgreen)](COVERAGE.md)
-[![Checklist: 307/406 mapped](https://img.shields.io/badge/checklist-307%2F406%20mapped-blue)](CHECKLIST.md)
+[![Checklist: 318/418 mapped](https://img.shields.io/badge/checklist-318%2F418%20mapped-blue)](CHECKLIST.md)
 [![Go Reference](https://pkg.go.dev/badge/github.com/rest-mail/go-smtp.svg)](https://pkg.go.dev/github.com/rest-mail/go-smtp)
 
 An ESMTP client and server library written in Go.
@@ -44,8 +44,8 @@ server and client core), RFC 3207 (STARTTLS), RFC 1870 (SIZE),
 RFC 2920 (PIPELINING), RFC 3030 (CHUNKING/BINARYMIME) and
 RFC 6152 (8BITMIME) item by item, plus individual
 AUTH exchange requirements from RFC 4954 §4 and the DSN parameter/protocol
-rules from RFC 3461 §§2–4, 5.1 and 5.4, and the SMTPUTF8 envelope rules
-from RFC 6531 (including refusal of `SMTPUTF8=`) and the RRVS parameter
+and relay transport rules from RFC 3461 §§2–4, 5.1, 5.2.1–5.2.2 and 5.4,
+and the SMTPUTF8 envelope rules from RFC 6531 (including refusal of `SMTPUTF8=`) and the RRVS parameter
 from RFC 7293, DELIVERBY transport from RFC 2852 and MT-PRIORITY transport
 from RFC 6710, LMTP from RFC 2033, and Postfix XCLIENT session state and
 trust boundaries (a non-IETF extension with explicit syntax gaps), plus the
@@ -79,7 +79,7 @@ Coverage is in [COVERAGE.md](COVERAGE.md).
 
 The badges at the top are checked by `TestReadmeBadges` in
 `internal/checklist`. The checklist badge counts mapped items over all items:
-the 99 `n/a` rows are in the denominator, so the badge never claims more than
+the 100 `n/a` rows are in the denominator, so the badge never claims more than
 the tests prove. The coverage badge shows the floor CI enforces (`FLOOR` in
 `.github/workflows/ci.yml`), not a measured figure; each CI run prints the
 measured statement coverage.

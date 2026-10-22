@@ -577,7 +577,12 @@ func (c *Client) buildMailCmd(from string, opts *MailOptions) (string, error) {
 	}
 	if opts != nil && opts.Auth != nil {
 		if _, ok := c.ext["AUTH"]; ok {
-			fmt.Fprintf(&sb, " AUTH=%s", encodeXtext(*opts.Auth))
+			// RFC 4954 §5: an unknown submitter is AUTH=<>, never an empty value.
+			auth := "<>"
+			if *opts.Auth != "" {
+				auth = encodeXtext(*opts.Auth)
+			}
+			fmt.Fprintf(&sb, " AUTH=%s", auth)
 		}
 		// We can safely discard parameter if server does not support AUTH.
 	}
@@ -683,7 +688,7 @@ func (c *Client) buildRcptCmd(to string, opts *RcptOptions) (string, error) {
 		}
 		if opts.OriginalRecipient != "" {
 			var enc string
-			switch opts.OriginalRecipientType {
+			switch DSNAddressType(strings.ToUpper(string(opts.OriginalRecipientType))) {
 			case DSNAddressTypeRFC822:
 				if !isPrintableASCII(opts.OriginalRecipient) {
 					return "", errors.New("smtp: Illegal address")

@@ -281,7 +281,7 @@ func FuzzDecodeUTF8AddrXtext(f *testing.F) {
 			}
 			return
 		}
-		if terr != nil || aType != DSNAddressTypeUTF8 || aAddr != got {
+		if terr != nil || aType != "uTF-8" || aAddr != got {
 			t.Fatalf("decodeTypedAddress(utf-8;%q) = (%q, %q, %v), want %q", val, aType, aAddr, terr, got)
 		}
 		// What decodes re-encodes, canonically, in both forms.
