@@ -1,8 +1,8 @@
 # go-smtp
 
 [![CI](https://github.com/rest-mail/go-smtp/actions/workflows/ci.yml/badge.svg)](https://github.com/rest-mail/go-smtp/actions/workflows/ci.yml)
-[![Coverage gate: >=94.5%](https://img.shields.io/badge/coverage%20gate-%3E%3D94.5%25-yellowgreen)](COVERAGE.md)
-[![Checklist: 293/391 mapped](https://img.shields.io/badge/checklist-293%2F391%20mapped-blue)](CHECKLIST.md)
+[![Coverage gate: >=95%](https://img.shields.io/badge/coverage%20gate-%3E%3D95%25-brightgreen)](COVERAGE.md)
+[![Checklist: 324/422 mapped](https://img.shields.io/badge/checklist-324%2F422%20mapped-blue)](CHECKLIST.md)
 [![Go Reference](https://pkg.go.dev/badge/github.com/rest-mail/go-smtp.svg)](https://pkg.go.dev/github.com/rest-mail/go-smtp)
 
 An ESMTP client and server library written in Go.
@@ -34,6 +34,7 @@ An ESMTP client and server library written in Go.
 ### Client API
 
 * Command batching with `Client.Pipeline()` — pipelines `RSET`/`MAIL`/`RCPT` per [RFC 2920] to cut round-trips on high-throughput senders
+* `Client.DataTransferTimeout` — a fresh timeout for each DATA network write, including the final flush (default 3 minutes); `SubmissionTimeout` separately bounds the final response. A failed body write is retained; close the connection rather than retrying or terminating a partial message.
 * `Client.CheckConn()` — detect a server-closed idle/pooled connection without sending a command (STARTTLS-safe)
 
 ## The RFC checklist
@@ -43,8 +44,8 @@ server and client core), RFC 3207 (STARTTLS), RFC 1870 (SIZE),
 RFC 2920 (PIPELINING), RFC 3030 (CHUNKING/BINARYMIME) and
 RFC 6152 (8BITMIME) item by item, plus individual
 AUTH exchange requirements from RFC 4954 §4 and the DSN parameter/protocol
-rules from RFC 3461 §§2–4, 5.1 and 5.4, and the SMTPUTF8 envelope rules
-from RFC 6531 (including refusal of `SMTPUTF8=`) and the RRVS parameter
+and relay transport rules from RFC 3461 §§2–4, 5.1, 5.2.1–5.2.2 and 5.4,
+and the SMTPUTF8 envelope rules from RFC 6531 (including refusal of `SMTPUTF8=`) and the RRVS parameter
 from RFC 7293, DELIVERBY transport from RFC 2852 and MT-PRIORITY transport
 from RFC 6710, LMTP from RFC 2033, and Postfix XCLIENT session state and
 trust boundaries (a non-IETF extension with explicit syntax gaps), plus the

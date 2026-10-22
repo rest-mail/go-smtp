@@ -37,8 +37,14 @@ type Client struct {
 	rcpts      []string          // recipients accumulated for the current session
 	utf8       bool              // whether the current MAIL carries SMTPUTF8
 
+	writingData bool // DATA body or terminator is being written
+
 	// Time to wait for command responses (this includes 3xx reply to DATA).
 	CommandTimeout time.Duration
+	// Time to wait for each network write of DATA content, including the final
+	// dot. Defaults to 3 minutes (RFC 5321 §4.5.3.2.5); <= 0 disables it.
+	// This bounds blocked network writes, not time spent producing content.
+	DataTransferTimeout time.Duration
 	// Time to wait for responses after final dot.
 	SubmissionTimeout time.Duration
 
@@ -107,7 +113,8 @@ func NewClient(conn net.Conn) *Client {
 		// As recommended by RFC 5321. For DATA command reply (3xx one) RFC
 		// recommends a slightly shorter timeout but we do not bother
 		// differentiating these.
-		CommandTimeout: 5 * time.Minute,
+		CommandTimeout:      5 * time.Minute,
+		DataTransferTimeout: 3 * time.Minute,
 		// 10 minutes + 2 minute buffer in case the server is doing transparent
 		// forwarding and also follows recommended timeouts.
 		SubmissionTimeout: 12 * time.Minute,
@@ -155,7 +162,7 @@ func (c *Client) setConn(conn net.Conn) {
 	c.conn = conn
 
 	var r io.Reader = conn
-	var w io.Writer = conn
+	var w io.Writer = clientDataWriter{c}
 
 	r = &lineLimitReader{
 		R: conn,
@@ -570,7 +577,12 @@ func (c *Client) buildMailCmd(from string, opts *MailOptions) (string, error) {
 	}
 	if opts != nil && opts.Auth != nil {
 		if _, ok := c.ext["AUTH"]; ok {
-			fmt.Fprintf(&sb, " AUTH=%s", encodeXtext(*opts.Auth))
+			// RFC 4954 §5: an unknown submitter is AUTH=<>, never an empty value.
+			auth := "<>"
+			if *opts.Auth != "" {
+				auth = encodeXtext(*opts.Auth)
+			}
+			fmt.Fprintf(&sb, " AUTH=%s", auth)
 		}
 		// We can safely discard parameter if server does not support AUTH.
 	}
@@ -676,7 +688,7 @@ func (c *Client) buildRcptCmd(to string, opts *RcptOptions) (string, error) {
 		}
 		if opts.OriginalRecipient != "" {
 			var enc string
-			switch opts.OriginalRecipientType {
+			switch DSNAddressType(strings.ToUpper(string(opts.OriginalRecipientType))) {
 			case DSNAddressTypeRFC822:
 				if !isPrintableASCII(opts.OriginalRecipient) {
 					return "", errors.New("smtp: Illegal address")
@@ -734,7 +746,9 @@ type DataCommand struct {
 
 var _ io.WriteCloser = (*DataCommand)(nil)
 
-// Write implements io.Writer.
+// Write implements io.Writer. On error, further writes and Close return the
+// same error. The caller must close the client connection; a partial message
+// cannot safely be retried or terminated on that connection.
 func (cmd *DataCommand) Write(b []byte) (int, error) {
 	if cmd.closeErr != nil {
 		return 0, cmd.closeErr
@@ -745,7 +759,14 @@ func (cmd *DataCommand) Write(b []byte) (int, error) {
 	if cmd.wc == nil {
 		cmd.wc = cmd.client.text.DotWriter()
 	}
-	return cmd.wc.Write(b)
+	cmd.client.writingData = true
+	defer func() { cmd.client.writingData = false }()
+	n, err := cmd.wc.Write(b)
+	if err != nil {
+		// A partial body cannot safely be retried or terminated as a complete message.
+		cmd.closeErr = err
+	}
+	return n, err
 }
 
 // Close implements io.Closer.
@@ -834,14 +855,10 @@ func (cmd *DataCommand) close() error {
 		return cmd.closeErr
 	}
 
-	// The terminating flush writes any buffered body bytes plus the final
-	// ".\r\n". Bound it with a write deadline so a wedged peer that has stopped
-	// reading cannot block the close write indefinitely. It is cleared before
-	// returning so the caller's response read arms its own deadline.
-	if cmd.client.SubmissionTimeout > 0 {
-		_ = cmd.client.conn.SetWriteDeadline(time.Now().Add(cmd.client.SubmissionTimeout))
-		defer func() { _ = cmd.client.conn.SetWriteDeadline(time.Time{}) }()
-	}
+	// Buffered content and the final dot use the same per-network-write timer
+	// as Write. The final response gets its independent SubmissionTimeout.
+	cmd.client.writingData = true
+	defer func() { cmd.client.writingData = false }()
 
 	var err error
 	if cmd.wc == nil {
@@ -1089,8 +1106,13 @@ func (c *Client) Noop() error {
 // If Quit fails the connection is not closed, Close should be used
 // in this case.
 func (c *Client) Quit() error {
-	if err := c.hello(); err != nil {
-		return err
+	// After STARTTLS the greeting succeeded but no EHLO has been sent. A client
+	// rejecting the negotiated security quits at once (RFC 3207 §4.1), so QUIT
+	// does not first send a fresh EHLO.
+	if !c.didGreet || c.greetError != nil || c.didHello {
+		if err := c.hello(); err != nil {
+			return err
+		}
 	}
 	_, _, err := c.cmd(221, "QUIT")
 	if err != nil {
@@ -1142,6 +1164,22 @@ func toSMTPErr(protoErr *textproto.Error) *SMTPError {
 	smtpErr.EnhancedCode = enchCode
 	smtpErr.Message = msg
 	return smtpErr
+}
+
+// clientDataWriter arms a fresh timer for every underlying write, rather than
+// one timer for the entire message or a potentially large DataCommand.Write.
+type clientDataWriter struct {
+	c *Client
+}
+
+func (w clientDataWriter) Write(b []byte) (int, error) {
+	if w.c.writingData && w.c.DataTransferTimeout > 0 {
+		if err := w.c.conn.SetWriteDeadline(time.Now().Add(w.c.DataTransferTimeout)); err != nil {
+			return 0, err
+		}
+		defer func() { _ = w.c.conn.SetWriteDeadline(time.Time{}) }()
+	}
+	return w.c.conn.Write(b)
 }
 
 type clientDebugWriter struct {
