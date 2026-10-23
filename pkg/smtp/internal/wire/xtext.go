@@ -29,7 +29,7 @@ func isXchar(ch byte) bool {
 	return ch >= '!' && ch <= '~' && ch != '+' && ch != '='
 }
 
-// decodeXtext decodes the xtext form defined in RFC 3461 section 4 / RFC 4954
+// DecodeXtext decodes the xtext form defined in RFC 3461 section 4 / RFC 4954
 // section 8, where each octet outside the safe range is encoded as "+HH" with
 // two hex digits. It operates on octets, so all byte values (including
 // 0x80-0xFF) round-trip. Hex digits are accepted in either case (RFC 4954

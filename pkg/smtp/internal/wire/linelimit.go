@@ -7,7 +7,7 @@ import (
 
 var ErrTooLongLine = errors.New("smtp: too long a line in input stream")
 
-// lineLimitReader reads from the underlying Reader but restricts
+// LineLimitReader reads from the underlying Reader but restricts
 // line length of lines in input stream to a certain length.
 //
 // If line length exceeds the limit - Read returns ErrTooLongLine

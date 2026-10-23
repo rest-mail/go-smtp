@@ -1359,6 +1359,44 @@ func TestServer_Chunking_tooLongMessage(t *testing.T) {
 	}
 }
 
+// TestServer_Chunking_lineLimitRestoredAfterReset is ported from upstream
+// emersion/go-smtp 642c374, which fixed a reset that left the line limit off
+// after an abandoned BDAT transfer. This server passes the limit on every line
+// it reads, so it never had that bug; the test proves it stays that way.
+//
+// checklist: CHUNK-DATA-04
+func TestServer_Chunking_lineLimitRestoredAfterReset(t *testing.T) {
+	_, s, c, scanner := testServerAuthenticated(t)
+	defer s.Close()
+	defer c.Close()
+
+	io.WriteString(c, "MAIL FROM:<root@nsa.gov>\r\n")
+	scanner.Scan()
+	io.WriteString(c, "RCPT TO:<root@gchq.gov.uk>\r\n")
+	scanner.Scan()
+
+	io.WriteString(c, "BDAT 8\r\n")
+	io.WriteString(c, "Hey <3\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid BDAT response:", scanner.Text())
+	}
+
+	// The client gives up on the message instead of sending the last chunk.
+	io.WriteString(c, "RSET\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid RSET response:", scanner.Text())
+	}
+
+	// The transfer is over, so MaxLineLength should be enforced again.
+	io.WriteString(c, "NOOP "+strings.Repeat("x", s.MaxLineLength)+"\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "500 ") {
+		t.Fatal("Invalid response to an over-long line:", scanner.Text())
+	}
+}
+
 // TestServer_Chunking_OverLimitDiscardKeepsConnection reproduces issue #44: an
 // over-limit BDAT chunk that contains a line longer than MaxLineLength is
 // rejected 552 and its bytes discarded. The per-line limit must be disabled

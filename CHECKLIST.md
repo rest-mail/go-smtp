@@ -7,7 +7,8 @@ RFC 5321. The list takes in the MUSTs and SHOULDs, and the normative behaviour
 that carries no keyword (level "Normative"), such as the grammar.
 
 An item that does not apply, or is a known gap, says "n/a" and why. CI checks
-this file against the tests with `go run ./internal/checklist`; the format is
+this file against the tests of every package under `pkg/smtp` with
+`go run ./internal/checklist`; the format is
 described in the [README](README.md#the-rfc-checklist).
 
 Postfix XCLIENT (a non-IETF extension) is audited below for session state and
@@ -401,7 +402,7 @@ validating the enclosed MIME object remains the caller's responsibility.
 | CHUNK-DATA-01 | 2 | MUST | Consume the declared octets immediately after the command and acknowledge each successful chunk with 250. | `TestRFC3030Examples` |
 | CHUNK-DATA-02 | 2, 3 | Normative | Chunk framing counts octets, without dot transparency, line-ending conversion or command-line length restrictions on body bytes. | `TestRFC3030Examples`, `TestRFC3030ReadAheadLimits` |
 | CHUNK-DATA-03 | 2 | Normative | LAST completes one delivery; a zero-length LAST is valid and earlier chunks do not trigger delivery. | `TestRFC3030Examples`, `TestRFC3030NonLastDoesNotDeliver` |
-| CHUNK-DATA-04 | 2 | MUST | Commands between/after chunks remain subject to command line limits, even if a valid body shares the same read buffer. | `TestRFC3030ReadAheadLimits` |
+| CHUNK-DATA-04 | 2 | MUST | Commands between/after chunks remain subject to command line limits, even if a valid body shares the same read buffer. | `TestRFC3030ReadAheadLimits`, `TestServer_Chunking_lineLimitRestoredAfterReset` |
 | CHUNK-STATE-01 | 2 | MUST | BDAT following LAST without a new envelope gets 503 and its payload is consumed as data. | `TestRFC3030RejectedChunksAreOpaque` |
 | CHUNK-STATE-02 | 2 | MUST | DATA during an unfinished BDAT transaction gets 503; DATA and BDAT may be used in different transactions of the same session. | `TestRFC3030BinaryAndResetRules`, `TestRFC3030Examples`, `TestBDATResultAfterReset` |
 | CHUNK-STATE-03 | 2 | MUST | RSET between chunks abandons the accumulated body and permits a fresh transaction. | `TestRFC3030BinaryAndResetRules` |
@@ -532,7 +533,7 @@ the timestamp and the no-support action in `RcptOptions`.
 | RRVS-SRV-01 | 3.1, 5.1.1 | MUST | The timestamp (in UTC) and the action reach the backend, and an absent action stays absent, so a relay can preserve it as sent. | `TestRFC7293Server`, `TestServerRRVS` |
 | RRVS-SRV-02 | 3.1 | Normative | The parameter is refused with 504 5.5.4 when RRVS is not advertised. | `TestRFC7293Server` |
 | RRVS-LEN-01 | 3.1 | Normative | The RCPT command line may be 33 octets longer to carry the parameter. | `TestRFCExtendedCommandBudgets` |
-| RRVS-CLI-01 | 3.1 | MUST NOT | The client sends the timestamp in UTC without time-secfrac, and a no-support action only when the caller set one; an unknown action or a year outside 0000–9999 is refused before writing. | `TestRFC7293Client`, `TestClientRRVS` |
+| RRVS-CLI-01 | 3.1 | MUST NOT | The client sends the timestamp in UTC without time-secfrac, and a no-support action only when the caller set one; an unknown action or a year outside 0000–9999 is refused before writing. | `TestRFC7293Client`, `TestClientRRVS`, `TestRFC7293ServerAcceptsClientForms` |
 | RRVS-CLI-02 | 5.1.1, 6 | MUST | To a server without RRVS, the client refuses a recipient whose action is reject or absent, without writing anything. | `TestRFC7293Client` |
 | RRVS-CLI-03 | 5.1.1, 6 | Normative | With the action `C`, the client sends the recipient to a server without RRVS without the parameter. | `TestRFC7293Client` |
 | RRVS-OWN-01 | 5, 5.1 | MUST | A receiver checks continuous ownership since the timestamp, ignores it for role accounts and returns 550 (X.7.17/X.7.18/X.7.19) when the check fails or cannot be done. | n/a: host responsibility: the library holds no mailbox history; the backend's `Rcpt` returns the `SMTPError`. |

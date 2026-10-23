@@ -1,6 +1,14 @@
-// Package smtp implements the Simple Mail Transfer Protocol as defined in RFC 5321.
+// Package smtp holds the types the SMTP server and client share: the MAIL and
+// RCPT options, the extension parameter values and SMTPError.
 //
-// It also implements the following extensions:
+// The protocol lives in two packages that import this one:
+//
+//   - [github.com/rest-mail/go-smtp/pkg/smtp/server] implements an SMTP and
+//     LMTP server (RFC 5321, RFC 2033).
+//   - [github.com/rest-mail/go-smtp/pkg/smtp/client] implements an SMTP and
+//     LMTP client.
+//
+// Both implement the following extensions:
 //
 //   - 8BITMIME (RFC 6152)
 //   - ENHANCEDSTATUSCODES (RFC 2034)
@@ -14,8 +22,6 @@
 //   - MT-PRIORITY (RFC 6710)
 //   - RRVS (RFC 7293)
 //   - REQUIRETLS (RFC 8689)
-//
-// LMTP (RFC 2033) is also supported.
 //
 // Additional extensions may be handled by other packages.
 package smtp

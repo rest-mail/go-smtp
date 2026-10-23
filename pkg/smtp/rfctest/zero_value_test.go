@@ -11,7 +11,7 @@ import (
 )
 
 // TestZeroValueServer verifies a zero-value &Server{} is usable without
-// NewServer: Serve accepts a connection (which would otherwise panic writing to
+// server.New: Serve accepts a connection (which would otherwise panic writing to
 // the nil conns map or logging via a nil ErrorLog), a default line length is
 // applied, and Close does not panic closing the nil done channel.
 //

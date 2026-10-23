@@ -11,6 +11,16 @@ import (
 	"testing"
 )
 
+// testDirs are the package directories holding tests, relative to the module
+// root; CI passes the same list to the checklist command.
+var testDirs = []string{
+	"pkg/smtp",
+	"pkg/smtp/client",
+	"pkg/smtp/internal/wire",
+	"pkg/smtp/rfctest",
+	"pkg/smtp/server",
+}
+
 var ciFloor = regexp.MustCompile(`(?m)^\s*FLOOR:\s*'([0-9]+(?:\.[0-9]+)?)'\s*$`)
 
 // TestReadmeBadges keeps the README badges honest. The real mappings are
@@ -21,7 +31,11 @@ func TestReadmeBadges(t *testing.T) {
 	root := filepath.Join("..", "..")
 	file := filepath.Join(root, "CHECKLIST.md")
 	var out bytes.Buffer
-	if code := run([]string{"-file", file, root}, &out, &out); code != 0 {
+	args := []string{"-file", file}
+	for _, dir := range testDirs {
+		args = append(args, filepath.Join(root, filepath.FromSlash(dir)))
+	}
+	if code := run(args, &out, &out); code != 0 {
 		t.Fatalf("invalid checklist (exit %d):\n%s", code, out.String())
 	}
 	items, err := parseChecklist(file, func(format string, args ...interface{}) {
@@ -40,6 +54,9 @@ func TestReadmeBadges(t *testing.T) {
 	ci, err := ioutil.ReadFile(filepath.Join(root, ".github", "workflows", "ci.yml"))
 	if err != nil {
 		t.Fatal(err)
+	}
+	if want := "go run ./internal/checklist -file CHECKLIST.md " + strings.Join(testDirs, " ") + "\n"; !strings.Contains(string(ci), want) {
+		t.Errorf("ci.yml must check the checklist against every test directory; want the line:\n%s", want)
 	}
 	m := ciFloor.FindAllSubmatch(ci, -1)
 	if len(m) != 1 {

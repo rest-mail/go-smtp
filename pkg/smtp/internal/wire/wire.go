@@ -1,10 +1,14 @@
+// Package wire holds the encoders, decoders and checks that the SMTP server
+// and client both need: xtext and the RFC 6533 address forms, ASCII and decimal
+// tests, the DSN NOTIFY rules, the DELIVERBY bound and the line-limited
+// reader.
 package wire
 
-// maxDeliverBySeconds is the largest by-time RFC 2852 section 4 can express:
+// MaxDeliverBySeconds is the largest by-time RFC 2852 section 4 can express:
 // its grammar allows at most nine digits.
 const MaxDeliverBySeconds = 999999999
 
-// isDecimal reports whether s contains one or more ASCII decimal digits.
+// IsDecimal reports whether s contains one or more ASCII decimal digits.
 // strconv's integer parsers alone also accept a leading sign.
 func IsDecimal(s string) bool {
 	if s == "" {

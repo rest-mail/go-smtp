@@ -297,11 +297,11 @@ func TestNewClientStartTLS(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, ok := c.TLSConnectionState(); !ok {
-		t.Error("NewClientStartTLS connection is not TLS")
+		t.Error("client.NewStartTLS connection is not TLS")
 	}
 	c.Close()
 
-	// A server without STARTTLS is an error, and NewClientStartTLS closes the
+	// A server without STARTTLS is an error, and client.NewStartTLS closes the
 	// connection it was given.
 	plain := server.New(new(backend))
 	plain.Domain = "localhost"
@@ -316,7 +316,7 @@ func TestNewClientStartTLS(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := client.NewStartTLS(conn, cfg); err == nil {
-		t.Error("NewClientStartTLS against a server without STARTTLS succeeded")
+		t.Error("client.NewStartTLS against a server without STARTTLS succeeded")
 	}
 }
 
