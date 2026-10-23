@@ -327,7 +327,8 @@ func (c *Conn) Conn() net.Conn {
 }
 
 // XClientAttrs holds the client identity a trusted proxy asserted via the
-// XCLIENT extension. Empty fields were not asserted.
+// XCLIENT extension, with each xtext value already decoded. Empty fields were
+// not asserted.
 type XClientAttrs struct {
 	Addr  string // real client IP address (ADDR)
 	Name  string // real client reverse-DNS name (NAME)
@@ -381,22 +382,32 @@ func (c *Conn) handleXClient(arg string) {
 			c.writeResponse(501, EnhancedCode{5, 5, 4}, "Malformed XCLIENT attribute: "+field)
 			return
 		}
-		switch strings.ToUpper(key) {
+		name := strings.ToUpper(key)
+		var target *string
+		switch name {
 		case "ADDR":
-			attrs.Addr = value
+			target = &attrs.Addr
 		case "NAME":
-			attrs.Name = value
+			target = &attrs.Name
 		case "PROTO":
-			attrs.Proto = value
+			target = &attrs.Proto
 		case "HELO":
-			attrs.Helo = value
+			target = &attrs.Helo
 		case "LOGIN":
-			attrs.Login = value
+			target = &attrs.Login
 		case "PORT", "DESTADDR", "DESTPORT":
 			// Accepted for compatibility but not currently surfaced.
 		default:
 			c.writeResponse(501, EnhancedCode{5, 5, 4}, "Unknown XCLIENT attribute: "+key)
 			return
+		}
+		decoded, ok := decodeXClientValue(value)
+		if !ok {
+			c.writeResponse(501, EnhancedCode{5, 5, 4}, "Bad XCLIENT "+name+" syntax")
+			return
+		}
+		if target != nil {
+			*target = decoded
 		}
 	}
 	// XCLIENT starts a new SMTP session on the same transport. Backend state
@@ -795,6 +806,35 @@ func fromHexDigit(b byte) (byte, bool) {
 		return b - 'a' + 10, true
 	}
 	return 0, false
+}
+
+// decodeXClientValue decodes an XCLIENT attribute value. Values are RFC 1891
+// xtext (now RFC 3461 section 4), so a proxy can carry '+', '=' and octets
+// outside printable ASCII as "+HH". Like Postfix, the reference XCLIENT
+// server, any other octet is taken literally, but a '+' must start a hexchar.
+func decodeXClientValue(val string) (string, bool) {
+	if !strings.Contains(val, "+") {
+		return val, true
+	}
+	var out strings.Builder
+	out.Grow(len(val))
+	for i := 0; i < len(val); i++ {
+		if val[i] != '+' {
+			out.WriteByte(val[i])
+			continue
+		}
+		if i+2 >= len(val) {
+			return "", false
+		}
+		hi, ok1 := fromHexDigit(val[i+1])
+		lo, ok2 := fromHexDigit(val[i+2])
+		if !ok1 || !ok2 {
+			return "", false
+		}
+		out.WriteByte(hi<<4 | lo)
+		i += 2
+	}
+	return out.String(), true
 }
 
 // isXchar reports whether ch is an xchar (RFC 3461 section 4, RFC 4954 section
