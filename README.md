@@ -79,7 +79,7 @@ Coverage is in [COVERAGE.md](COVERAGE.md).
 
 The badges at the top are checked by `TestReadmeBadges` in
 `internal/checklist`. The checklist badge counts mapped items over all items:
-the 218 `n/a` rows are in the denominator, so the badge never claims more than
+the 216 `n/a` rows are in the denominator, so the badge never claims more than
 the tests prove. The coverage badge shows the floor CI enforces (`FLOOR` in
 `.github/workflows/ci.yml`), not a measured figure; each CI run prints the
 measured statement coverage.

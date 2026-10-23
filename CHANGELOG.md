@@ -15,6 +15,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- `HELP`, with or without an argument, now gets a `214` reply that points the
+  client at `EHLO` (or `LHLO` on an LMTP server) instead of `502`. RFC 5321
+  §4.1.1.8 says servers SHOULD support HELP without arguments.
+
 - A SASL response line during AUTH is no longer limited by `MaxLineLength`
   (RFC 4954 §4 makes challenge and response sizes independent of the command
   line limit). The new `Server.MaxAuthResponseLength` bounds it instead:
