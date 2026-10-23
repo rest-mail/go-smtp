@@ -26,6 +26,7 @@ type Client struct {
 	// connection later
 	conn       net.Conn
 	text       *textproto.Conn
+	lineLimit  *lineLimitReader // bounds reply lines read from conn
 	serverName string
 	lmtp       bool
 	ext        map[string]string // supported extensions
@@ -48,9 +49,24 @@ type Client struct {
 	// Time to wait for responses after final dot.
 	SubmissionTimeout time.Duration
 
+	// MaxAuthChallengeLength bounds each reply line read during AUTH, such as
+	// one 334 challenge, CRLF included. RFC 4954 §4 makes challenge sizes
+	// independent of the reply line limit, so the 2000-octet reply limit does
+	// not apply to them.
+	// Zero means 64 KiB, enough for large GSSAPI tokens; a negative value
+	// means no limit.
+	MaxAuthChallengeLength int
+
 	// Logger for all network activity.
 	DebugWriter io.Writer
 }
+
+// replyLineLimit is the reply line limit: the doubled maximum line length per
+// RFC 5321 (Section 4.5.3.1.6).
+const replyLineLimit = 2000
+
+// defaultMaxAuthChallengeLength is the default Client.MaxAuthChallengeLength.
+const defaultMaxAuthChallengeLength = 64 << 10
 
 // 30 seconds was chosen as it's the same duration as http.DefaultTransport's
 // timeout.
@@ -164,11 +180,11 @@ func (c *Client) setConn(conn net.Conn) {
 	var r io.Reader = conn
 	var w io.Writer = clientDataWriter{c}
 
-	r = &lineLimitReader{
-		R: conn,
-		// Doubled maximum line length per RFC 5321 (Section 4.5.3.1.6)
-		LineLimit: 2000,
+	c.lineLimit = &lineLimitReader{
+		R:         conn,
+		LineLimit: replyLineLimit,
 	}
+	r = c.lineLimit
 
 	r = io.TeeReader(r, clientDebugWriter{c})
 	w = io.MultiWriter(w, clientDebugWriter{c})
@@ -400,6 +416,20 @@ func (c *Client) Auth(a sasl.Client) error {
 	if err := c.hello(); err != nil {
 		return err
 	}
+	// RFC 4954 §4: challenge sizes are independent of the reply line limit,
+	// so the exchange reads its replies under their own bound.
+	limit := c.MaxAuthChallengeLength
+	if limit == 0 {
+		limit = defaultMaxAuthChallengeLength
+	} else if limit < 0 {
+		limit = 0
+	}
+	// A Client built without setConn has no reply line limiter to adjust.
+	if c.lineLimit != nil {
+		c.lineLimit.LineLimit = limit
+		defer func() { c.lineLimit.LineLimit = replyLineLimit }()
+	}
+
 	encoding := base64.StdEncoding
 	mech, resp, err := a.Start()
 	if err != nil {
@@ -812,7 +842,10 @@ func (cmd *DataCommand) CloseWithResponse() (*DataResponse, error) {
 // server responses. It can only be called when the LMTP protocol is used.
 // Every 2xx final recipient reply is treated as successful completion.
 //
-// If server returns an error, it will be of type LMTPDataError.
+// If server returns an error, it will be of type LMTPDataError. If the
+// connection fails before every recipient has a reply, the transport error is
+// joined with an LMTPDataError that holds a temporary 451 4.4.2 failure for
+// each recipient left without one (RFC 2033 §5).
 func (cmd *DataCommand) CloseWithLMTPResponse() (map[string]*DataResponse, error) {
 	if !cmd.client.lmtp {
 		return nil, errors.New("smtp: CloseWithLMTPResponse used without an LMTP client")
@@ -837,10 +870,14 @@ func (cmd *DataCommand) CloseWithLMTPResponse() (map[string]*DataResponse, error
 			if errors.As(err, &smtpErr) {
 				lmtpErr[rcpt] = smtpErr
 			} else {
-				if len(lmtpErr) > 0 {
-					return resp, errors.Join(err, lmtpErr)
+				// RFC 2033 §5: a recipient without a reply when the
+				// connection fails must be treated as a temporary failure.
+				for _, rcpt := range cmd.client.rcpts[i:] {
+					if _, ok := lmtpErr[rcpt]; !ok {
+						lmtpErr[rcpt] = lmtpNoReplyError()
+					}
 				}
-				return resp, err
+				return resp, errors.Join(err, lmtpErr)
 			}
 		} else {
 			resp[rcpt] = &DataResponse{StatusText: msg}
@@ -887,6 +924,16 @@ type DataResponse struct {
 	// StatusText is the status text returned by the server. It may contain
 	// tracking information.
 	StatusText string
+}
+
+// lmtpNoReplyError stands in for a recipient reply that never arrived because
+// the connection failed first.
+func lmtpNoReplyError() *SMTPError {
+	return &SMTPError{
+		Code:         451,
+		EnhancedCode: EnhancedCode{4, 4, 2},
+		Message:      "Connection lost before the recipient reply",
+	}
 }
 
 // LMTPDataError is a collection of errors returned by an LMTP server for a

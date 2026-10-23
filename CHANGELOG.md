@@ -15,6 +15,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- `HELP`, with or without an argument, now gets a `214` reply that points the
+  client at `EHLO` (or `LHLO` on an LMTP server) instead of `502`. RFC 5321
+  §4.1.1.8 says servers SHOULD support HELP without arguments.
+
+- A SASL response line during AUTH is no longer limited by `MaxLineLength`
+  (RFC 4954 §4 makes challenge and response sizes independent of the command
+  line limit). The new `Server.MaxAuthResponseLength` bounds it instead:
+  64 KiB by default, enough for large GSSAPI tokens; a negative value removes
+  the bound. An over-long response still gets `500 5.5.6` and the connection
+  closes. The client side remains a known gap (SMTP-AUTH-32).
+
+- The client now reads AUTH challenges under the new
+  `Client.MaxAuthChallengeLength` (64 KiB by default, negative for no limit)
+  instead of the 2000-octet reply line limit, which returns once AUTH ends.
+  A large challenge, such as a GSSAPI token, used to fail the exchange with
+  `ErrTooLongLine` (RFC 4954 §4).
+- When an LMTP connection fails during the DATA replies,
+  `CloseWithLMTPResponse` now returns a temporary `451 4.4.2` failure in its
+  `LMTPDataError` for each recipient left without a reply, joined with the
+  transport error. Before, those recipients were missing from both results
+  (RFC 2033 §5).
+
 - XCLIENT attribute values are now xtext-decoded (Postfix XCLIENT, RFC 1891):
   `LOGIN=user+2Btag@example.com` asserts `user+tag@example.com`, and a `+`
   without two hex digits gets `501` and leaves the identity unchanged. Other

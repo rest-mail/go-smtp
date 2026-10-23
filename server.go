@@ -32,15 +32,20 @@ type Server struct {
 	// Enable LMTP mode, as defined in RFC 2033.
 	LMTP bool
 
-	Domain            string
-	MaxRecipients     int
-	MaxMessageBytes   int64
-	MaxLineLength     int
-	AllowInsecureAuth bool
-	Debug             io.Writer
-	ErrorLog          Logger
-	ReadTimeout       time.Duration
-	WriteTimeout      time.Duration
+	Domain          string
+	MaxRecipients   int
+	MaxMessageBytes int64
+	MaxLineLength   int
+	// MaxAuthResponseLength bounds one SASL response line sent during AUTH,
+	// CRLF included. RFC 4954 §4 makes response sizes independent of the
+	// command line limit, so MaxLineLength does not apply to them. Zero means
+	// 64 KiB, enough for large GSSAPI tokens; a negative value means no limit.
+	MaxAuthResponseLength int
+	AllowInsecureAuth     bool
+	Debug                 io.Writer
+	ErrorLog              Logger
+	ReadTimeout           time.Duration
+	WriteTimeout          time.Duration
 
 	// Advertise SMTPUTF8 (RFC 6531) capability.
 	// Should be used only if backend supports it.
@@ -160,11 +165,16 @@ func (c ConnState) String() string {
 	}
 }
 
+// defaultMaxAuthResponseLength is the default Server.MaxAuthResponseLength.
+const defaultMaxAuthResponseLength = 64 << 10
+
 // New creates a new SMTP server.
 func NewServer(be Backend) *Server {
 	return &Server{
 		// Doubled maximum line length per RFC 5321 (Section 4.5.3.1.6)
 		MaxLineLength: 2000,
+
+		MaxAuthResponseLength: defaultMaxAuthResponseLength,
 
 		Backend:  be,
 		done:     make(chan struct{}),
@@ -191,6 +201,9 @@ func (s *Server) init() {
 		if s.MaxLineLength == 0 {
 			// Doubled maximum line length per RFC 5321 (Section 4.5.3.1.6)
 			s.MaxLineLength = 2000
+		}
+		if s.MaxAuthResponseLength == 0 {
+			s.MaxAuthResponseLength = defaultMaxAuthResponseLength
 		}
 		if s.baseCtx == nil {
 			s.baseCtx, s.baseCancel = context.WithCancel(context.Background())

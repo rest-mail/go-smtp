@@ -281,6 +281,56 @@ func TestRFC2033ClientPartialReplies(t *testing.T) {
 	}
 }
 
+// checklist: LMTP-CLIENT-03
+func TestRFC2033ClientUnansweredRecipientsTemporary(t *testing.T) {
+	for _, tc := range []struct {
+		name, replies string
+		answered      []string
+		unanswered    []string
+	}{
+		{"no replies", "", nil, []string{"pat@foo.edu", "green@foo.edu", "jones@foo.edu"}},
+		{"after success", "250 2.0.0 ok\r\n", []string{"pat@foo.edu"}, []string{"green@foo.edu", "jones@foo.edu"}},
+		{"after failure", "250 2.0.0 ok\r\n550 5.1.1 no mailbox\r\n", []string{"pat@foo.edu", "green@foo.edu"}, []string{"jones@foo.edu"}},
+		{"truncated reply", "250 2.0.0 ok\r\n25", []string{"pat@foo.edu"}, []string{"green@foo.edu", "jones@foo.edu"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := faker{ReadWriter: struct {
+				io.Reader
+				io.Writer
+			}{strings.NewReader(tc.replies), io.Discard}}
+			c := NewClientLMTP(fake)
+			defer c.Close()
+			c.rcpts = []string{"pat@foo.edu", "green@foo.edu", "jones@foo.edu"}
+			cmd := &DataCommand{client: c}
+			resp, err := cmd.CloseWithLMTPResponse()
+			if err == nil {
+				t.Fatal("lost connection reported as success")
+			}
+			var failures LMTPDataError
+			if !errors.As(err, &failures) {
+				t.Fatalf("error=%v, want LMTPDataError", err)
+			}
+			if len(resp)+len(failures) != 3 {
+				t.Fatalf("responses=%v failures=%v, want one outcome per recipient", resp, failures)
+			}
+			for _, rcpt := range tc.answered {
+				if resp[rcpt] == nil && failures[rcpt].Code != 550 {
+					t.Errorf("%s: received reply lost", rcpt)
+				}
+			}
+			for _, rcpt := range tc.unanswered {
+				failure := failures[rcpt]
+				if failure == nil || !failure.Temporary() || failure.Code != 451 || failure.EnhancedCode != (EnhancedCode{4, 4, 2}) {
+					t.Errorf("%s: failure=%v, want temporary 451 4.4.2", rcpt, failure)
+				}
+				if resp[rcpt] != nil {
+					t.Errorf("%s: unanswered recipient reported as delivered", rcpt)
+				}
+			}
+		})
+	}
+}
+
 type rfc2033Fallback struct {
 	nopSession
 	err error
