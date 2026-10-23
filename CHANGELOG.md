@@ -19,6 +19,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   client at `EHLO` (or `LHLO` on an LMTP server) instead of `502`. RFC 5321
   §4.1.1.8 says servers SHOULD support HELP without arguments.
 
+- A SASL response line during AUTH is no longer limited by `MaxLineLength`
+  (RFC 4954 §4 makes challenge and response sizes independent of the command
+  line limit). The new `Server.MaxAuthResponseLength` bounds it instead:
+  64 KiB by default, enough for large GSSAPI tokens; a negative value removes
+  the bound. An over-long response still gets `500 5.5.6` and the connection
+  closes. The client side remains a known gap (SMTP-AUTH-32).
+
 - When an LMTP connection fails during the DATA replies,
   `CloseWithLMTPResponse` now returns a temporary `451 4.4.2` failure in its
   `LMTPDataError` for each recipient left without a reply, joined with the
