@@ -28,6 +28,8 @@ func (rfc4954Session) Auth(mech string) (sasl.Server, error) {
 		return &rfc4954External{}, nil
 	case "CHALLENGE":
 		return &rfc4954Challenge{}, nil
+	case "TOKEN":
+		return &rfc4954Token{}, nil
 	default:
 		return nil, ErrAuthUnknownMechanism
 	}
@@ -230,20 +232,96 @@ func TestRFC4954_ClientCancelAndFailure(t *testing.T) {
 func TestRFC4954_ContinuationTooLong(t *testing.T) {
 	_, c, br := newConformanceServer(t, func(s *Server) {
 		s.AllowInsecureAuth = true
-		s.MaxLineLength = 512
+		s.MaxAuthResponseLength = 512
 		s.Backend = BackendFunc(func(*Conn) (Session, error) { return rfc4954Session{}, nil })
 	})
 	_ = c.SetDeadline(time.Now().Add(5 * time.Second))
 	drainEHLO(t, c, br)
 	writeCmd(t, c, "AUTH PLAIN\r\n")
 	readSMTPLine(t, br)
-	writeCmd(t, c, strings.Repeat("a", 513)+"\r\n")
+	// 511 octets plus CRLF exceed the 512-octet bound.
+	writeCmd(t, c, strings.Repeat("a", 511)+"\r\n")
 	if got := readSMTPLine(t, br); !strings.HasPrefix(got, "500 5.5.6 ") {
 		t.Fatal(got)
 	}
 	if _, err := br.ReadByte(); err == nil {
 		t.Fatal("connection remains open")
 	}
+}
+
+// rfc4954Token sends an empty challenge and accepts one response of
+// rfc4954TokenSize 'x' octets, standing in for a large GSSAPI token.
+type rfc4954Token struct{ started bool }
+
+const rfc4954TokenSize = 40000
+
+func (a *rfc4954Token) Next(response []byte) ([]byte, bool, error) {
+	if !a.started {
+		a.started = true
+		return nil, false, nil
+	}
+	if !bytes.Equal(response, bytes.Repeat([]byte("x"), rfc4954TokenSize)) {
+		return nil, false, ErrAuthFailed
+	}
+	return nil, true, nil
+}
+
+// RFC 4954 §4: the server accepts a response larger than its command line
+// limit, while that limit still bounds commands before and after AUTH.
+// checklist: SMTP-AUTH-22
+func TestRFC4954_ResponseSizeIndependentOfLineLimit(t *testing.T) {
+	token := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte("x"), rfc4954TokenSize))
+	t.Run("default bound", func(t *testing.T) {
+		_, c, br := newConformanceServer(t, func(s *Server) {
+			s.AllowInsecureAuth = true
+			s.MaxLineLength = 512
+			s.Backend = BackendFunc(func(*Conn) (Session, error) { return rfc4954Session{}, nil })
+		})
+		_ = c.SetDeadline(time.Now().Add(5 * time.Second))
+		drainEHLO(t, c, br)
+		writeCmd(t, c, "AUTH TOKEN\r\n")
+		if got := readSMTPLine(t, br); got != "334 " {
+			t.Fatalf("challenge = %q", got)
+		}
+		writeCmd(t, c, token+"\r\n")
+		if got := readSMTPLine(t, br); !strings.HasPrefix(got, "235 2.7.0 ") {
+			t.Fatalf("large response: %q", got)
+		}
+		writeCmd(t, c, "NOOP "+strings.Repeat("a", 512)+"\r\n")
+		if got := readSMTPLine(t, br); !strings.HasPrefix(got, "500 5.4.0 ") {
+			t.Fatalf("command line limit after AUTH: %q", got)
+		}
+	})
+	t.Run("default exceeded", func(t *testing.T) {
+		_, c, br := newConformanceServer(t, func(s *Server) {
+			s.AllowInsecureAuth = true
+			s.Backend = BackendFunc(func(*Conn) (Session, error) { return rfc4954Session{}, nil })
+		})
+		_ = c.SetDeadline(time.Now().Add(5 * time.Second))
+		drainEHLO(t, c, br)
+		writeCmd(t, c, "AUTH TOKEN\r\n")
+		readSMTPLine(t, br)
+		writeCmd(t, c, strings.Repeat("a", defaultMaxAuthResponseLength-1)+"\r\n")
+		if got := readSMTPLine(t, br); !strings.HasPrefix(got, "500 5.5.6 ") {
+			t.Fatalf("over default bound: %q", got)
+		}
+	})
+	t.Run("unlimited", func(t *testing.T) {
+		_, c, br := newConformanceServer(t, func(s *Server) {
+			s.AllowInsecureAuth = true
+			s.MaxLineLength = 512
+			s.MaxAuthResponseLength = -1
+			s.Backend = BackendFunc(func(*Conn) (Session, error) { return rfc4954Session{}, nil })
+		})
+		_ = c.SetDeadline(time.Now().Add(5 * time.Second))
+		drainEHLO(t, c, br)
+		writeCmd(t, c, "AUTH TOKEN\r\n")
+		readSMTPLine(t, br)
+		writeCmd(t, c, token+"\r\n")
+		if got := readSMTPLine(t, br); !strings.HasPrefix(got, "235 2.7.0 ") {
+			t.Fatalf("unlimited: %q", got)
+		}
+	})
 }
 
 // checklist: SMTP-AUTH-08

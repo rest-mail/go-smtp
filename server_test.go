@@ -849,10 +849,10 @@ func TestServer_otherCommands(t *testing.T) {
 	_, s, c, scanner := testServerAuthenticated(t)
 	defer s.Close()
 
-	io.WriteString(c, "HELP\r\n")
+	io.WriteString(c, "EXPN list\r\n")
 	scanner.Scan()
 	if !strings.HasPrefix(scanner.Text(), "502 ") {
-		t.Fatal("Invalid HELP response:", scanner.Text())
+		t.Fatal("Invalid EXPN response:", scanner.Text())
 	}
 
 	io.WriteString(c, "VRFY\r\n")

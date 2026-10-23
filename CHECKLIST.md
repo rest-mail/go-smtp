@@ -68,7 +68,7 @@ SASL challenges retain the independent size rules of RFC 4954 §4.
 | SMTP-ORD-03 | 3.3, 4.1.1.4 | MUST | DATA is refused when the transaction has no recipient. | `TestRFC5321_CommandOrder` |
 | SMTP-ORD-04 | 4.1.1.2, 4.1.4 | MUST | A second MAIL inside a transaction is a 503 and leaves the transaction (sender and recipients) intact; after RSET a new MAIL is accepted. | `TestServerNestedMailRejected`, `TestServerResetThenMail` |
 | SMTP-ORD-05 | 4.1.4 | SHOULD | A command out of sequence is answered 503 5.5.1: MAIL or AUTH before HELO/EHLO, RCPT before MAIL, DATA or BDAT without a recipient, a transaction command between BDAT chunks, DATA after BODY=BINARYMIME, and STARTTLS on a TLS connection. | `TestServerBadSequence`, `TestServerSTARTTLSAlreadyTLSBadSequence`, `TestClientBadSequenceError` |
-| SMTP-ORD-06 | 4.1.4 | Normative | NOOP, VRFY, RSET, HELP and EXPN may be sent at any time: before HELO/EHLO, and inside a transaction without changing its sender or recipients (HELP and EXPN get 502, as SMTP-CMD-07). | `TestRFC5321_AnyTimeCommands` |
+| SMTP-ORD-06 | 4.1.4 | Normative | NOOP, VRFY, RSET, HELP and EXPN may be sent at any time: before HELO/EHLO, and inside a transaction without changing its sender or recipients (HELP gets 214, as SMTP-AUDIT-36; EXPN gets 502, as SMTP-CMD-07). | `TestRFC5321_AnyTimeCommands` |
 
 ## Commands (§4.1.1, §4.5.1)
 
@@ -80,7 +80,7 @@ SASL challenges retain the independent size rules of RFC 4954 §4.
 | SMTP-CMD-04 | 4.1.1.9 | MUST | NOOP does nothing and is answered 250. | `TestServer_otherCommands` |
 | SMTP-CMD-05 | 3.5.3, 4.1.1.6 | MUST | VRFY is supported: a server that will not confirm an address answers 252. | `TestServer_otherCommands` |
 | SMTP-CMD-06 | 4.1.1.10 | MUST | QUIT is answered 221 before the connection closes. | `TestServer_otherCommands`, `TestQuitReplySentBeforeClose` |
-| SMTP-CMD-07 | 4.2.4 | MUST | A command the server does not implement is a 502 (tested for HELP; SEND, SOML, SAML, EXPN and TURN share the code path). | `TestServer_otherCommands` |
+| SMTP-CMD-07 | 4.2.4 | MUST | A command the server does not implement is a 502 (tested for EXPN; SEND, SOML, SAML and TURN share the code path). | `TestServer_otherCommands` |
 | SMTP-CMD-08 | 4.2.4 | MUST | An unrecognised command is a 500, and the server answers the next command. | `TestServer_tooManyInvalidCommands`, `TestRFC5321_UnknownAndArgumentErrors` |
 | SMTP-CMD-09 | 4.5.1 | MUST | The minimum implementation (EHLO, HELO, MAIL, RCPT, DATA, RSET, NOOP, QUIT, VRFY) is supported. | `TestServer`, `TestServer_helo`, `TestServer_otherCommands` |
 | SMTP-CMD-10 | 4.1.1.9 | SHOULD | A parameter string given with NOOP is ignored: NOOP with or without one is answered 250 and leaves the transaction as it was. | `TestRFC5321_NoopIgnoresParameter` |
@@ -217,7 +217,7 @@ insecure authentication disabled; the host still configures TLS and credentials.
 | SMTP-AUTH-19 | RFC 4954 §4, §6 | MUST | A configuration prevents plaintext password mechanisms on unprotected sessions and does not advertise them. | `TestAuthTLSRequiredCode`, `TestRFC4954_NoPlaintextAdvertisement` |
 | SMTP-AUTH-20 | RFC 4954 §4 | MUST | A mechanism where the server speaks first refuses a client initial response with 501 (5.7.0 recommended). | n/a: delegated to the host's sasl.Server.Next; AuthSession exposes no server-first metadata, so the transport cannot enforce it independently. |
 | SMTP-AUTH-21 | RFC 4954 §4 | MUST | SASL security layers reset SMTP knowledge on both sides and TLS wraps SASL when both layers are active. | n/a: not supported; the go-sasl interface supplies authentication exchanges only, without a connection security-layer adapter. |
-| SMTP-AUTH-22 | RFC 4954 §4 | MUST | Supported mechanism challenge/response sizes are accepted independently of SMTP command line limits. | n/a: known gap; server continuations still share MaxLineLength (default 2000), and client challenges share its reply limit. A separate bounded SASL buffer is needed. |
+| SMTP-AUTH-22 | RFC 4954 §4 | MUST | The server accepts supported mechanism responses independently of its SMTP command line limit. | `TestRFC4954_ResponseSizeIndependentOfLineLimit` |
 | SMTP-AUTH-23 | RFC 4954 §4 | SHOULD | Authorization identities use SASLprep; failed preparation or an unexpectedly empty prepared identity must fail authentication. | n/a: host responsibility; the transport receives opaque SASL bytes and no authorization identity. Hosts must implement preparation and return a SASL error on failure. |
 | SMTP-AUTH-24 | RFC 4954 §4 | MUST | PLAIN over TLS is available for interoperability. | `TestRFC4954PlainOverTLS` |
 | SMTP-AUTH-25 | RFC 4954 §4 | MUST | AUTH is last in a pipelined group except for eligible one-round-trip mechanisms with an initial response. | n/a: client Auth is synchronous, outside the Pipeliner API; the raw server cannot distinguish a group boundary from buffered continuation bytes. Host-provided mechanisms must not negotiate unsupported security layers. |
@@ -889,7 +889,7 @@ RFC conformance. Known transport gaps remain tracked by
 | SMTP-AUDIT-33 | 4.1.1.3 | MUST NOT | Copy source-route host names into the reverse-path while relaying. | n/a: caller constructs each onward envelope; no relay engine joins incoming RCPT routes to outgoing MAIL. |
 | SMTP-AUDIT-34 | 4.1.1.3 | MUST NOT | Send RCPT extension parameters not offered by EHLO. | `TestRFC5321_ClientAuditSequence` |
 | SMTP-AUDIT-35 | 4.1.1.4 | SHOULD | Avoid unnecessary ASCII control characters in originating message data. | n/a: caller constructs content; transport must preserve the permitted ASCII octets, not filter them. |
-| SMTP-AUDIT-36 | 4.1.1.8 | SHOULD | Support HELP without arguments. | n/a: known gap: HELP returns 502, explicitly tested by SMTP-CMD-07; no help-content implementation exists. |
+| SMTP-AUDIT-36 | 4.1.1.8 | SHOULD | Support HELP without arguments. | `TestRFC5321_Help` |
 | SMTP-AUDIT-37 | 4.1.2 | SHOULD | Avoid defining mailboxes requiring quoted local-parts or case distinctions; transmit local-parts with minimum quoting. | n/a: mailbox naming is host policy and the client does not minimize caller-supplied quoting. Server equivalence is separately tested by SMTP-AUDIT-07. |
 | SMTP-AUDIT-38 | 4.1.2 | MUST NOT | Define mailboxes requiring non-ASCII/control characters in base SMTP or use such characters in mailbox commands absent an extension. | n/a: host chooses mailbox definitions; transport control-byte rejection is SMTP-SYN-02 and non-ASCII envelope enforcement is already covered by UTF8-ADDR-02/03 and UTF8-CLIENT-01. Those checks cannot ensure the host provisions usable base-SMTP mailbox names. |
 | SMTP-AUDIT-39 | 4.1.2 | MUST | Reject invalid SMTP domain-label characters with 501 unless an extension permits them. | n/a: known parser gap: domain parsing does not fully validate LDH labels (including underscore); address-literal parsing is also permissive. No strict domain-validator implementation is claimed. |

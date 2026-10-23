@@ -76,7 +76,7 @@ func TestRFC5321_NoopIgnoresParameter(t *testing.T) {
 
 // RFC 5321 §4.1.4: NOOP, HELP, EXPN, VRFY and RSET may be used at any time:
 // before HELO/EHLO, and inside a transaction without disturbing its sender or
-// recipients (HELP and EXPN are answered 502 here, see SMTP-CMD-07).
+// recipients (EXPN is answered 502 here, see SMTP-CMD-07).
 //
 // checklist: SMTP-ORD-06
 func TestRFC5321_AnyTimeCommands(t *testing.T) {
@@ -88,7 +88,7 @@ func TestRFC5321_AnyTimeCommands(t *testing.T) {
 	expectReply(t, c, next, "NOOP\r\n", "250 ")
 	expectReply(t, c, next, "VRFY someone\r\n", "252 ")
 	expectReply(t, c, next, "RSET\r\n", "250 ")
-	expectReply(t, c, next, "HELP\r\n", "502 ")
+	expectReply(t, c, next, "HELP\r\n", "214 ")
 	expectReply(t, c, next, "HELO client.example.org\r\n", "250 ")
 
 	expectReply(t, c, next, "MAIL FROM:<a@example.org>\r\n", "250 ")
@@ -96,7 +96,7 @@ func TestRFC5321_AnyTimeCommands(t *testing.T) {
 	expectReply(t, c, next, "NOOP\r\n", "250 ")
 	expectReply(t, c, next, "VRFY b@example.org\r\n", "252 ")
 	expectReply(t, c, next, "EXPN list\r\n", "502 ")
-	expectReply(t, c, next, "HELP MAIL\r\n", "502 ")
+	expectReply(t, c, next, "HELP MAIL\r\n", "214 ")
 	expectReply(t, c, next, "RCPT TO:<c@example.org>\r\n", "250 ")
 	expectReply(t, c, next, "DATA\r\n", "354 ")
 	expectReply(t, c, next, "\r\nbody\r\n.\r\n", "250 ")
@@ -107,6 +107,64 @@ func TestRFC5321_AnyTimeCommands(t *testing.T) {
 	msg := be.anonmsgs[0]
 	if msg.From != "a@example.org" || strings.Join(msg.To, ",") != "b@example.org,c@example.org" {
 		t.Fatalf("delivered from %q to %q, want the transaction unchanged", msg.From, msg.To)
+	}
+}
+
+// RFC 5321 §4.1.1.8: the server SHOULD support HELP without arguments and
+// MAY take an argument. Both get a single-line 214 reply (§4.3.2), in any
+// state and any case, and the reply names the greeting command for the
+// protocol being served. HELP changes no session state.
+//
+// checklist: SMTP-AUDIT-36
+func TestRFC5321_Help(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		lmtp  bool
+		greet string
+	}{
+		{"SMTP", false, "EHLO"},
+		{"LMTP", true, "LHLO"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			be, s, c, scanner := testServer(t, func(s *smtp.Server) { s.LMTP = tc.lmtp })
+			defer s.Close()
+			defer c.Close()
+			next := func() string { scanner.Scan(); return scanner.Text() }
+			if got := next(); !strings.HasPrefix(got, "220 ") {
+				t.Fatalf("greeting = %q", got)
+			}
+
+			want := "214 2.0.0 Send " + tc.greet + " to list the supported extensions"
+			help := func(cmd string) {
+				t.Helper()
+				io.WriteString(c, cmd)
+				if got := next(); got != want {
+					t.Fatalf("%q: got %q, want %q", strings.TrimSpace(cmd), got, want)
+				}
+			}
+
+			help("HELP\r\n")
+			help("help\r\n")
+			help("HELP MAIL\r\n")
+			help("HELP \r\n")
+			expectReply(t, c, next, tc.greet+" client.example.org\r\n", "250")
+			for scanner.Text()[3] == '-' {
+				next()
+			}
+			expectReply(t, c, next, "MAIL FROM:<a@example.org>\r\n", "250 ")
+			help("HeLp\r\n")
+			expectReply(t, c, next, "RCPT TO:<b@example.org>\r\n", "250 ")
+			help("HELP RCPT\r\n")
+			expectReply(t, c, next, "DATA\r\n", "354 ")
+			io.WriteString(c, "\r\nbody\r\n.\r\n")
+			if got := next(); !strings.HasPrefix(got, "250 ") {
+				t.Fatalf("end of data: got %q", got)
+			}
+
+			if len(be.anonmsgs) != 1 || be.anonmsgs[0].From != "a@example.org" || len(be.anonmsgs[0].To) != 1 {
+				t.Fatalf("delivered %+v, want one message from a@example.org to one recipient", be.anonmsgs)
+			}
+		})
 	}
 }
 

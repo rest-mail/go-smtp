@@ -117,6 +117,16 @@ func (c *Conn) init() {
 	c.text = textproto.NewConn(rwc)
 }
 
+// handleHelp answers HELP with a 214 reply that points the client at the
+// greeting command, which lists the extensions this server offers.
+func (c *Conn) handleHelp() {
+	greet := "EHLO"
+	if c.server.LMTP {
+		greet = "LHLO"
+	}
+	c.writeResponse(214, EnhancedCode{2, 0, 0}, fmt.Sprintf("Send %v to list the supported extensions", greet))
+}
+
 // Commands are dispatched to the appropriate handler functions.
 func (c *Conn) handle(cmd string, arg string) {
 	// If panic happens during command handling - send 421 response
@@ -138,9 +148,14 @@ func (c *Conn) handle(cmd string, arg string) {
 
 	cmd = strings.ToUpper(cmd)
 	switch cmd {
-	case "SEND", "SOML", "SAML", "EXPN", "HELP", "TURN":
+	case "SEND", "SOML", "SAML", "EXPN", "TURN":
 		// These commands are not implemented in any state
 		c.writeResponse(502, EnhancedCode{5, 5, 1}, fmt.Sprintf("%v command not implemented", cmd))
+	case "HELP":
+		// RFC 5321 §4.1.1.8: HELP SHOULD work without arguments and is valid
+		// in any state (§4.1.4). An argument MAY ask for more specific help;
+		// it gets the same general reply.
+		c.handleHelp()
 	case "HELO", "EHLO", "LHLO":
 		lmtp := cmd == "LHLO"
 		enhanced := lmtp || cmd == "EHLO"
@@ -1306,7 +1321,9 @@ func (c *Conn) handleAuth(arg string) {
 		// The client sends its response only after it sees the challenge.
 		c.flush()
 
-		encoded, err = c.readLine()
+		// RFC 4954 §4: challenge and response sizes are independent of the
+		// SMTP command line limit, so a continuation has its own bound.
+		encoded, err = c.readLineLimit(c.server.MaxAuthResponseLength)
 		if err != nil {
 			// A failed read mid-exchange must not fall through into the main
 			// command loop: the exchange is half-finished, so the client's next
@@ -2120,6 +2137,12 @@ func (dr *deadlineReader) Read(b []byte) (int, error) {
 
 // Reads a line of input
 func (c *Conn) readLine() (string, error) {
+	return c.readLineLimit(c.server.MaxLineLength)
+}
+
+// readLineLimit reads a line of input no longer than limit octets, including
+// its CRLF; a limit of zero or less means no limit.
+func (c *Conn) readLineLimit(limit int) (string, error) {
 	// Hold the replies back while the next pipelined command is already here;
 	// send them before waiting on the client for more.
 	if !c.commandBuffered() {
@@ -2138,7 +2161,7 @@ func (c *Conn) readLine() (string, error) {
 	// Only <CRLF> ends a command line (RFC 5321 §2.3.8). textproto's ReadLine
 	// would also accept a bare LF and so run "NOOP\nMAIL ..." as two commands,
 	// which a relay that frames lines differently can exploit; refuse instead.
-	line, err := c.readCommandLine()
+	line, err := c.readCommandLine(limit)
 	if err != nil && !(err == io.EOF && line != "") {
 		return "", err
 	}
@@ -2151,12 +2174,12 @@ func (c *Conn) readLine() (string, error) {
 	return line, nil
 }
 
-// readCommandLine bounds allocation while applying MaxLineLength only to
+// readCommandLine bounds allocation while applying limit only to
 // the command being parsed. A connection-level limiter also inspects read-ahead
 // body bytes, incorrectly rejecting a long BDAT payload sharing a TCP packet
 // with its command. Retain bufio's read-ahead for PIPELINING, but do not examine
 // those bytes until the command/body state machine consumes them.
-func (c *Conn) readCommandLine() (string, error) {
+func (c *Conn) readCommandLine(limit int) (string, error) {
 	var line []byte
 	for {
 		// Peek one byte only when empty: ReadSlice would wait for its entire
@@ -2171,7 +2194,7 @@ func (c *Conn) readCommandLine() (string, error) {
 		if end >= 0 {
 			part = part[:end+1]
 		}
-		if limit := c.server.MaxLineLength; limit > 0 && len(part) > limit-len(line) {
+		if limit > 0 && len(part) > limit-len(line) {
 			return "", ErrTooLongLine
 		}
 		line = append(line, part...)
