@@ -1,0 +1,344 @@
+package rfctest
+
+import (
+	"bufio"
+	"io"
+	"net"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/rest-mail/go-smtp/pkg/smtp"
+	"github.com/rest-mail/go-smtp/pkg/smtp/server"
+)
+
+// dataLimitServer starts a server whose backend and size limit are configured
+// BEFORE Serve begins (so field writes happen-before the serving goroutine,
+// keeping the race detector quiet), then greets, EHLOs and authenticates the
+// client so the caller can drive a MAIL/RCPT/DATA transaction directly.
+func dataLimitServer(t *testing.T, configure func(be *backend, s *server.Server)) (be *backend, s *server.Server, c net.Conn, scanner *bufio.Scanner) {
+	t.Helper()
+
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	be = new(backend)
+	s = server.New(be)
+	s.Domain = "localhost"
+	s.AllowInsecureAuth = true
+	configure(be, s)
+
+	go s.Serve(l)
+
+	c, err = net.Dial("tcp", l.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	scanner = bufio.NewScanner(c)
+
+	scanner.Scan() // 220 greeting
+
+	io.WriteString(c, "EHLO localhost\r\n")
+	for scanner.Scan() {
+		if strings.HasPrefix(scanner.Text(), "250 ") {
+			break
+		}
+	}
+
+	io.WriteString(c, "AUTH PLAIN AHVzZXJuYW1lAHBhc3N3b3Jk\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "235 ") {
+		t.Fatal("Invalid AUTH response:", scanner.Text())
+	}
+
+	return
+}
+
+// beginData drives MAIL/RCPT/DATA and leaves the connection ready to receive
+// the message body.
+func beginData(t *testing.T, c net.Conn, scanner *bufio.Scanner) {
+	t.Helper()
+
+	io.WriteString(c, "MAIL FROM:<a@example.com>\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid MAIL response:", scanner.Text())
+	}
+
+	io.WriteString(c, "RCPT TO:<b@example.com>\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid RCPT response:", scanner.Text())
+	}
+
+	io.WriteString(c, "DATA\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "354 ") {
+		t.Fatal("Invalid DATA response:", scanner.Text())
+	}
+}
+
+// F12: MaxMessageBytes is an inclusive ceiling. A message whose delivered size
+// is exactly MaxMessageBytes is the largest legal message and must be accepted
+// and delivered intact.
+//
+// checklist: SMTP-EXT-03
+func TestServerSizeLimit_ExactlyMaxAccepted(t *testing.T) {
+	body := "From: a@example.com\r\n\r\nhello world\r\n"
+
+	be, s, c, scanner := dataLimitServer(t, func(be *backend, s *server.Server) {
+		s.MaxMessageBytes = int64(len(body))
+	})
+	defer s.Close()
+	defer c.Close()
+
+	beginData(t, c, scanner)
+	io.WriteString(c, body)
+	io.WriteString(c, ".\r\n")
+
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatalf("a message of exactly MaxMessageBytes must be accepted, got: %q", scanner.Text())
+	}
+	if len(be.messages) != 1 {
+		t.Fatalf("expected exactly one delivered message, got %d", len(be.messages))
+	}
+	if string(be.messages[0].Data) != body {
+		t.Fatalf("delivered body mismatch:\n got %q\nwant %q", string(be.messages[0].Data), body)
+	}
+}
+
+// F12: one byte over the ceiling must be rejected 552 and not delivered. Guards
+// that the inclusive-ceiling fix doesn't shift the boundary the wrong way.
+//
+// checklist: SMTP-DATA-04 SMTP-EXT-03
+func TestServerSizeLimit_OverMaxRejected(t *testing.T) {
+	body := "From: a@example.com\r\n\r\nhello world\r\n"
+
+	be, s, c, scanner := dataLimitServer(t, func(be *backend, s *server.Server) {
+		s.MaxMessageBytes = int64(len(body)) - 1 // body is exactly Max+1
+	})
+	defer s.Close()
+	defer c.Close()
+
+	beginData(t, c, scanner)
+	io.WriteString(c, body)
+	io.WriteString(c, ".\r\n")
+
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "552 ") {
+		t.Fatalf("a message of MaxMessageBytes+1 must be rejected 552, got: %q", scanner.Text())
+	}
+	if len(be.messages) != 0 {
+		t.Fatalf("an over-limit message must not be delivered, got %d", len(be.messages))
+	}
+}
+
+// F4: a message rejected by the backend while WITHIN the size limit must still
+// be drained to the end-of-data marker and the connection left usable for a
+// following transaction (the polite, RFC-correct behavior — must not regress).
+//
+// checklist: SMTP-EXT-03
+func TestServerSizeLimit_RejectWithinLimitKeepsConnection(t *testing.T) {
+	_, s, c, scanner := dataLimitServer(t, func(be *backend, s *server.Server) {
+		s.MaxMessageBytes = 1000
+		be.dataErr = &smtp.SMTPError{Code: 554, EnhancedCode: smtp.EnhancedCode{5, 7, 1}, Message: "rejected by policy"}
+	})
+	defer s.Close()
+	defer c.Close()
+
+	beginData(t, c, scanner)
+	io.WriteString(c, "From: a@example.com\r\n\r\nrejected body\r\n")
+	io.WriteString(c, ".\r\n")
+
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "554 ") {
+		t.Fatalf("expected 554 policy rejection, got: %q", scanner.Text())
+	}
+
+	// The connection must still be usable: a follow-up MAIL FROM is accepted.
+	io.WriteString(c, "MAIL FROM:<c@example.com>\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatalf("connection must stay alive after an in-limit rejection, MAIL got: %q", scanner.Text())
+	}
+}
+
+// F4: a message that overshoots the limit but is still only a small multiple of
+// it (here ~2x) is drained to the end-of-data marker within budget, so the
+// client gets a clean permanent 552 and the connection stays usable for a retry
+// — matching standard MTA behavior instead of an ambiguous connection drop.
+//
+// checklist: SMTP-EXT-03
+func TestServerSizeLimit_OversizedKeepsConnection(t *testing.T) {
+	be, s, c, scanner := dataLimitServer(t, func(be *backend, s *server.Server) {
+		s.MaxMessageBytes = 64
+	})
+	defer s.Close()
+	defer c.Close()
+
+	beginData(t, c, scanner)
+	// Over the ceiling, but well within the drain budget (2x64), so the marker
+	// is reached and the connection survives.
+	io.WriteString(c, "From: a@example.com\r\n\r\n"+strings.Repeat("a", 96)+"\r\n")
+	io.WriteString(c, ".\r\n")
+
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "552 ") {
+		t.Fatalf("expected 552 for the oversized message, got: %q", scanner.Text())
+	}
+	if len(be.messages) != 0 {
+		t.Fatalf("an oversized message must not be delivered, got %d", len(be.messages))
+	}
+
+	// The connection must remain usable for a follow-up transaction.
+	io.WriteString(c, "MAIL FROM:<c@example.com>\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatalf("connection must stay alive after an oversized-but-bounded rejection, MAIL got: %q", scanner.Text())
+	}
+}
+
+// F4: a client that exceeds MaxMessageBytes and then keeps streaming past the
+// whole drain budget without ever sending the end-of-data marker is abusing the
+// connection. The server must bound the drain, respond 552 and close — not read
+// unboundedly (which, on the unfixed code, hangs forever).
+//
+// checklist: SMTP-EXT-03
+func TestServerSizeLimit_OverLimitDrainBounded(t *testing.T) {
+	_, s, c, scanner := dataLimitServer(t, func(be *backend, s *server.Server) {
+		s.MaxMessageBytes = 10
+	})
+	defer s.Close()
+	defer c.Close()
+
+	beginData(t, c, scanner)
+
+	// The limit is 10 and the drain budget is 2*10 = 20, so send well past
+	// (delivered limit + drain budget) bytes with no terminating dot and keep
+	// the connection open — the drain budget is exhausted before any marker.
+	io.WriteString(c, strings.Repeat("x", 64))
+
+	// Bound the wait: unfixed code drains unboundedly and never replies, so this
+	// deadline is what turns the hang into a visible test failure.
+	c.SetReadDeadline(time.Now().Add(3 * time.Second))
+
+	if !scanner.Scan() {
+		t.Fatalf("expected a 552 response after the drain budget was exhausted, got none (server hung?): %v", scanner.Err())
+	}
+	if !strings.HasPrefix(scanner.Text(), "552 ") {
+		t.Fatalf("expected 552 after over-limit bounded drain, got: %q", scanner.Text())
+	}
+
+	// The server must close the connection rather than keep draining.
+	if scanner.Scan() {
+		t.Fatalf("expected the connection to be closed after 552, got more data: %q", scanner.Text())
+	}
+}
+
+// beginDataLMTP drives LHLO/MAIL/RCPT/DATA over an LMTP connection and leaves it
+// ready to receive the message body, with a single recipient.
+func beginDataLMTP(t *testing.T, c net.Conn, scanner *bufio.Scanner) {
+	t.Helper()
+
+	sendLHLO(t, scanner, c)
+
+	io.WriteString(c, "MAIL FROM:<root@nsa.gov>\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid MAIL response:", scanner.Text())
+	}
+	io.WriteString(c, "RCPT TO:<root@gchq.gov.uk>\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid RCPT response:", scanner.Text())
+	}
+	io.WriteString(c, "DATA\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "354 ") {
+		t.Fatal("Invalid DATA response:", scanner.Text())
+	}
+}
+
+// assertConnClosed fails the test if the connection is still open. It
+// distinguishes a closed connection (read returns EOF/error promptly) from one
+// left open (the read blocks until the deadline and returns a timeout).
+func assertConnClosed(t *testing.T, c net.Conn, context string) {
+	t.Helper()
+	c.SetReadDeadline(time.Now().Add(3 * time.Second))
+	if _, err := c.Read(make([]byte, 1)); err == nil {
+		t.Fatalf("%s: expected the connection to be closed, but a read succeeded", context)
+	} else if ne, ok := err.(net.Error); ok && ne.Timeout() {
+		t.Fatalf("%s: connection left open (drain unbounded): %v", context, err)
+	}
+}
+
+// #46: an LMTP client (backend implementing LMTPSession) that exceeds
+// MaxMessageBytes and then keeps streaming past the whole drain budget without
+// ever sending the end-of-data marker must not pin the connection. The server
+// must bound the drain, emit the per-recipient 552 and close — mirroring the
+// SMTP DATA path. On the unfixed code the drain is an unbounded io.Copy that
+// never returns, so `done` never fires and the connection is never closed.
+//
+// checklist: SMTP-EXT-03
+func TestServerSizeLimit_LMTP_OverLimitDrainBounded(t *testing.T) {
+	_, s, c, scanner := testServerGreetedLMTP(t, func(s *server.Server) {
+		s.LMTP = true
+		s.MaxMessageBytes = 10
+		be := s.Backend.(*backend)
+		be.implementLMTPData = true
+	})
+	defer s.Close()
+	defer c.Close()
+
+	beginDataLMTP(t, c, scanner)
+
+	// The limit is 10 and the drain budget is 2*10 = 20, so send well past
+	// (delivered limit + drain budget) bytes with no terminating dot: the drain
+	// budget is exhausted before any marker is seen.
+	io.WriteString(c, strings.Repeat("x", 64))
+
+	// Bound the wait: unfixed code drains unboundedly and never replies past the
+	// per-recipient status, so this deadline turns the hang into a failure.
+	c.SetReadDeadline(time.Now().Add(3 * time.Second))
+
+	if !scanner.Scan() {
+		t.Fatalf("expected a 552 response after the drain budget was exhausted, got none (server hung?): %v", scanner.Err())
+	}
+	if !strings.HasPrefix(scanner.Text(), "552 ") {
+		t.Fatalf("expected 552 after over-limit LMTP bounded drain, got: %q", scanner.Text())
+	}
+
+	assertConnClosed(t, c, "after over-limit LMTP drain")
+}
+
+// #46: the same bounded-drain guarantee must hold on the fallback path taken
+// when the backend does NOT implement LMTPSession (a single status is expanded
+// to every recipient).
+//
+// checklist: SMTP-EXT-03
+func TestServerSizeLimit_LMTP_Fallback_OverLimitDrainBounded(t *testing.T) {
+	_, s, c, scanner := testServerGreetedLMTP(t, func(s *server.Server) {
+		s.LMTP = true
+		s.MaxMessageBytes = 10
+	})
+	defer s.Close()
+	defer c.Close()
+
+	beginDataLMTP(t, c, scanner)
+
+	io.WriteString(c, strings.Repeat("x", 64))
+
+	c.SetReadDeadline(time.Now().Add(3 * time.Second))
+
+	if !scanner.Scan() {
+		t.Fatalf("expected a 552 response after the drain budget was exhausted, got none (server hung?): %v", scanner.Err())
+	}
+	if !strings.HasPrefix(scanner.Text(), "552 ") {
+		t.Fatalf("expected 552 after over-limit LMTP fallback bounded drain, got: %q", scanner.Text())
+	}
+
+	assertConnClosed(t, c, "after over-limit LMTP fallback drain")
+}

@@ -1,0 +1,525 @@
+package server
+
+import (
+	"context"
+	"crypto/tls"
+	"errors"
+	"io"
+	"log"
+	"net"
+	"os"
+	"sync"
+	"syscall"
+	"time"
+
+	"github.com/rest-mail/go-smtp/pkg/smtp"
+	"github.com/rest-mail/go-smtp/pkg/smtp/internal/wire"
+)
+
+var ErrServerClosed = errors.New("smtp: server already closed")
+
+// Logger interface is used by Server to report unexpected internal errors.
+type Logger interface {
+	Printf(format string, v ...interface{})
+	Println(v ...interface{})
+}
+
+// A SMTP server.
+type Server struct {
+	// The type of network, "tcp" or "unix".
+	Network string
+	// TCP or Unix address to listen on.
+	Addr string
+	// The server TLS configuration.
+	TLSConfig *tls.Config
+	// Enable LMTP mode, as defined in RFC 2033.
+	LMTP bool
+
+	Domain          string
+	MaxRecipients   int
+	MaxMessageBytes int64
+	MaxLineLength   int
+	// MaxAuthResponseLength bounds one SASL response line sent during AUTH,
+	// CRLF included. RFC 4954 §4 makes response sizes independent of the
+	// command line limit, so MaxLineLength does not apply to them. Zero means
+	// 64 KiB, enough for large GSSAPI tokens; a negative value means no limit.
+	MaxAuthResponseLength int
+	AllowInsecureAuth     bool
+	Debug                 io.Writer
+	ErrorLog              Logger
+	ReadTimeout           time.Duration
+	WriteTimeout          time.Duration
+
+	// Advertise SMTPUTF8 (RFC 6531) capability.
+	// Should be used only if backend supports it.
+	EnableSMTPUTF8 bool
+
+	// Advertise REQUIRETLS (RFC 8689) capability.
+	// Advertised only over TLS. Enable only when the backend persists and
+	// honors the tag across onward delivery, aliases and reports. TLS-Required
+	// header interpretation and routing/trust policy belong to the host.
+	EnableREQUIRETLS bool
+
+	// Advertise BINARYMIME (RFC 3030) capability.
+	// Enable only when storage, delivery and relay preserve all binary octets.
+	// MIME validation, canonicalization and next-hop conversion are host policy.
+	EnableBINARYMIME bool
+
+	// Advertise DSN (RFC 3461) capability. Enable only when the backend honors
+	// notification requests, generates reports and preserves options on relay.
+	// The transport parses options but does not implement the DSN lifecycle.
+	EnableDSN bool
+
+	// Advertise RRVS (RFC 7293) capability.
+	// Should be used only if backend supports it.
+	EnableRRVS bool
+
+	// Advertise DELIVERBY (RFC 2852) capability.
+	// Should be used only if backend supports it.
+	EnableDELIVERBY bool
+	// The minimum time, with seconds precision, that a client
+	// may specify in the BY argument with return mode.
+	// A zero value indicates no set minimum.
+	// Only use if DELIVERBY is enabled.
+	MinimumDeliverByTime time.Duration
+
+	// Advertise MT-PRIORITY (RFC 6710) capability. Enable only when the
+	// backend enforces priority authorization and implements the selected
+	// policy. In particular, Mail must reject or lower positive priorities
+	// from untrusted or unauthorized sources (RFC 6710 section 4.1).
+	// Queue ordering, logging, trace fields and relay metadata are host work.
+	EnableMTPRIORITY bool
+	// Priority assignment policy name advertised with MT-PRIORITY. The host
+	// must supply 1..20 ASCII letters, digits, '-', '_' or '.' (RFC 6710
+	// section 7); EHLO/LHLO returns 451 4.3.5 if an enabled policy is invalid.
+	// An empty value omits the name; clients assume the MIXER policy.
+	MtPriorityProfile smtp.PriorityProfile
+
+	// Additional capabilities to advertise in response to EHLO, e.g.
+	// "XEXAMPLE https://example.org/smtp-ext". Each entry is advertised
+	// verbatim as a separate capability line.
+	//
+	// This can be used to advertise site-specific extensions that are not
+	// natively supported by this package. It is the caller's responsibility
+	// to handle any commands such an extension defines.
+	ExtraCaps []string
+
+	// EnableXCLIENT advertises and honors the XCLIENT extension, which lets a
+	// trusted proxy (haproxy/nginx/Postfix) assert the real client's identity
+	// (ADDR/NAME/PROTO/HELO/LOGIN) on behalf of the connection.
+	//
+	// XCLIENT is only advertised and honored on connections for which
+	// TrustXCLIENT returns true. Without a TrustXCLIENT that returns true it is
+	// never honored — allowing an untrusted peer to assert XCLIENT would let it
+	// spoof any client identity.
+	EnableXCLIENT bool
+
+	// TrustXCLIENT reports whether the peer on the given connection is a trusted
+	// proxy permitted to assert client identity via XCLIENT. It is required for
+	// XCLIENT to have any effect and is typically an IP/CIDR or TLS-client-cert
+	// check against the connection's peer.
+	TrustXCLIENT func(*Conn) bool
+
+	// The server backend.
+	Backend Backend
+
+	// ConnState, if non-nil, is called when a client connection changes state:
+	// StateNew when it is accepted (before the greeting) and StateClosed when it
+	// is torn down. It mirrors net/http.Server.ConnState and is a single place to
+	// hook connection-level metrics, logging and debugging. It must not block.
+	ConnState func(net.Conn, ConnState)
+
+	wg        sync.WaitGroup
+	done      chan struct{}
+	closeOnce sync.Once
+	initOnce  sync.Once
+
+	// baseCtx is the parent of every connection's Context. It is cancelled when
+	// the server is closed or shut down, so a backend can observe shutdown via
+	// Conn.Context().
+	baseCtx    context.Context
+	baseCancel context.CancelFunc
+
+	locker    sync.Mutex
+	listeners []net.Listener
+	conns     map[*Conn]struct{}
+}
+
+// ConnState represents the lifecycle state of a client connection, as reported
+// to Server.ConnState.
+type ConnState int
+
+const (
+	// StateNew is reported when a connection has been accepted, before the
+	// server greeting is sent.
+	StateNew ConnState = iota
+	// StateClosed is reported when a connection has been closed.
+	StateClosed
+)
+
+func (c ConnState) String() string {
+	switch c {
+	case StateNew:
+		return "new"
+	case StateClosed:
+		return "closed"
+	default:
+		return "unknown"
+	}
+}
+
+// defaultMaxAuthResponseLength is the default Server.MaxAuthResponseLength.
+const defaultMaxAuthResponseLength = 64 << 10
+
+// New creates a new SMTP server.
+func New(be Backend) *Server {
+	return &Server{
+		// Doubled maximum line length per RFC 5321 (Section 4.5.3.1.6)
+		MaxLineLength: 2000,
+
+		MaxAuthResponseLength: defaultMaxAuthResponseLength,
+
+		Backend:  be,
+		done:     make(chan struct{}),
+		ErrorLog: log.New(os.Stderr, "smtp/server ", log.LstdFlags),
+		conns:    make(map[*Conn]struct{}),
+	}
+}
+
+// init lazily fills the internal state that New sets, so a zero-value
+// &Server{} is safe to use. It is idempotent and only fills fields left
+// nil/zero, so a Server built with New (or one whose fields the caller set
+// explicitly) is unaffected.
+func (s *Server) init() {
+	s.initOnce.Do(func() {
+		if s.done == nil {
+			s.done = make(chan struct{})
+		}
+		if s.conns == nil {
+			s.conns = make(map[*Conn]struct{})
+		}
+		if s.ErrorLog == nil {
+			s.ErrorLog = log.New(os.Stderr, "smtp/server ", log.LstdFlags)
+		}
+		if s.MaxLineLength == 0 {
+			// Doubled maximum line length per RFC 5321 (Section 4.5.3.1.6)
+			s.MaxLineLength = 2000
+		}
+		if s.MaxAuthResponseLength == 0 {
+			s.MaxAuthResponseLength = defaultMaxAuthResponseLength
+		}
+		if s.baseCtx == nil {
+			s.baseCtx, s.baseCancel = context.WithCancel(context.Background())
+		}
+	})
+}
+
+// baseContext returns the parent context for new connections, falling back to
+// context.Background if the server has not been initialized.
+func (s *Server) baseContext() context.Context {
+	if s.baseCtx != nil {
+		return s.baseCtx
+	}
+	return context.Background()
+}
+
+// Serve accepts incoming connections on the Listener l.
+func (s *Server) Serve(l net.Listener) error {
+	s.init()
+
+	s.locker.Lock()
+	s.listeners = append(s.listeners, l)
+	s.locker.Unlock()
+
+	var tempDelay time.Duration // how long to sleep on accept failure
+
+	for {
+		c, err := l.Accept()
+		if err != nil {
+			select {
+			case <-s.done:
+				// we called Close()
+				return nil
+			default:
+			}
+			// A closed listener ends Serve. Any other accept error is treated
+			// as transient and retried with backoff (the net/http pattern;
+			// net.Error.Temporary is deprecated).
+			if errors.Is(err, net.ErrClosed) {
+				return nil
+			}
+			if tempDelay == 0 {
+				tempDelay = 5 * time.Millisecond
+			} else {
+				tempDelay *= 2
+			}
+			if max := 1 * time.Second; tempDelay > max {
+				tempDelay = max
+			}
+			s.ErrorLog.Printf("accept error: %s; retrying in %s", err, tempDelay)
+			time.Sleep(tempDelay)
+			continue
+		}
+
+		s.wg.Add(1)
+		go func() {
+			defer s.wg.Done()
+
+			err := s.handleConn(newConn(c, s))
+			if err != nil {
+				s.ErrorLog.Printf("error handling %v: %s", c.RemoteAddr(), err)
+			}
+		}()
+	}
+}
+
+func (s *Server) handleConn(c *Conn) error {
+	s.locker.Lock()
+	s.conns[c] = struct{}{}
+	s.locker.Unlock()
+
+	if s.ConnState != nil {
+		s.ConnState(c.conn, StateNew)
+	}
+
+	defer func() {
+		// Send the final replies (421, 500, ...) before closing.
+		c.flush()
+		c.Close()
+
+		s.locker.Lock()
+		delete(s.conns, c)
+		s.locker.Unlock()
+
+		if s.ConnState != nil {
+			s.ConnState(c.conn, StateClosed)
+		}
+	}()
+
+	if tlsConn, ok := c.conn.(*tls.Conn); ok {
+		if d := s.ReadTimeout; d != 0 {
+			c.conn.SetReadDeadline(time.Now().Add(d))
+		}
+		if d := s.WriteTimeout; d != 0 {
+			c.conn.SetWriteDeadline(time.Now().Add(d))
+		}
+		if err := tlsConn.Handshake(); err != nil {
+			return err
+		}
+	}
+
+	c.greet()
+
+	gotCmd := false
+	for {
+		line, err := c.readLine()
+		if err == nil {
+			gotCmd = true
+
+			// errCount tallies *consecutive* protocol errors. Remember it before
+			// dispatch so a command that completes without adding an error can
+			// clear the tally below.
+			errCountBefore := c.errCount
+
+			cmd, arg, err := parseCmd(line)
+			if err != nil {
+				c.protocolError(501, smtp.EnhancedCode{5, 5, 2}, "Bad command")
+			} else {
+				c.handle(cmd, arg)
+			}
+
+			// RFC 2920 §3.2: only the transaction commands may keep their
+			// replies buffered. Synchronization points and unknown/malformed
+			// commands must flush even if more complete input is available.
+			switch cmd {
+			case "RSET", "MAIL", "RCPT":
+			default:
+				c.flush()
+			}
+
+			// A command that raised no new protocol error resets the run, so the
+			// connection is dropped only for a sustained burst of errors rather
+			// than the Nth error across an otherwise healthy session.
+			if c.errCount == errCountBefore {
+				c.errCount = 0
+			}
+
+			// Stop once a response could not be written: the peer is gone, so
+			// continuing to read and process commands is pointless.
+			if c.writeErr != nil {
+				return c.writeErr
+			}
+			// A command handler closed the connection (QUIT, too many errors, a
+			// failed STARTTLS, ...): commands pipelined after it are not served.
+			if c.closing {
+				return nil
+			}
+		} else {
+			// If the server is shutting down, the read was interrupted by
+			// Server.Close: tell the client the service is closing (RFC 5321
+			// §3.8) instead of dropping the connection silently.
+			select {
+			case <-s.done:
+				c.writeResponse(421, smtp.EnhancedCode{4, 7, 0}, "Service not available, closing transmission channel")
+				return nil
+			default:
+			}
+
+			if err == io.EOF || errors.Is(err, net.ErrClosed) {
+				return nil
+			}
+			if err == wire.ErrTooLongLine {
+				c.writeResponse(500, smtp.EnhancedCode{5, 4, 0}, "Too long line, closing connection")
+				return nil
+			}
+			if err == errBareLF {
+				c.writeResponse(500, smtp.EnhancedCode{5, 5, 2}, "Bare LF is not a line ending, closing connection")
+				return nil
+			}
+
+			if neterr, ok := err.(net.Error); ok && neterr.Timeout() {
+				c.writeResponse(421, smtp.EnhancedCode{4, 4, 2}, "Idle timeout, bye bye")
+				return nil
+			}
+
+			// A connection that is reset or closed before issuing any command
+			// (e.g. a bare TCP health check) is a clean close, not an error
+			// worth logging.
+			if !gotCmd && errors.Is(err, syscall.ECONNRESET) {
+				return nil
+			}
+
+			c.writeResponse(421, smtp.EnhancedCode{4, 4, 0}, "Connection error, sorry")
+			return err
+		}
+	}
+}
+
+func (s *Server) network() string {
+	if s.Network != "" {
+		return s.Network
+	}
+	if s.LMTP {
+		return "unix"
+	}
+	return "tcp"
+}
+
+// ListenAndServe listens on the network address s.Addr and then calls Serve
+// to handle requests on incoming connections.
+//
+// If s.Addr is blank and LMTP is disabled, ":smtp" is used.
+func (s *Server) ListenAndServe() error {
+	network := s.network()
+
+	addr := s.Addr
+	if !s.LMTP && addr == "" {
+		addr = ":smtp"
+	}
+
+	l, err := net.Listen(network, addr)
+	if err != nil {
+		return err
+	}
+
+	return s.Serve(l)
+}
+
+// ListenAndServeTLS listens on the TCP network address s.Addr and then calls
+// Serve to handle requests on incoming TLS connections.
+//
+// If s.Addr is blank and LMTP is disabled, ":smtps" is used.
+func (s *Server) ListenAndServeTLS() error {
+	network := s.network()
+
+	addr := s.Addr
+	if !s.LMTP && addr == "" {
+		addr = ":smtps"
+	}
+
+	l, err := tls.Listen(network, addr, s.TLSConfig)
+	if err != nil {
+		return err
+	}
+
+	return s.Serve(l)
+}
+
+// signalDone closes the done channel exactly once, regardless of how many
+// goroutines call Close/Shutdown concurrently. It reports whether this call was
+// the one that performed the close (i.e. the first caller).
+func (s *Server) signalDone() (first bool) {
+	s.closeOnce.Do(func() {
+		close(s.done)
+		if s.baseCancel != nil {
+			s.baseCancel()
+		}
+		first = true
+	})
+	return first
+}
+
+// Close immediately closes all active listeners and connections.
+//
+// Close returns any error returned from closing the server's underlying
+// listener(s).
+func (s *Server) Close() error {
+	s.init()
+	if !s.signalDone() {
+		return ErrServerClosed
+	}
+
+	var err error
+	s.locker.Lock()
+	for _, l := range s.listeners {
+		if lerr := l.Close(); lerr != nil && err == nil {
+			err = lerr
+		}
+	}
+
+	// Tell each live connection the service is closing. beginServerClose wakes
+	// the connection's read so its own goroutine emits a 421 (RFC 5321 §3.8) and
+	// then closes the socket, rather than the socket being dropped silently.
+	for conn := range s.conns {
+		conn.beginServerClose()
+	}
+	s.locker.Unlock()
+
+	return err
+}
+
+// Shutdown gracefully shuts down the server without interrupting any
+// active connections. Shutdown works by first closing all open
+// listeners and then waiting indefinitely for connections to return to
+// idle and then shut down.
+// If the provided context expires before the shutdown is complete,
+// Shutdown returns the context's error, otherwise it returns any
+// error returned from closing the Server's underlying Listener(s).
+func (s *Server) Shutdown(ctx context.Context) error {
+	s.init()
+	if !s.signalDone() {
+		return ErrServerClosed
+	}
+
+	var err error
+	s.locker.Lock()
+	for _, l := range s.listeners {
+		if lerr := l.Close(); lerr != nil && err == nil {
+			err = lerr
+		}
+	}
+	s.locker.Unlock()
+
+	connDone := make(chan struct{})
+	go func() {
+		defer close(connDone)
+		s.wg.Wait()
+	}()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-connDone:
+		return err
+	}
+}
