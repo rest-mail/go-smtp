@@ -26,6 +26,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   the bound. An over-long response still gets `500 5.5.6` and the connection
   closes. The client side remains a known gap (SMTP-AUTH-32).
 
+- The client now reads AUTH challenges under the new
+  `Client.MaxAuthChallengeLength` (64 KiB by default, negative for no limit)
+  instead of the 2000-octet reply line limit, which returns once AUTH ends.
+  A large challenge, such as a GSSAPI token, used to fail the exchange with
+  `ErrTooLongLine` (RFC 4954 §4).
 - When an LMTP connection fails during the DATA replies,
   `CloseWithLMTPResponse` now returns a temporary `451 4.4.2` failure in its
   `LMTPDataError` for each recipient left without a reply, joined with the

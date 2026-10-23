@@ -227,7 +227,7 @@ insecure authentication disabled; the host still configures TLS and credentials.
 | SMTP-AUTH-29 | RFC 4954 §6 | Normative | Host failure replies reach the wire unchanged from the mechanism factory or a SASL step (534 5.7.9, 538 5.7.11, 535 5.7.8, 530 5.7.0); an uncoded failure is the temporary 454 4.7.0, and a later AUTH can still succeed. | `TestRFC4954_HostFailureCodes` |
 | SMTP-AUTH-30 | RFC 4954 §5 | Normative | The client sends the submitter as xtext and an unknown submitter as `AUTH=<>`, never an empty value, and omits the parameter when the server did not advertise AUTH. | `TestRFC4954_ClientMailAuthParameter`, `TestRFC4954_MailAuthRoundTrip` |
 | SMTP-AUTH-31 | RFC 4954 §5 | MUST | A server that does not trust the client's authenticated identity, or whose client has not authenticated, behaves as if `AUTH=<>` was supplied. | n/a: host trust policy, left for the owner; Session.Mail receives the asserted value unchanged, and only the host knows whether its AuthSession succeeded or another trust source (such as XCLIENT) applies. Blanking it in the transport would change what every host sees. |
-| SMTP-AUTH-32 | RFC 4954 §4 | MUST | The client accepts supported mechanism challenges independently of its SMTP reply line limit. | n/a: known gap; client challenges are read as replies and share their limit. A separate bounded SASL buffer is needed. |
+| SMTP-AUTH-32 | RFC 4954 §4 | MUST | The client accepts supported mechanism challenges independently of its SMTP reply line limit: during AUTH, reply lines are bounded by `Client.MaxAuthChallengeLength` (64 KiB by default, negative for no limit), and the 2000-octet reply limit returns afterwards. | `TestRFC4954_ClientChallengeIndependentOfLineLimit` |
 
 
 ## STARTTLS (RFC 3207)

@@ -416,3 +416,83 @@ func TestRFC4954_ChallengeAndCancel(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+// lineAtATimeReader returns at most one line per Read, as a server that
+// answers each command only after reading it would.
+type lineAtATimeReader struct{ r *strings.Reader }
+
+func (l lineAtATimeReader) Read(b []byte) (int, error) {
+	n := 0
+	for n < len(b) {
+		c, err := l.r.ReadByte()
+		if err != nil {
+			if n > 0 {
+				return n, nil
+			}
+			return 0, err
+		}
+		b[n] = c
+		n++
+		if c == '\n' {
+			break
+		}
+	}
+	return n, nil
+}
+
+type rfc4954EchoClient struct{ challenge []byte }
+
+func (*rfc4954EchoClient) Start() (string, []byte, error) { return "TOKEN", nil, nil }
+func (a *rfc4954EchoClient) Next(challenge []byte) ([]byte, error) {
+	a.challenge = challenge
+	return []byte("ok"), nil
+}
+
+// checklist: SMTP-AUTH-32
+func TestRFC4954_ClientChallengeIndependentOfLineLimit(t *testing.T) {
+	run := func(t *testing.T, limit, size int, after string) (*rfc4954EchoClient, *Client, error) {
+		t.Helper()
+		challenge := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{'c'}, size))
+		replies := "220 ready\r\n334 " + challenge + "\r\n235 2.7.0 ok\r\n" + after
+		var wrote bytes.Buffer
+		c := NewClient(faker{ReadWriter: struct {
+			io.Reader
+			io.Writer
+		}{lineAtATimeReader{strings.NewReader(replies)}, &wrote}})
+		c.MaxAuthChallengeLength = limit
+		if err := c.greet(); err != nil {
+			t.Fatal(err)
+		}
+		c.didHello = true
+		t.Cleanup(func() { c.Close() })
+		a := &rfc4954EchoClient{}
+		return a, c, c.Auth(a)
+	}
+	t.Run("default accepts a challenge beyond the reply limit", func(t *testing.T) {
+		a, _, err := run(t, 0, 30000, "")
+		if err != nil || len(a.challenge) != 30000 {
+			t.Fatalf("err=%v, challenge=%d octets", err, len(a.challenge))
+		}
+	})
+	t.Run("negative means no limit", func(t *testing.T) {
+		a, _, err := run(t, -1, 100000, "")
+		if err != nil || len(a.challenge) != 100000 {
+			t.Fatalf("err=%v, challenge=%d octets", err, len(a.challenge))
+		}
+	})
+	t.Run("own bound refuses a longer challenge", func(t *testing.T) {
+		a, _, err := run(t, 3000, 3000, "")
+		if err == nil || a.challenge != nil {
+			t.Fatalf("err=%v, challenge=%d octets", err, len(a.challenge))
+		}
+	})
+	t.Run("reply limit returns after AUTH", func(t *testing.T) {
+		_, c, err := run(t, 0, 3000, "250 "+strings.Repeat("x", 3000)+"\r\n")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := c.Noop(); err == nil {
+			t.Fatal("a reply longer than the reply line limit was accepted after AUTH")
+		}
+	})
+}
