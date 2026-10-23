@@ -27,8 +27,11 @@ jobs:
       # same 95% minimum as the shared RFC workflow used by other go-* libraries.
       # The README badge and TestReadmeBadges track FLOOR; COVERAGE.md records
       # the measurement and exclusions. The demo cmd/smtp-debug-server is omitted.
+      # -coverpkg credits every package with the statements any test package
+      # runs: the rfctest black-box suite and the client tests drive the server,
+      # so measuring each package only by its own tests would undercount.
       - name: test (race) with coverage
-        run: go test -race -count=1 -covermode=atomic -coverprofile=coverage.out . ./internal/...
+        run: go test -race -count=1 -covermode=atomic -coverpkg=./pkg/...,./internal/... -coverprofile=coverage.out ./pkg/... ./internal/...
       - name: coverage floor
         env:
           FLOOR: '95'
@@ -37,25 +40,25 @@ jobs:
           echo "Statement coverage: ${total}% (floor ${FLOOR}%)"
           awk -v t="$total" -v f="$FLOOR" 'BEGIN { exit !(t + 0 >= f + 0) }'
       - name: RFC checklist
-        run: go run ./internal/checklist -file CHECKLIST.md .
+        run: go run ./internal/checklist -file CHECKLIST.md pkg/smtp pkg/smtp/client pkg/smtp/internal/wire pkg/smtp/rfctest pkg/smtp/server
       - name: fuzz parsers (10 seconds each)
         env:
           GOMAXPROCS: '1'
         run: |
-          go test -run='^$' -fuzz='^FuzzRFC6710Priority$' -fuzztime=10s -parallel=1 .
-          go test -run='^$' -fuzz='^FuzzRFC3030Arguments$' -fuzztime=10s -parallel=1 .
-          go test -run='^$' -fuzz='^FuzzRFC3461Notify$' -fuzztime=10s -parallel=1 .
-          go test -run='^$' -fuzz='^FuzzDecodeSASLResponse$' -fuzztime=10s -parallel=1 .
-          go test -run='^$' -fuzz='^FuzzParseCmd$' -fuzztime=10s -parallel=1 .
-          go test -run='^$' -fuzz='^FuzzParseArgs$' -fuzztime=10s -parallel=1 .
-          go test -run='^$' -fuzz='^FuzzRFC6152DataOctets$' -fuzztime=10s -parallel=1 .
-          go test -run='^$' -fuzz='^FuzzRFC1870SizeValues$' -fuzztime=10s -parallel=1 .
-          go test -run='^$' -fuzz='^FuzzParseDeliverByArgument$' -fuzztime=10s -parallel=1 .
-          go test -run='^$' -fuzz='^FuzzParseReversePath$' -fuzztime=10s -parallel=1 .
-          go test -run='^$' -fuzz='^FuzzParseForwardPath$' -fuzztime=10s -parallel=1 .
-          go test -run='^$' -fuzz='^FuzzDecodeXtext$' -fuzztime=10s -parallel=1 .
-          go test -run='^$' -fuzz='^FuzzEncodeXtext$' -fuzztime=10s -parallel=1 .
-          go test -run='^$' -fuzz='^FuzzDecodeXClientValue$' -fuzztime=10s -parallel=1 .
-          go test -run='^$' -fuzz='^FuzzDecodeUTF8AddrXtext$' -fuzztime=10s -parallel=1 .
-          go test -run='^$' -fuzz='^FuzzEncodeUTF8AddrXtext$' -fuzztime=10s -parallel=1 .
-          go test -run='^$' -fuzz='^FuzzEncodeUTF8AddrUnitext$' -fuzztime=10s -parallel=1 .
+          go test -run='^$' -fuzz='^FuzzRFC6710Priority$' -fuzztime=10s -parallel=1 ./pkg/smtp/server
+          go test -run='^$' -fuzz='^FuzzRFC3030Arguments$' -fuzztime=10s -parallel=1 ./pkg/smtp/server
+          go test -run='^$' -fuzz='^FuzzRFC3461Notify$' -fuzztime=10s -parallel=1 ./pkg/smtp/server
+          go test -run='^$' -fuzz='^FuzzDecodeSASLResponse$' -fuzztime=10s -parallel=1 ./pkg/smtp/server
+          go test -run='^$' -fuzz='^FuzzParseCmd$' -fuzztime=10s -parallel=1 ./pkg/smtp/server
+          go test -run='^$' -fuzz='^FuzzParseArgs$' -fuzztime=10s -parallel=1 ./pkg/smtp/server
+          go test -run='^$' -fuzz='^FuzzRFC6152DataOctets$' -fuzztime=10s -parallel=1 ./pkg/smtp/server
+          go test -run='^$' -fuzz='^FuzzRFC1870SizeValues$' -fuzztime=10s -parallel=1 ./pkg/smtp/client
+          go test -run='^$' -fuzz='^FuzzParseDeliverByArgument$' -fuzztime=10s -parallel=1 ./pkg/smtp/server
+          go test -run='^$' -fuzz='^FuzzParseReversePath$' -fuzztime=10s -parallel=1 ./pkg/smtp/server
+          go test -run='^$' -fuzz='^FuzzParseForwardPath$' -fuzztime=10s -parallel=1 ./pkg/smtp/server
+          go test -run='^$' -fuzz='^FuzzDecodeXtext$' -fuzztime=10s -parallel=1 ./pkg/smtp/server
+          go test -run='^$' -fuzz='^FuzzEncodeXtext$' -fuzztime=10s -parallel=1 ./pkg/smtp/server
+          go test -run='^$' -fuzz='^FuzzDecodeXClientValue$' -fuzztime=10s -parallel=1 ./pkg/smtp/server
+          go test -run='^$' -fuzz='^FuzzDecodeUTF8AddrXtext$' -fuzztime=10s -parallel=1 ./pkg/smtp/server
+          go test -run='^$' -fuzz='^FuzzEncodeUTF8AddrXtext$' -fuzztime=10s -parallel=1 ./pkg/smtp/server
+          go test -run='^$' -fuzz='^FuzzEncodeUTF8AddrUnitext$' -fuzztime=10s -parallel=1 ./pkg/smtp/server

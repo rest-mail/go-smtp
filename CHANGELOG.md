@@ -4,7 +4,71 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Note: pre-1.0, breaking changes may ship in a minor release.
 
-## [Unreleased]
+## [0.32.0] - 2026-10-23
+
+### Changed (breaking)
+
+- The library is split into packages. The module path is unchanged
+  (`github.com/rest-mail/go-smtp`), but the root package is gone:
+  - `github.com/rest-mail/go-smtp/pkg/smtp` holds the types the server and the
+    client share: `MailOptions`, `RcptOptions`, the `Body*`, `DSN*`,
+    `DeliverBy*`, `RRVS*` and `Priority*` values, `SMTPError`, `EnhancedCode`,
+    `NoEnhancedCode`, `EnhancedCodeNotSet` and `Errorf`.
+  - `github.com/rest-mail/go-smtp/pkg/smtp/server` holds the server: `Server`,
+    `Backend`, `Session`, `Conn` and the rest of the server API.
+  - `github.com/rest-mail/go-smtp/pkg/smtp/client` holds the client: `Client`,
+    `Pipeliner`, `Dial`, `SendMail` and the rest of the client API.
+  - `pkg/smtp/internal/wire` holds the xtext and RFC 6533 codecs, the
+    NOTIFY and DELIVERBY rules and the line-limited reader both sides use.
+    It is internal, so `ErrTooLongLine` is no longer importable; a reply line
+    over the client's limit still fails with an error that says
+    "smtp: too long a line in input stream".
+- The constructors are renamed to read well with their package names:
+  `NewServer` is `server.New`, and `NewClient`, `NewClientLMTP` and
+  `NewClientStartTLS` are `client.New`, `client.NewLMTP` and
+  `client.NewStartTLS`.
+
+Migration: replace the import, then the names.
+
+| Before (v0.31) | After (v0.32) |
+|----------------|---------------|
+| `import "github.com/rest-mail/go-smtp"` | `"github.com/rest-mail/go-smtp/pkg/smtp"`, `.../pkg/smtp/server`, `.../pkg/smtp/client` (import only the ones you use) |
+| `smtp.NewServer(be)` | `server.New(be)` |
+| `smtp.Server`, `smtp.Backend`, `smtp.BackendFunc`, `smtp.Session`, `smtp.AuthSession`, `smtp.LMTPSession`, `smtp.FeatureBackend`, `smtp.StatusCollector`, `smtp.Conn`, `smtp.ConnState`, `smtp.StateNew`, `smtp.StateClosed`, `smtp.XClientAttrs`, `smtp.Logger` | `server.Server`, `server.Backend`, ... (same names) |
+| `smtp.ErrAuthFailed`, `smtp.ErrAuthRequired`, `smtp.ErrAuthUnsupported`, `smtp.ErrAuthUnknownMechanism`, `smtp.ErrDataReset`, `smtp.ErrDataTooLarge`, `smtp.ErrServerClosed`, `smtp.CloseConnection` | `server.ErrAuthFailed`, ... `server.CloseConnection` (same names) |
+| `smtp.NewClient(conn)` | `client.New(conn)` |
+| `smtp.NewClientLMTP(conn)` | `client.NewLMTP(conn)` |
+| `smtp.NewClientStartTLS(conn, cfg)` | `client.NewStartTLS(conn, cfg)` |
+| `smtp.Dial`, `smtp.DialTLS`, `smtp.DialStartTLS`, `smtp.SendMail`, `smtp.SendMailTLS`, `smtp.Client`, `smtp.Pipeliner`, `smtp.DataCommand`, `smtp.DataResponse`, `smtp.LMTPDataError` | `client.Dial`, ... `client.LMTPDataError` (same names) |
+| `smtp.MailOptions`, `smtp.RcptOptions`, `smtp.SMTPError`, `smtp.EnhancedCode`, `smtp.Errorf`, `smtp.NoEnhancedCode`, `smtp.EnhancedCodeNotSet`, the `Body*`, `DSN*`, `DeliverBy*`, `RRVS*` and `Priority*` values | unchanged, now from `.../pkg/smtp` |
+| `smtp.ErrTooLongLine` | removed from the public API (see above) |
+
+### Added
+
+- A regression test, ported from upstream emersion/go-smtp 642c374, that the
+  command line limit applies again after a client abandons a BDAT transfer
+  with RSET. This server never had that bug: it passes the limit on every
+  line it reads.
+
+### Fixed
+
+- A SASL response line during AUTH is no longer limited by `MaxLineLength`
+  (RFC 4954 §4 makes challenge and response sizes independent of the command
+  line limit). The new `Server.MaxAuthResponseLength` bounds it instead:
+  64 KiB by default, enough for large GSSAPI tokens; a negative value removes
+  the bound. An over-long response still gets `500 5.5.6` and the connection
+  closes.
+- The client now reads AUTH challenges under the new
+  `Client.MaxAuthChallengeLength` (64 KiB by default, negative for no limit)
+  instead of the 2000-octet reply line limit, which returns once AUTH ends.
+  A large challenge, such as a GSSAPI token, used to fail the exchange with
+  `ErrTooLongLine` (RFC 4954 §4).
+- XCLIENT attribute values are now xtext-decoded (Postfix XCLIENT, RFC 1891):
+  `LOGIN=user+2Btag@example.com` asserts `user+tag@example.com`, and a `+`
+  without two hex digits gets `501` and leaves the identity unchanged. Other
+  octets stay literal, as in Postfix.
+
+## [0.31.0] - 2026-10-22
 
 ### Added
 
@@ -19,28 +83,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   client at `EHLO` (or `LHLO` on an LMTP server) instead of `502`. RFC 5321
   §4.1.1.8 says servers SHOULD support HELP without arguments.
 
-- A SASL response line during AUTH is no longer limited by `MaxLineLength`
-  (RFC 4954 §4 makes challenge and response sizes independent of the command
-  line limit). The new `Server.MaxAuthResponseLength` bounds it instead:
-  64 KiB by default, enough for large GSSAPI tokens; a negative value removes
-  the bound. An over-long response still gets `500 5.5.6` and the connection
-  closes. The client side remains a known gap (SMTP-AUTH-32).
-
-- The client now reads AUTH challenges under the new
-  `Client.MaxAuthChallengeLength` (64 KiB by default, negative for no limit)
-  instead of the 2000-octet reply line limit, which returns once AUTH ends.
-  A large challenge, such as a GSSAPI token, used to fail the exchange with
-  `ErrTooLongLine` (RFC 4954 §4).
 - When an LMTP connection fails during the DATA replies,
   `CloseWithLMTPResponse` now returns a temporary `451 4.4.2` failure in its
   `LMTPDataError` for each recipient left without a reply, joined with the
   transport error. Before, those recipients were missing from both results
   (RFC 2033 §5).
 
-- XCLIENT attribute values are now xtext-decoded (Postfix XCLIENT, RFC 1891):
-  `LOGIN=user+2Btag@example.com` asserts `user+tag@example.com`, and a `+`
-  without two hex digits gets `501` and leaves the identity unchanged. Other
-  octets stay literal, as in Postfix.
 - A MAIL or RCPT path with a second `@` in its domain, such as
   `<user@@example.net>`, now gets `501` instead of reaching the backend. No
   RFC 5321 domain or address literal contains `@` (RFC 6409 §5.1 asks

@@ -1,0 +1,2191 @@
+package rfctest
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"io/ioutil"
+	"log"
+	"net"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/emersion/go-sasl"
+	"github.com/rest-mail/go-smtp/pkg/smtp"
+	"github.com/rest-mail/go-smtp/pkg/smtp/server"
+)
+
+type message struct {
+	From     string
+	To       []string
+	RcptOpts []*smtp.RcptOptions
+	Data     []byte
+	Opts     *smtp.MailOptions
+}
+
+type backend struct {
+	authDisabled bool
+
+	messages []*message
+	anonmsgs []*message
+
+	implementLMTPData bool
+	lmtpStatus        []struct {
+		addr string
+		err  error
+	}
+	lmtpStatusSync chan struct{}
+
+	// Errors returned by Data method.
+	dataErrors chan error
+
+	// Error that will be returned by Data method.
+	dataErr error
+
+	// Read N bytes of message before returning dataErr.
+	dataErrOffset int64
+
+	panicOnMail bool
+	userErr     error
+
+	// Error that will be returned by the Rcpt method, if set.
+	rcptErr error
+}
+
+func (be *backend) NewSession(_ *server.Conn) (server.Session, error) {
+	if be.implementLMTPData {
+		return &lmtpSession{&session{backend: be, anonymous: true}}, nil
+	}
+
+	return &session{backend: be, anonymous: true}, nil
+}
+
+type lmtpSession struct {
+	*session
+}
+
+type session struct {
+	backend   *backend
+	anonymous bool
+
+	msg *message
+}
+
+var _ server.AuthSession = (*session)(nil)
+
+func (s *session) AuthMechanisms() []string {
+	if s.backend.authDisabled {
+		return nil
+	}
+	return []string{sasl.Plain}
+}
+
+func (s *session) Auth(mech string) (sasl.Server, error) {
+	if s.backend.authDisabled {
+		return nil, server.ErrAuthUnsupported
+	}
+	return sasl.NewPlainServer(func(identity, username, password string) error {
+		if identity != "" && identity != username {
+			return errors.New("Invalid identity")
+		}
+		if username != "username" || password != "password" {
+			return errors.New("Invalid username or password")
+		}
+		s.anonymous = false
+		return nil
+	}), nil
+}
+
+func (s *session) Reset() {
+	s.msg = &message{}
+}
+
+func (s *session) Logout() error {
+	return nil
+}
+
+func (s *session) Mail(from string, opts *smtp.MailOptions) error {
+	// Initialize the message state up-front so a backend that returns a custom
+	// 2xx success line from userErr still has a live message for the following
+	// RCPT/DATA (a real backend would set up its own state before accepting).
+	s.Reset()
+	if s.backend.userErr != nil {
+		return s.backend.userErr
+	}
+	if s.backend.panicOnMail {
+		panic("Everything is on fire!")
+	}
+	s.msg.From = from
+	s.msg.Opts = opts
+	return nil
+}
+
+func (s *session) Rcpt(to string, opts *smtp.RcptOptions) error {
+	if s.backend.rcptErr != nil {
+		return s.backend.rcptErr
+	}
+	s.msg.To = append(s.msg.To, to)
+	s.msg.RcptOpts = append(s.msg.RcptOpts, opts)
+	return nil
+}
+
+func (s *session) Data(r io.Reader) error {
+	if s.backend.dataErr != nil {
+
+		if s.backend.dataErrOffset != 0 {
+			io.CopyN(ioutil.Discard, r, s.backend.dataErrOffset)
+		}
+
+		err := s.backend.dataErr
+		if s.backend.dataErrors != nil {
+			s.backend.dataErrors <- err
+		}
+		return err
+	}
+
+	if b, err := ioutil.ReadAll(r); err != nil {
+		if s.backend.dataErrors != nil {
+			s.backend.dataErrors <- err
+		}
+		return err
+	} else {
+		s.msg.Data = b
+		if s.anonymous {
+			s.backend.anonmsgs = append(s.backend.anonmsgs, s.msg)
+		} else {
+			s.backend.messages = append(s.backend.messages, s.msg)
+		}
+		if s.backend.dataErrors != nil {
+			s.backend.dataErrors <- nil
+		}
+	}
+	return nil
+}
+
+func (s *session) LMTPData(r io.Reader, collector server.StatusCollector) error {
+	if err := s.Data(r); err != nil {
+		return err
+	}
+
+	for _, val := range s.backend.lmtpStatus {
+		collector.SetStatus(val.addr, val.err)
+
+		if s.backend.lmtpStatusSync != nil {
+			s.backend.lmtpStatusSync <- struct{}{}
+		}
+	}
+
+	return nil
+}
+
+type failingListener struct {
+	c         chan error
+	accepting chan struct{}
+	closed    bool
+	mu        sync.Mutex
+}
+
+func newFailingListener() *failingListener {
+	return &failingListener{c: make(chan error), accepting: make(chan struct{}, 1)}
+}
+
+func (l *failingListener) Send(err error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if !l.closed {
+		l.c <- err
+	}
+}
+
+func (l *failingListener) Accept() (net.Conn, error) {
+	l.accepting <- struct{}{}
+	err, ok := <-l.c
+	if !ok {
+		// Channel closed by Close(): report the listener as closed.
+		return nil, net.ErrClosed
+	}
+	return nil, err
+}
+
+func (l *failingListener) Close() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if !l.closed {
+		close(l.c)
+		l.closed = true
+	}
+	return nil
+}
+
+func (l *failingListener) Addr() net.Addr {
+	return &net.TCPAddr{
+		IP:   net.ParseIP("127.0.0.1"),
+		Port: 12345,
+	}
+}
+
+type mockError struct {
+	msg       string
+	temporary bool
+}
+
+func newMockError(msg string, temporary bool) *mockError {
+	return &mockError{
+		msg:       msg,
+		temporary: temporary,
+	}
+}
+
+func (m *mockError) Error() string   { return m.msg }
+func (m *mockError) String() string  { return m.msg }
+func (m *mockError) Timeout() bool   { return false }
+func (m *mockError) Temporary() bool { return m.temporary }
+
+type serverConfigureFunc func(*server.Server)
+
+var (
+	authDisabled = func(s *server.Server) {
+		s.Backend.(*backend).authDisabled = true
+	}
+)
+
+func testServer(t *testing.T, fn ...serverConfigureFunc) (be *backend, s *server.Server, c net.Conn, scanner *bufio.Scanner) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	be = new(backend)
+	s = server.New(be)
+	s.Domain = "localhost"
+	s.AllowInsecureAuth = true
+	for _, f := range fn {
+		f(s)
+	}
+
+	go s.Serve(l)
+
+	c, err = net.Dial("tcp", l.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	scanner = bufio.NewScanner(c)
+	return
+}
+
+func testServerGreeted(t *testing.T, fn ...serverConfigureFunc) (be *backend, s *server.Server, c net.Conn, scanner *bufio.Scanner) {
+	be, s, c, scanner = testServer(t, fn...)
+
+	scanner.Scan()
+	if scanner.Text() != "220 localhost ESMTP Service Ready" {
+		t.Fatal("Invalid greeting:", scanner.Text())
+	}
+
+	return
+}
+
+func testServerEhlo(t *testing.T, fn ...serverConfigureFunc) (be *backend, s *server.Server, c net.Conn, scanner *bufio.Scanner, caps map[string]bool) {
+	be, s, c, scanner = testServerGreeted(t, fn...)
+
+	io.WriteString(c, "EHLO localhost\r\n")
+
+	scanner.Scan()
+	if scanner.Text() != "250-localhost Hello localhost" {
+		t.Fatal("Invalid EHLO response:", scanner.Text())
+	}
+
+	expectedCaps := []string{"PIPELINING", "8BITMIME"}
+	caps = make(map[string]bool)
+
+	for scanner.Scan() {
+		s := scanner.Text()
+
+		if strings.HasPrefix(s, "250 ") {
+			caps[strings.TrimPrefix(s, "250 ")] = true
+			break
+		} else {
+			if !strings.HasPrefix(s, "250-") {
+				t.Fatal("Invalid capability response:", s)
+			}
+			caps[strings.TrimPrefix(s, "250-")] = true
+		}
+	}
+
+	for _, cap := range expectedCaps {
+		if !caps[cap] {
+			t.Fatal("Missing capability:", cap)
+		}
+	}
+
+	return
+}
+
+// checklist: SMTP-SRV-01
+func TestServerAcceptErrorHandling(t *testing.T) {
+	errorLog := bytes.NewBuffer(nil)
+	be := new(backend)
+	s := server.New(be)
+	s.Domain = "localhost"
+	s.AllowInsecureAuth = true
+	s.ErrorLog = log.New(errorLog, "", 0)
+
+	l := newFailingListener()
+	defer s.Close()
+	done := make(chan error, 1)
+	go func() {
+		done <- s.Serve(l)
+		l.Close()
+	}()
+	waitForAccept := func() {
+		t.Helper()
+		select {
+		case <-l.accepting:
+		case <-time.After(5 * time.Second):
+			t.Fatal("Serve did not call Accept")
+		}
+	}
+	waitForAccept()
+
+	// An accept error is logged and retried rather than being fatal; only a
+	// closed listener ends Serve.
+	acceptError := newMockError("mock accept error", false)
+	l.Send(acceptError)
+	// Wait for the retry: Send only synchronizes delivery of the error, not
+	// its handling. Closing earlier can make Serve skip logging the error.
+	waitForAccept()
+
+	// Closing the server makes Serve return nil cleanly.
+	s.Close()
+
+	serveError := <-done
+	if serveError != nil {
+		t.Fatal("Serve returned an unexpected error:", serveError)
+	}
+	if !strings.Contains(errorLog.String(), acceptError.String()) {
+		t.Fatal("Missing accept error in log output:", errorLog.String())
+	}
+}
+
+// checklist: SMTP-CMD-02 SMTP-CMD-09 SMTP-REP-01
+func TestServer_helo(t *testing.T) {
+	_, s, c, scanner := testServerGreeted(t)
+	defer s.Close()
+
+	io.WriteString(c, "HELO localhost\r\n")
+
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid HELO response:", scanner.Text())
+	}
+}
+
+// checklist: SMTP-CMD-01
+func TestServerExtraCaps(t *testing.T) {
+	_, s, c, scanner, caps := testServerEhlo(t,
+		func(s *server.Server) {
+			s.ExtraCaps = []string{"XEXAMPLE https://example.org/smtp-ext"}
+		})
+	defer s.Close()
+	defer c.Close()
+
+	if _, ok := caps["XEXAMPLE https://example.org/smtp-ext"]; !ok {
+		t.Fatal("Missing extra capability in EHLO response")
+	}
+
+	io.WriteString(c, "QUIT\r\n")
+	scanner.Scan()
+}
+
+func testServerAuthenticated(t *testing.T) (be *backend, s *server.Server, c net.Conn, scanner *bufio.Scanner) {
+	be, s, c, scanner, caps := testServerEhlo(t)
+
+	if _, ok := caps["AUTH PLAIN"]; !ok {
+		t.Fatal("AUTH PLAIN capability is missing when auth is enabled")
+	}
+
+	io.WriteString(c, "AUTH PLAIN\r\n")
+	scanner.Scan()
+	if scanner.Text() != "334 " {
+		t.Fatal("Invalid AUTH response:", scanner.Text())
+	}
+
+	io.WriteString(c, "AHVzZXJuYW1lAHBhc3N3b3Jk\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "235 ") {
+		t.Fatal("Invalid AUTH response:", scanner.Text())
+	}
+
+	return
+}
+
+// checklist: SMTP-EXT-08
+func TestServerAuthTwice(t *testing.T) {
+	_, _, c, scanner, caps := testServerEhlo(t)
+
+	if _, ok := caps["AUTH PLAIN"]; !ok {
+		t.Fatal("AUTH PLAIN capability is missing when auth is enabled")
+	}
+
+	io.WriteString(c, "AUTH PLAIN AHVzZXJuYW1lAHBhc3N3b3Jk\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "235 ") {
+		t.Fatal("Invalid AUTH response:", scanner.Text())
+	}
+
+	io.WriteString(c, "AUTH PLAIN AHVzZXJuYW1lAHBhc3N3b3Jk\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "503 5.5.1 ") {
+		t.Fatal("Invalid AUTH response:", scanner.Text())
+	}
+
+	io.WriteString(c, "RSET\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid AUTH response:", scanner.Text())
+	}
+
+	io.WriteString(c, "AUTH PLAIN AHVzZXJuYW1lAHBhc3N3b3Jk\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "503 5.5.1 ") {
+		t.Fatal("Invalid AUTH response:", scanner.Text())
+	}
+}
+
+// checklist: SMTP-EXT-08
+func TestServerCancelSASL(t *testing.T) {
+	_, _, c, scanner, caps := testServerEhlo(t)
+
+	if _, ok := caps["AUTH PLAIN"]; !ok {
+		t.Fatal("AUTH PLAIN capability is missing when auth is enabled")
+	}
+
+	io.WriteString(c, "AUTH PLAIN\r\n")
+	scanner.Scan()
+	if scanner.Text() != "334 " {
+		t.Fatal("Invalid AUTH response:", scanner.Text())
+	}
+
+	io.WriteString(c, "*\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "501 ") {
+		t.Fatal("Invalid AUTH response:", scanner.Text())
+	}
+}
+
+// checklist: SMTP-SYN-02
+func TestServerEmptyFrom1(t *testing.T) {
+	_, s, c, scanner := testServerAuthenticated(t)
+	defer s.Close()
+	defer c.Close()
+
+	io.WriteString(c, "MAIL FROM:\r\n")
+	scanner.Scan()
+	if strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid MAIL response:", scanner.Text())
+	}
+}
+
+// checklist: SMTP-SYN-01 SMTP-CMD-03
+func TestServerEmptyFrom2(t *testing.T) {
+	_, s, c, scanner := testServerAuthenticated(t)
+	defer s.Close()
+	defer c.Close()
+
+	io.WriteString(c, "MAIL FROM:<>\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid MAIL response:", scanner.Text())
+	}
+}
+
+// checklist: SMTP-REP-02 SMTP-SRV-02
+func TestServerPanicRecover(t *testing.T) {
+	_, s, c, scanner := testServerAuthenticated(t)
+	defer s.Close()
+	defer c.Close()
+
+	s.Backend.(*backend).panicOnMail = true
+	// Don't log panic in tests to not confuse people who run 'go test'.
+	s.ErrorLog = log.New(ioutil.Discard, "", 0)
+
+	io.WriteString(c, "MAIL FROM:<alice@wonderland.book>\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "421 ") {
+		t.Fatal("Invalid MAIL response:", scanner.Text())
+	}
+}
+
+// checklist: SMTP-EXT-06
+func TestServerSMTPUTF8(t *testing.T) {
+	_, s, c, scanner := testServerAuthenticated(t)
+	s.EnableSMTPUTF8 = true
+	defer s.Close()
+	defer c.Close()
+
+	io.WriteString(c, "MAIL FROM:<alice@wonderland.book> SMTPUTF8\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid MAIL response:", scanner.Text())
+	}
+}
+
+// checklist: SMTP-EXT-06
+func TestServerSMTPUTF8_Disabled(t *testing.T) {
+	_, s, c, scanner := testServerAuthenticated(t)
+	defer s.Close()
+	defer c.Close()
+
+	io.WriteString(c, "MAIL FROM:<alice@wonderland.book> SMTPUTF8\r\n")
+	scanner.Scan()
+	if strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid MAIL response:", scanner.Text())
+	}
+}
+
+// checklist: SMTP-EXT-02
+func TestServer8BITMIME(t *testing.T) {
+	_, s, c, scanner := testServerAuthenticated(t)
+	defer s.Close()
+	defer c.Close()
+
+	io.WriteString(c, "MAIL FROM:<alice@wonderland.book> BODY=8bitMIME\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid MAIL response:", scanner.Text())
+	}
+}
+
+// checklist: SMTP-EXT-02
+func TestServer_BODYInvalidValue(t *testing.T) {
+	_, s, c, scanner := testServerAuthenticated(t)
+	defer s.Close()
+	defer c.Close()
+
+	io.WriteString(c, "MAIL FROM:<alice@wonderland.book> BODY=RABIIT\r\n")
+	scanner.Scan()
+	if strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid MAIL response:", scanner.Text())
+	}
+}
+
+// checklist: SMTP-SYN-12
+func TestServerUnknownArg(t *testing.T) {
+	_, s, c, scanner := testServerAuthenticated(t)
+	defer s.Close()
+	defer c.Close()
+
+	io.WriteString(c, "MAIL FROM:<alice@wonderland.book> RABIIT\r\n")
+	scanner.Scan()
+	if strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid MAIL response:", scanner.Text())
+	}
+}
+
+// checklist: SMTP-EXT-03
+func TestServerBadSize(t *testing.T) {
+	_, s, c, scanner := testServerAuthenticated(t)
+	defer s.Close()
+	defer c.Close()
+
+	io.WriteString(c, "MAIL FROM:<alice@wonderland.book> SIZE=rabbit\r\n")
+	scanner.Scan()
+	if strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid MAIL response:", scanner.Text())
+	}
+}
+
+// checklist: SMTP-EXT-03
+func TestServerTooBig(t *testing.T) {
+	_, s, c, scanner := testServerAuthenticated(t)
+	defer s.Close()
+	defer c.Close()
+
+	s.MaxMessageBytes = 4294967294
+
+	io.WriteString(c, "MAIL FROM:<alice@wonderland.book> SIZE=4294967295\r\n")
+	scanner.Scan()
+	if strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid MAIL response:", scanner.Text())
+	}
+}
+
+// checklist: SMTP-SYN-04
+func TestServerEmptyTo(t *testing.T) {
+	_, s, c, scanner := testServerAuthenticated(t)
+	defer s.Close()
+	defer c.Close()
+
+	io.WriteString(c, "MAIL FROM:<root@nsa.gov>\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid MAIL response:", scanner.Text())
+	}
+
+	io.WriteString(c, "RCPT TO:\r\n")
+	scanner.Scan()
+	if strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid RCPT response:", scanner.Text())
+	}
+}
+
+// TestServerPostmasterRcpt verifies the domainless "<Postmaster>" forward-path
+// form. RFC 5321 §4.1.1.3 defines it and §4.5.1 requires every receiver to
+// accept it. The bare form must be accepted (case-insensitively) and surfaced
+// to the backend, and the domain-qualified "<Postmaster@domain>" form must keep
+// working through normal address parsing.
+//
+// checklist: SMTP-SYN-03
+func TestServerPostmasterRcpt(t *testing.T) {
+	cases := []struct {
+		name   string
+		rcpt   string
+		wantTo string
+	}{
+		{"bare mixed-case", "<Postmaster>", "Postmaster"},
+		{"bare lowercase", "<postmaster>", "postmaster"},
+		{"bare uppercase", "<POSTMASTER>", "POSTMASTER"},
+		{"domain-qualified", "<Postmaster@gchq.gov.uk>", "Postmaster@gchq.gov.uk"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			be, s, c, scanner := testServerAuthenticated(t)
+			defer s.Close()
+			defer c.Close()
+
+			io.WriteString(c, "MAIL FROM:<root@nsa.gov>\r\n")
+			scanner.Scan()
+			if !strings.HasPrefix(scanner.Text(), "250 ") {
+				t.Fatal("Invalid MAIL response:", scanner.Text())
+			}
+
+			io.WriteString(c, "RCPT TO:"+tc.rcpt+"\r\n")
+			scanner.Scan()
+			if !strings.HasPrefix(scanner.Text(), "250 ") {
+				t.Fatalf("RCPT TO:%s: got %q, want 250", tc.rcpt, scanner.Text())
+			}
+
+			io.WriteString(c, "DATA\r\n")
+			scanner.Scan()
+			if !strings.HasPrefix(scanner.Text(), "354 ") {
+				t.Fatal("Invalid DATA response:", scanner.Text())
+			}
+			io.WriteString(c, "From: root@nsa.gov\r\n\r\nbody\r\n.\r\n")
+			scanner.Scan()
+			if !strings.HasPrefix(scanner.Text(), "250 ") {
+				t.Fatal("Invalid DATA response:", scanner.Text())
+			}
+
+			if len(be.messages) != 1 {
+				t.Fatalf("got %d messages, want 1", len(be.messages))
+			}
+			if to := be.messages[0].To; len(to) != 1 || to[0] != tc.wantTo {
+				t.Fatalf("recipient surfaced to backend = %v, want [%q]", to, tc.wantTo)
+			}
+		})
+	}
+}
+
+// checklist: SMTP-CMD-03 SMTP-CMD-09 SMTP-DATA-01 SMTP-DATA-02 SMTP-REP-01
+func TestServer(t *testing.T) {
+	be, s, c, scanner := testServerAuthenticated(t)
+	defer s.Close()
+	defer c.Close()
+
+	io.WriteString(c, "MAIL FROM:<root@nsa.gov>\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid MAIL response:", scanner.Text())
+	}
+
+	io.WriteString(c, "RCPT TO:<root@gchq.gov.uk>\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid RCPT response:", scanner.Text())
+	}
+
+	io.WriteString(c, "DATA\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "354 ") {
+		t.Fatal("Invalid DATA response:", scanner.Text())
+	}
+
+	io.WriteString(c, "From: root@nsa.gov\r\n")
+	io.WriteString(c, "\r\n")
+	io.WriteString(c, "Hey\r <3\r\n")
+	io.WriteString(c, "..this dot is fine\r\n")
+	io.WriteString(c, ".\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid DATA response:", scanner.Text())
+	}
+
+	if len(be.messages) != 1 || len(be.anonmsgs) != 0 {
+		t.Fatal("Invalid number of sent messages:", be.messages, be.anonmsgs)
+	}
+
+	msg := be.messages[0]
+	if msg.From != "root@nsa.gov" {
+		t.Fatal("Invalid mail sender:", msg.From)
+	}
+	if len(msg.To) != 1 || msg.To[0] != "root@gchq.gov.uk" {
+		t.Fatal("Invalid mail recipients:", msg.To)
+	}
+	if string(msg.Data) != "From: root@nsa.gov\r\n\r\nHey\r <3\r\n.this dot is fine\r\n" {
+		t.Fatal("Invalid mail data:", string(msg.Data))
+	}
+}
+
+// checklist: SMTP-SYN-11 SMTP-DATA-01 SMTP-DATA-03 SMTP-DATA-05
+func TestServer_LFDotLF(t *testing.T) {
+	be, s, c, scanner := testServerAuthenticated(t)
+	defer s.Close()
+	defer c.Close()
+
+	io.WriteString(c, "MAIL FROM:<root@nsa.gov>\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid MAIL response:", scanner.Text())
+	}
+
+	io.WriteString(c, "RCPT TO:<root@gchq.gov.uk>\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid RCPT response:", scanner.Text())
+	}
+
+	io.WriteString(c, "DATA\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "354 ") {
+		t.Fatal("Invalid DATA response:", scanner.Text())
+	}
+
+	io.WriteString(c, "From: root@nsa.gov\r\n")
+	io.WriteString(c, "\r\n")
+	io.WriteString(c, "hey\r\n")
+	io.WriteString(c, "\n.\n")
+	io.WriteString(c, "this is going to break your server\r\n")
+	io.WriteString(c, ".\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid DATA response:", scanner.Text())
+	}
+
+	if len(be.messages) != 1 || len(be.anonmsgs) != 0 {
+		t.Fatal("Invalid number of sent messages:", be.messages, be.anonmsgs)
+	}
+
+	msg := be.messages[0]
+	if string(msg.Data) != "From: root@nsa.gov\r\n\r\nhey\r\n\n.\nthis is going to break your server\r\n" {
+		t.Fatal("Invalid mail data:", string(msg.Data))
+	}
+}
+
+// checklist: SMTP-DATA-01 SMTP-DATA-05
+func TestServer_EmptyMessage(t *testing.T) {
+	be, s, c, scanner := testServerAuthenticated(t)
+	defer s.Close()
+	defer c.Close()
+
+	io.WriteString(c, "MAIL FROM:<root@nsa.gov>\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid MAIL response:", scanner.Text())
+	}
+
+	io.WriteString(c, "RCPT TO:<root@gchq.gov.uk>\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid RCPT response:", scanner.Text())
+	}
+
+	io.WriteString(c, "DATA\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "354 ") {
+		t.Fatal("Invalid DATA response:", scanner.Text())
+	}
+
+	io.WriteString(c, "\r\n\r\n.\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid DATA response:", scanner.Text())
+	}
+
+	if len(be.messages) != 1 || len(be.anonmsgs) != 0 {
+		t.Fatal("Invalid number of sent messages:", be.messages, be.anonmsgs)
+	}
+
+	msg := be.messages[0]
+	if string(msg.Data) != "\r\n\r\n" {
+		t.Fatal("Invalid mail data:", string(msg.Data), msg.Data)
+	}
+}
+
+// checklist: SMTP-EXT-08
+func TestServer_authDisabled(t *testing.T) {
+	_, s, c, scanner, caps := testServerEhlo(t, authDisabled)
+	defer s.Close()
+	defer c.Close()
+
+	if _, ok := caps["AUTH PLAIN"]; ok {
+		t.Fatal("AUTH PLAIN capability is present when auth is disabled")
+	}
+
+	io.WriteString(c, "AUTH PLAIN\r\n")
+	scanner.Scan()
+	if scanner.Text() != "502 5.7.0 Authentication not supported" {
+		t.Fatal("Invalid AUTH response with auth disabled:", scanner.Text())
+	}
+}
+
+// checklist: SMTP-CMD-04 SMTP-CMD-05 SMTP-CMD-06 SMTP-CMD-07 SMTP-CMD-09 SMTP-RSET-01
+func TestServer_otherCommands(t *testing.T) {
+	_, s, c, scanner := testServerAuthenticated(t)
+	defer s.Close()
+
+	io.WriteString(c, "EXPN list\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "502 ") {
+		t.Fatal("Invalid EXPN response:", scanner.Text())
+	}
+
+	io.WriteString(c, "VRFY\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "252 ") {
+		t.Fatal("Invalid VRFY response:", scanner.Text())
+	}
+
+	io.WriteString(c, "NOOP\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid NOOP response:", scanner.Text())
+	}
+
+	io.WriteString(c, "RSET\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid RSET response:", scanner.Text())
+	}
+
+	io.WriteString(c, "QUIT\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "221 ") {
+		t.Fatal("Invalid QUIT response:", scanner.Text())
+	}
+}
+
+// checklist: SMTP-CMD-08 SMTP-SRV-03
+func TestServer_tooManyInvalidCommands(t *testing.T) {
+	_, s, c, scanner := testServerAuthenticated(t)
+	defer s.Close()
+
+	// Let's assume XXXX is a non-existing command
+	for i := 0; i < 4; i++ {
+		io.WriteString(c, "XXXX\r\n")
+		scanner.Scan()
+		if !strings.HasPrefix(scanner.Text(), "500 ") {
+			t.Fatal("Invalid invalid command response:", scanner.Text())
+		}
+	}
+
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "500 ") {
+		t.Fatal("Invalid invalid command response:", scanner.Text())
+	}
+}
+
+// checklist: SMTP-DATA-04
+func TestServer_tooLongMessage(t *testing.T) {
+	be, s, c, scanner := testServerAuthenticated(t)
+	defer s.Close()
+
+	s.MaxMessageBytes = 50
+
+	io.WriteString(c, "MAIL FROM:<root@nsa.gov>\r\n")
+	scanner.Scan()
+	io.WriteString(c, "RCPT TO:<root@gchq.gov.uk>\r\n")
+	scanner.Scan()
+	io.WriteString(c, "DATA\r\n")
+	scanner.Scan()
+
+	io.WriteString(c, "This is a very long message.\r\n")
+	io.WriteString(c, "Much longer than you can possibly imagine.\r\n")
+	io.WriteString(c, "And much longer than the server's MaxMessageBytes.\r\n")
+	io.WriteString(c, ".\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "552 ") {
+		t.Fatal("Invalid DATA response, expected an error but got:", scanner.Text())
+	}
+
+	if len(be.messages) != 0 || len(be.anonmsgs) != 0 {
+		t.Fatal("Invalid number of sent messages:", be.messages, be.anonmsgs)
+	}
+}
+
+// See https://www.postfix.org/smtp-smuggling.html
+//
+// checklist: SMTP-SYN-11
+func TestServer_smtpSmuggling(t *testing.T) {
+	cases := []struct {
+		name     string
+		lines    []string
+		expected string
+	}{
+		{
+			name: "<CR><LF>.<LF>",
+			lines: []string{
+				"This is a message with an SMTP smuggling dot:\r\n",
+				".\n",
+				"Final dot comes after.\r\n",
+				".\r\n",
+			},
+			expected: "This is a message with an SMTP smuggling dot:\r\n\nFinal dot comes after.\r\n",
+		},
+		{
+			name: "<LF>.<CR><LF>",
+			lines: []string{
+				"This is a message with an SMTP smuggling dot:\n", // not a line on its own
+				".\r\n",
+				"Final dot comes after.\r\n",
+				".\r\n",
+			},
+			expected: "This is a message with an SMTP smuggling dot:\n.\r\nFinal dot comes after.\r\n",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			be, s, c, scanner := testServerAuthenticated(t)
+			defer s.Close()
+
+			io.WriteString(c, "MAIL FROM:<root@nsa.gov>\r\n")
+			scanner.Scan()
+			io.WriteString(c, "RCPT TO:<root@gchq.gov.uk>\r\n")
+			scanner.Scan()
+			io.WriteString(c, "DATA\r\n")
+			scanner.Scan()
+
+			for _, line := range tc.lines {
+				io.WriteString(c, line)
+			}
+			scanner.Scan()
+			if !strings.HasPrefix(scanner.Text(), "250 ") {
+				t.Fatal("Invalid DATA response, expected an error but got:", scanner.Text())
+			}
+
+			if len(be.messages) != 1 {
+				t.Fatal("Invalid number of sent messages:", len(be.messages))
+			}
+
+			msg := be.messages[0]
+			if string(msg.Data) != tc.expected {
+				t.Fatalf("Invalid mail data: %q", string(msg.Data))
+			}
+		})
+	}
+}
+
+// checklist: SMTP-LIM-02
+func TestServer_tooLongLine(t *testing.T) {
+	_, s, c, scanner := testServerAuthenticated(t)
+	defer s.Close()
+
+	io.WriteString(c, "MAIL FROM:<root@nsa.gov> "+strings.Repeat("A", 2000))
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "500 ") {
+		t.Fatal("Invalid response, expected an error but got:", scanner.Text())
+	}
+}
+
+// checklist: SMTP-EXT-08
+func TestServer_anonymousUserError(t *testing.T) {
+	be, s, c, scanner, _ := testServerEhlo(t)
+	defer s.Close()
+	defer c.Close()
+
+	be.userErr = server.ErrAuthRequired
+
+	io.WriteString(c, "MAIL FROM:<root@nsa.gov>\r\n")
+	scanner.Scan()
+	if scanner.Text() != "530 5.7.0 Please authenticate first" {
+		t.Fatal("Backend refused anonymous mail but client was permitted:", scanner.Text())
+	}
+}
+
+// checklist: SMTP-EXT-08
+func TestServer_anonymousUserOK(t *testing.T) {
+	be, s, c, scanner, _ := testServerEhlo(t)
+	defer s.Close()
+	defer c.Close()
+
+	io.WriteString(c, "MAIL FROM: root@nsa.gov\r\n")
+	scanner.Scan()
+	io.WriteString(c, "RCPT TO:<root@gchq.gov.uk>\r\n")
+	scanner.Scan()
+	io.WriteString(c, "DATA\r\n")
+	scanner.Scan()
+	io.WriteString(c, "Hey <3\r\n")
+	io.WriteString(c, ".\r\n")
+	scanner.Scan()
+
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid DATA response:", scanner.Text())
+	}
+
+	if len(be.messages) != 0 || len(be.anonmsgs) != 1 {
+		t.Fatal("Invalid number of sent messages:", be.messages, be.anonmsgs)
+	}
+}
+
+// checklist: SMTP-EXT-08 SMTP-AUTH-27 SMTP-AUTH-28
+func TestServer_authParam(t *testing.T) {
+	be, s, c, scanner, _ := testServerEhlo(t)
+	defer s.Close()
+	defer c.Close()
+
+	// Invalid HEXCHAR
+	io.WriteString(c, "MAIL FROM: root@nsa.gov AUTH=<hey+A>\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "501 ") {
+		t.Fatal("Invalid MAIL response:", scanner.Text())
+	}
+
+	// Invalid HEXCHAR
+	io.WriteString(c, "MAIL FROM: root@nsa.gov AUTH=<he+YYa>\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "501 ") {
+		t.Fatal("Invalid MAIL response:", scanner.Text())
+	}
+
+	// https://tools.ietf.org/html/rfc4954#section-4
+	// >servers that advertise support for this
+	// >extension MUST support the AUTH parameter to the MAIL FROM
+	// >command even when the client has not authenticated itself to the
+	// >server.
+	io.WriteString(c, "MAIL FROM: root@nsa.gov AUTH=hey+3Da@example.com\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid MAIL response:", scanner.Text())
+	}
+
+	// Go on as usual.
+	io.WriteString(c, "RCPT TO:<root@gchq.gov.uk>\r\n")
+	scanner.Scan()
+	io.WriteString(c, "DATA\r\n")
+	scanner.Scan()
+	io.WriteString(c, "Hey <3\r\n")
+	io.WriteString(c, ".\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid DATA response:", scanner.Text())
+	}
+
+	if len(be.messages) != 0 || len(be.anonmsgs) != 1 {
+		t.Fatal("Invalid number of sent messages:", be.messages, be.anonmsgs)
+	}
+	if val := be.anonmsgs[0].Opts.Auth; val == nil || *val != "hey=a@example.com" {
+		t.Fatal("Invalid Auth value:", val)
+	}
+}
+
+// checklist: SMTP-EXT-05
+func TestServer_Chunking(t *testing.T) {
+	be, s, c, scanner := testServerAuthenticated(t)
+	defer s.Close()
+	defer c.Close()
+
+	io.WriteString(c, "MAIL FROM:<root@nsa.gov>\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid MAIL response:", scanner.Text())
+	}
+
+	io.WriteString(c, "RCPT TO:<root@gchq.gov.uk>\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid RCPT response:", scanner.Text())
+	}
+
+	io.WriteString(c, "BDAT 8\r\n")
+	io.WriteString(c, "Hey <3\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid BDAT response:", scanner.Text())
+	}
+
+	io.WriteString(c, "BDAT 8 LAST\r\n")
+	io.WriteString(c, "Hey :3\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid BDAT response:", scanner.Text())
+	}
+
+	if len(be.messages) != 1 || len(be.anonmsgs) != 0 {
+		t.Fatal("Invalid number of sent messages:", be.messages, be.anonmsgs)
+	}
+
+	msg := be.messages[0]
+	if msg.From != "root@nsa.gov" {
+		t.Fatal("Invalid mail sender:", msg.From)
+	}
+	if len(msg.To) != 1 || msg.To[0] != "root@gchq.gov.uk" {
+		t.Fatal("Invalid mail recipients:", msg.To)
+	}
+	if want := "Hey <3\r\nHey :3\r\n"; string(msg.Data) != want {
+		t.Fatal("Invalid mail data:", string(msg.Data), msg.Data)
+	}
+}
+
+// checklist: SMTP-EXT-05 SMTP-EXT-09
+func TestServer_Chunking_LMTP(t *testing.T) {
+	be, s, c, scanner := testServerAuthenticated(t)
+	s.LMTP = true
+	defer s.Close()
+	defer c.Close()
+
+	io.WriteString(c, "MAIL FROM:<root@nsa.gov>\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid MAIL response:", scanner.Text())
+	}
+
+	io.WriteString(c, "RCPT TO:<root@gchq.gov.uk>\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid RCPT response:", scanner.Text())
+	}
+	io.WriteString(c, "RCPT TO:<toor@gchq.gov.uk>\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid RCPT response:", scanner.Text())
+	}
+
+	io.WriteString(c, "BDAT 8\r\n")
+	io.WriteString(c, "Hey <3\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid BDAT response:", scanner.Text())
+	}
+
+	io.WriteString(c, "BDAT 8 LAST\r\n")
+	io.WriteString(c, "Hey :3\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid BDAT response:", scanner.Text())
+	}
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid BDAT response:", scanner.Text())
+	}
+
+	if len(be.messages) != 1 || len(be.anonmsgs) != 0 {
+		t.Fatal("Invalid number of sent messages:", be.messages, be.anonmsgs)
+	}
+
+	msg := be.messages[0]
+	if msg.From != "root@nsa.gov" {
+		t.Fatal("Invalid mail sender:", msg.From)
+	}
+	if want := "Hey <3\r\nHey :3\r\n"; string(msg.Data) != want {
+		t.Fatal("Invalid mail data:", string(msg.Data), msg.Data)
+	}
+}
+
+// checklist: SMTP-EXT-05
+func TestServer_Chunking_Reset(t *testing.T) {
+	be, s, c, scanner := testServerAuthenticated(t)
+	defer s.Close()
+	defer c.Close()
+	be.dataErrors = make(chan error, 10)
+
+	io.WriteString(c, "MAIL FROM:<root@nsa.gov>\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid MAIL response:", scanner.Text())
+	}
+
+	io.WriteString(c, "RCPT TO:<root@gchq.gov.uk>\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid RCPT response:", scanner.Text())
+	}
+
+	io.WriteString(c, "BDAT 8\r\n")
+	io.WriteString(c, "Hey <3\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid BDAT response:", scanner.Text())
+	}
+
+	// Client changed its mind... Note, in this case Data method error is discarded and not returned to the cilent.
+	io.WriteString(c, "RSET\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid BDAT response:", scanner.Text())
+	}
+
+	if err := <-be.dataErrors; err != server.ErrDataReset {
+		t.Fatal("Backend received a different error:", err)
+	}
+}
+
+// checklist: SMTP-EXT-05
+func TestServer_Chunking_ClosedInTheMiddle(t *testing.T) {
+	be, s, c, scanner := testServerAuthenticated(t)
+	defer s.Close()
+	defer c.Close()
+	be.dataErrors = make(chan error, 10)
+
+	io.WriteString(c, "MAIL FROM:<root@nsa.gov>\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid MAIL response:", scanner.Text())
+	}
+
+	io.WriteString(c, "RCPT TO:<root@gchq.gov.uk>\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid RCPT response:", scanner.Text())
+	}
+
+	io.WriteString(c, "BDAT 8\r\n")
+	io.WriteString(c, "Hey <")
+
+	// Bye!
+	c.Close()
+
+	if err := <-be.dataErrors; err != server.ErrDataReset {
+		t.Fatal("Backend received a different error:", err)
+	}
+}
+
+// checklist: SMTP-EXT-05
+func TestServer_Chunking_EarlyError(t *testing.T) {
+	be, s, c, scanner := testServerAuthenticated(t)
+	defer s.Close()
+	defer c.Close()
+
+	be.dataErr = &smtp.SMTPError{Code: 555, EnhancedCode: smtp.EnhancedCode{5, 0, 0}, Message: "I failed"}
+
+	io.WriteString(c, "MAIL FROM:<root@nsa.gov>\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid MAIL response:", scanner.Text())
+	}
+
+	io.WriteString(c, "RCPT TO:<root@gchq.gov.uk>\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid RCPT response:", scanner.Text())
+	}
+
+	io.WriteString(c, "BDAT 8\r\n")
+	io.WriteString(c, "Hey <3\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "555 5.0.0 I failed") {
+		t.Fatal("Invalid BDAT response:", scanner.Text())
+	}
+}
+
+// checklist: SMTP-EXT-05
+func TestServer_Chunking_EarlyErrorDuringChunk(t *testing.T) {
+	be, s, c, scanner := testServerAuthenticated(t)
+	defer s.Close()
+	defer c.Close()
+
+	be.dataErr = &smtp.SMTPError{Code: 555, EnhancedCode: smtp.EnhancedCode{5, 0, 0}, Message: "I failed"}
+	be.dataErrOffset = 5
+
+	io.WriteString(c, "MAIL FROM:<root@nsa.gov>\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid MAIL response:", scanner.Text())
+	}
+
+	io.WriteString(c, "RCPT TO:<root@gchq.gov.uk>\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid RCPT response:", scanner.Text())
+	}
+
+	io.WriteString(c, "BDAT 8\r\n")
+	io.WriteString(c, "Hey <3\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "555 5.0.0 I failed") {
+		t.Fatal("Invalid BDAT response:", scanner.Text())
+	}
+
+	// See that command stream state is not corrupted e.g. server is still not
+	// waiting for remaining chunk octets.
+	io.WriteString(c, "NOOP\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid RCPT response:", scanner.Text())
+	}
+}
+
+// checklist: SMTP-EXT-05
+func TestServer_Chunking_tooLongMessage(t *testing.T) {
+	be, s, c, scanner := testServerAuthenticated(t)
+	defer s.Close()
+
+	s.MaxMessageBytes = 50
+
+	io.WriteString(c, "MAIL FROM:<root@nsa.gov>\r\n")
+	scanner.Scan()
+	io.WriteString(c, "RCPT TO:<root@gchq.gov.uk>\r\n")
+	scanner.Scan()
+	io.WriteString(c, "BDAT 30\r\n")
+	io.WriteString(c, "This is a very long message.\r\n")
+	scanner.Scan()
+
+	io.WriteString(c, "BDAT 96 LAST\r\n")
+	io.WriteString(c, "Much longer than you can possibly imagine.\r\n")
+	io.WriteString(c, "And much longer than the server's MaxMessageBytes.\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "552 ") {
+		t.Fatal("Invalid DATA response, expected an error but got:", scanner.Text())
+	}
+
+	if len(be.messages) != 0 || len(be.anonmsgs) != 0 {
+		t.Fatal("Invalid number of sent messages:", be.messages, be.anonmsgs)
+	}
+}
+
+// TestServer_Chunking_lineLimitRestoredAfterReset is ported from upstream
+// emersion/go-smtp 642c374, which fixed a reset that left the line limit off
+// after an abandoned BDAT transfer. This server passes the limit on every line
+// it reads, so it never had that bug; the test proves it stays that way.
+//
+// checklist: CHUNK-DATA-04
+func TestServer_Chunking_lineLimitRestoredAfterReset(t *testing.T) {
+	_, s, c, scanner := testServerAuthenticated(t)
+	defer s.Close()
+	defer c.Close()
+
+	io.WriteString(c, "MAIL FROM:<root@nsa.gov>\r\n")
+	scanner.Scan()
+	io.WriteString(c, "RCPT TO:<root@gchq.gov.uk>\r\n")
+	scanner.Scan()
+
+	io.WriteString(c, "BDAT 8\r\n")
+	io.WriteString(c, "Hey <3\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid BDAT response:", scanner.Text())
+	}
+
+	// The client gives up on the message instead of sending the last chunk.
+	io.WriteString(c, "RSET\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid RSET response:", scanner.Text())
+	}
+
+	// The transfer is over, so MaxLineLength should be enforced again.
+	io.WriteString(c, "NOOP "+strings.Repeat("x", s.MaxLineLength)+"\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "500 ") {
+		t.Fatal("Invalid response to an over-long line:", scanner.Text())
+	}
+}
+
+// TestServer_Chunking_OverLimitDiscardKeepsConnection reproduces issue #44: an
+// over-limit BDAT chunk that contains a line longer than MaxLineLength is
+// rejected 552 and its bytes discarded. The per-line limit must be disabled
+// while the chunk is discarded (chunk data is opaque and may contain arbitrarily
+// long lines); otherwise the discard trips ErrTooLongLine, which surfaces as a
+// spurious "500 5.4.0 Too long line, closing connection" and a connection drop
+// right after the 552. The connection must instead stay framed and usable.
+//
+// checklist: SMTP-EXT-05
+func TestServer_Chunking_OverLimitDiscardKeepsConnection(t *testing.T) {
+	// Configure limits before Serve begins so the field writes happen-before the
+	// serving goroutine (keeps the race detector quiet).
+	be, s, c, scanner, caps := testServerEhlo(t, func(s *server.Server) {
+		s.MaxMessageBytes = 50
+		s.MaxLineLength = 100
+	})
+	defer s.Close()
+	defer c.Close()
+
+	if _, ok := caps["AUTH PLAIN"]; !ok {
+		t.Fatal("AUTH PLAIN capability is missing when auth is enabled")
+	}
+	io.WriteString(c, "AUTH PLAIN AHVzZXJuYW1lAHBhc3N3b3Jk\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "235 ") {
+		t.Fatal("Invalid AUTH response:", scanner.Text())
+	}
+
+	io.WriteString(c, "MAIL FROM:<root@nsa.gov>\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid MAIL response:", scanner.Text())
+	}
+	io.WriteString(c, "RCPT TO:<root@gchq.gov.uk>\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid RCPT response:", scanner.Text())
+	}
+
+	// Over-limit data remains opaque even when it exceeds the command-line
+	// limit. RFC 3030 requires the complete chunk before the failure reply.
+	const chunkSize = 200
+	io.WriteString(c, fmt.Sprintf("BDAT %d LAST\r\n", chunkSize))
+	io.WriteString(c, strings.Repeat("x", chunkSize))
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "552 ") {
+		t.Fatalf("expected 552 for the over-limit chunk, got: %q", scanner.Text())
+	}
+	io.WriteString(c, "RSET\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatalf("RSET after discard: %q", scanner.Text())
+	}
+	io.WriteString(c, "MAIL FROM:<c@example.com>\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatalf("connection must stay usable after an over-limit BDAT discard, got: %q", scanner.Text())
+	}
+
+	if len(be.messages) != 0 || len(be.anonmsgs) != 0 {
+		t.Fatal("an over-limit chunk must not be delivered:", be.messages, be.anonmsgs)
+	}
+}
+
+// checklist: SMTP-EXT-05
+func TestServer_Chunking_Binarymime(t *testing.T) {
+	be, s, c, scanner := testServerAuthenticated(t)
+	defer s.Close()
+	defer c.Close()
+	s.EnableBINARYMIME = true
+
+	io.WriteString(c, "MAIL FROM:<root@nsa.gov> BODY=BINARYMIME\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid MAIL response:", scanner.Text())
+	}
+
+	io.WriteString(c, "RCPT TO:<root@gchq.gov.uk>\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid RCPT response:", scanner.Text())
+	}
+
+	io.WriteString(c, "BDAT 8\r\n")
+	io.WriteString(c, "Hey <3\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid BDAT response:", scanner.Text())
+	}
+
+	io.WriteString(c, "BDAT 8 LAST\r\n")
+	io.WriteString(c, "Hey :3\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid BDAT response:", scanner.Text())
+	}
+
+	if len(be.messages) != 1 || len(be.anonmsgs) != 0 {
+		t.Fatal("Invalid number of sent messages:", be.messages, be.anonmsgs)
+	}
+
+	msg := be.messages[0]
+	if msg.From != "root@nsa.gov" {
+		t.Fatal("Invalid mail sender:", msg.From)
+	}
+	if len(msg.To) != 1 || msg.To[0] != "root@gchq.gov.uk" {
+		t.Fatal("Invalid mail recipients:", msg.To)
+	}
+	if want := "Hey <3\r\nHey :3\r\n"; string(msg.Data) != want {
+		t.Fatal("Invalid mail data:", string(msg.Data), msg.Data)
+	}
+}
+
+// TestServer_Chunking_LineLimitAfterNonLastBdat verifies that the command-line
+// length limit stays enforced after a successful non-LAST BDAT chunk. The
+// per-line limit is disabled while a chunk is copied (chunk data may contain
+// arbitrarily long lines), but it must be restored before the next command
+// line is read. Otherwise a peer can stream one unbounded line between chunks
+// and drive the process toward memory exhaustion (see issue #43).
+//
+// checklist: SMTP-EXT-05
+func TestServer_Chunking_LineLimitAfterNonLastBdat(t *testing.T) {
+	_, s, c, scanner := testServerAuthenticated(t)
+	defer s.Close()
+	defer c.Close()
+
+	io.WriteString(c, "MAIL FROM:<root@nsa.gov>\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid MAIL response:", scanner.Text())
+	}
+
+	io.WriteString(c, "RCPT TO:<root@gchq.gov.uk>\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid RCPT response:", scanner.Text())
+	}
+
+	// A successful non-LAST chunk (exactly 5 octets, no trailing CRLF).
+	io.WriteString(c, "BDAT 5\r\nhello")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid non-LAST BDAT response:", scanner.Text())
+	}
+
+	// The next command line exceeds MaxLineLength. It must be rejected as a
+	// too-long line (500 5.4.0), not read uncapped and processed.
+	io.WriteString(c, strings.Repeat("A", s.MaxLineLength+64)+"\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "500 5.4.0 ") {
+		t.Fatal("Expected too-long-line rejection after non-LAST BDAT, got:", scanner.Text())
+	}
+}
+
+// checklist: SMTP-LIM-02
+func TestServer_TooLongCommand(t *testing.T) {
+	_, s, c, scanner := testServerAuthenticated(t)
+	defer s.Close()
+	defer c.Close()
+
+	io.WriteString(c, "MAIL FROM:<"+strings.Repeat("a", s.MaxLineLength)+">\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "500 5.4.0 ") {
+		t.Fatal("Invalid too long MAIL response:", scanner.Text())
+	}
+}
+
+// TestServer_MaxLineLengthBoundsCommandsNotData verifies that MaxLineLength
+// caps command lines only: with a small limit set, an over-long COMMAND line is
+// rejected (500 5.4.0), but a DATA body line longer than the limit is still
+// accepted and delivered. The per-line limit is disabled for the duration of
+// the DATA phase (mirroring the BDAT chunk-copy path), so a server can bound
+// pre-auth command input against memory exhaustion without limiting message
+// body lines. On the pre-fix server the DATA line trips ErrTooLongLine and the
+// message is rejected.
+//
+// checklist: SMTP-DATA-06
+func TestServer_MaxLineLengthBoundsCommandsNotData(t *testing.T) {
+	// Set the small limit before Serve begins so the field write happens-before
+	// the serving goroutine (keeps the race detector quiet).
+	const maxLine = 64
+	be, s, c, scanner, _ := testServerEhlo(t, func(s *server.Server) {
+		s.MaxLineLength = maxLine
+	})
+	defer s.Close()
+	defer c.Close()
+
+	// A DATA body line far longer than MaxLineLength must be accepted: the
+	// per-line limit does not apply to message content.
+	longLine := strings.Repeat("x", maxLine*4)
+
+	io.WriteString(c, "MAIL FROM:<root@nsa.gov>\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid MAIL response:", scanner.Text())
+	}
+	io.WriteString(c, "RCPT TO:<root@gchq.gov.uk>\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid RCPT response:", scanner.Text())
+	}
+	io.WriteString(c, "DATA\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "354 ") {
+		t.Fatal("Invalid DATA response:", scanner.Text())
+	}
+	io.WriteString(c, longLine+"\r\n")
+	io.WriteString(c, ".\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatalf("a DATA body line longer than MaxLineLength must be accepted, got: %q", scanner.Text())
+	}
+
+	if len(be.anonmsgs) != 1 {
+		t.Fatalf("expected the long-line message to be delivered, got %d messages", len(be.anonmsgs))
+	}
+	if !strings.Contains(string(be.anonmsgs[0].Data), longLine) {
+		t.Fatal("delivered message is missing the long body line")
+	}
+
+	// The connection stays framed after DATA, and the command-line limit is
+	// restored: an over-long COMMAND line is rejected as too long (500 5.4.0).
+	io.WriteString(c, strings.Repeat("A", maxLine*2)+"\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "500 5.4.0 ") {
+		t.Fatalf("an over-long command line must be rejected, got: %q", scanner.Text())
+	}
+}
+
+// checklist: SMTP-SRV-01
+func TestServerShutdown(t *testing.T) {
+	_, s, c, _ := testServerGreeted(t)
+
+	ctx := context.Background()
+	errChan := make(chan error)
+	go func() {
+		defer close(errChan)
+
+		errChan <- s.Shutdown(ctx)
+		errChan <- s.Shutdown(ctx)
+	}()
+
+	select {
+	case err := <-errChan:
+		t.Fatal("Expected no err because conn is open:", err)
+	default:
+		c.Close()
+	}
+
+	errOne := <-errChan
+	if errOne != nil {
+		t.Fatal("Expected err to be nil:", errOne)
+	}
+
+	errTwo := <-errChan
+	if errTwo != server.ErrServerClosed {
+		t.Fatal("Expected err to be ErrServerClosed:", errTwo)
+	}
+}
+
+const (
+	dsnEnvelopeID  = "e=mc2"
+	dsnEmailRFC822 = "e=mc2@example.com"
+	dsnEmailUTF8   = "e=mc2@ドメイン名例.jp"
+)
+
+// checklist: SMTP-EXT-04
+func TestServerDSN(t *testing.T) {
+	be, s, c, scanner, caps := testServerEhlo(t,
+		func(s *server.Server) {
+			s.EnableDSN = true
+		})
+	defer s.Close()
+	defer c.Close()
+
+	if _, ok := caps["DSN"]; !ok {
+		t.Fatal("Missing capability: DSN")
+	}
+
+	io.WriteString(c, "MAIL FROM:<e=mc2@example.com> envID=e+3Dmc2 Ret=hdrs\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid MAIL response:", scanner.Text())
+	}
+
+	io.WriteString(c, "RCPT TO:<e=mc2@example.com> ORcpt=Rfc822;e+3Dmc2@example.com Notify=Never\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid RCPT response:", scanner.Text())
+	}
+
+	io.WriteString(c, "RCPT TO:<e=mc2@example.com> orcpt=Utf-8;e\\x{3D}mc2@\\x{30C9}\\x{30E1}\\x{30A4}\\x{30F3}\\x{540D}\\x{4F8B}.jp notify=failure,delay\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid RCPT response:", scanner.Text())
+	}
+
+	// go on as usual
+	io.WriteString(c, "DATA\r\n")
+	scanner.Scan()
+	io.WriteString(c, "Hey <3\r\n")
+	io.WriteString(c, ".\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid DATA response:", scanner.Text())
+	}
+	if len(be.messages) != 0 || len(be.anonmsgs) != 1 {
+		t.Fatal("Invalid number of sent messages:", be.messages, be.anonmsgs)
+	}
+
+	if val := be.anonmsgs[0].Opts.Return; val != smtp.DSNReturnHeaders {
+		t.Fatal("Invalid RET parameter value:", val)
+	}
+	if val := be.anonmsgs[0].Opts.EnvelopeID; val != dsnEnvelopeID {
+		t.Fatal("Invalid ENVID parameter value:", val)
+	}
+
+	to := be.anonmsgs[0].To
+	if to == nil || len(to) != 2 {
+		t.Fatal("Invalid number of recipients:", to)
+	}
+	if val := to[0]; val != dsnEmailRFC822 {
+		t.Fatal("Invalid recipient:", val)
+	}
+	if val := to[1]; val != dsnEmailRFC822 {
+		t.Fatal("Invalid recipient:", val)
+	}
+
+	opts := be.anonmsgs[0].RcptOpts
+	if opts == nil || len(opts) != 2 {
+		t.Fatal("Invalid number of recipients:", opts)
+	}
+	if val := opts[0].Notify; val == nil || len(val) != 1 || val[0] != smtp.DSNNotifyNever {
+		t.Fatal("Invalid NOTIFY parameter value:", val)
+	}
+	if val := opts[0].OriginalRecipientType; val != "Rfc822" {
+		t.Fatal("Invalid ORCPT address type:", val)
+	}
+	if val := opts[0].OriginalRecipient; val != dsnEmailRFC822 {
+		t.Fatal("Invalid ORCPT address:", val)
+	}
+	if val := opts[1].Notify; val == nil || len(val) != 2 || val[0] != smtp.DSNNotifyFailure || val[1] != smtp.DSNNotifyDelayed {
+		t.Fatal("Invalid NOTIFY parameter value:", val)
+	}
+	if val := opts[1].OriginalRecipientType; val != "Utf-8" {
+		t.Fatal("Invalid ORCPT address type:", val)
+	}
+	if val := opts[1].OriginalRecipient; val != dsnEmailUTF8 {
+		t.Fatal("Invalid ORCPT address:", val)
+	}
+}
+
+// An ORCPT=UTF-8 address is refused unless it is RFC 6533 unitext: literal
+// non-ASCII must be well-formed UTF-8 (RFC 3629), while HEXPOINT digits are
+// case-insensitive like all ABNF (RFC 5234 section 2.3).
+//
+// checklist: SMTP-EXT-06 UTF8-DSN-01
+func TestServerDSNUTF8AddressORCPT(t *testing.T) {
+	be, s, c, scanner, _ := testServerEhlo(t,
+		func(s *server.Server) {
+			s.EnableDSN = true
+			s.EnableSMTPUTF8 = true
+		})
+	defer s.Close()
+	defer c.Close()
+
+	io.WriteString(c, "MAIL FROM:<root@nsa.gov> SMTPUTF8\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid MAIL response:", scanner.Text())
+	}
+
+	// An overlong '/' and an encoded surrogate.
+	for _, orcpt := range []string{"a\xc0\xafb@example.com", "a\xed\xa0\x80b@example.com"} {
+		io.WriteString(c, "RCPT TO:<root@gchq.gov.uk> ORCPT=UTF-8;"+orcpt+"\r\n")
+		scanner.Scan()
+		if !strings.HasPrefix(scanner.Text(), "501 5.5.4 ") {
+			t.Fatalf("RCPT with ORCPT %q: got %q, want a 501", orcpt, scanner.Text())
+		}
+	}
+
+	io.WriteString(c, "RCPT TO:<root@gchq.gov.uk> ORCPT=utf-8;r\\x{e9}sum\\x{e9}@example.com\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid RCPT response:", scanner.Text())
+	}
+
+	io.WriteString(c, "DATA\r\n")
+	scanner.Scan()
+	io.WriteString(c, "Hey <3\r\n")
+	io.WriteString(c, ".\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid DATA response:", scanner.Text())
+	}
+	if len(be.anonmsgs) != 1 || len(be.anonmsgs[0].RcptOpts) != 1 {
+		t.Fatal("Invalid messages:", be.anonmsgs)
+	}
+	if val := be.anonmsgs[0].RcptOpts[0].OriginalRecipient; val != "résumé@example.com" {
+		t.Fatal("Invalid ORCPT address:", val)
+	}
+}
+
+// checklist: SMTP-EXT-06 UTF8-DSN-01
+func TestServerDSNwithSMTPUTF8(t *testing.T) {
+	be, s, c, scanner, caps := testServerEhlo(t,
+		func(s *server.Server) {
+			s.EnableDSN = true
+			s.EnableSMTPUTF8 = true
+		})
+	defer s.Close()
+	defer c.Close()
+
+	for _, cap := range []string{"DSN", "SMTPUTF8"} {
+		if _, ok := caps[cap]; !ok {
+			t.Fatal("Missing capability:", cap)
+		}
+	}
+
+	io.WriteString(c, "MAIL FROM:<e=mc2@example.com> ENVID=e+3Dmc2 RET=HDRS SMTPUTF8\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid MAIL response:", scanner.Text())
+	}
+
+	io.WriteString(c, "RCPT TO:<e=mc2@example.com> ORCPT=RFC822;e+3Dmc2@example.com NOTIFY=NEVER\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid RCPT response:", scanner.Text())
+	}
+
+	io.WriteString(c, "RCPT TO:<e=mc2@ドメイン名例.jp> ORCPT=UTF-8;e\\x{3D}mc2@\\x{30C9}\\x{30E1}\\x{30A4}\\x{30F3}\\x{540D}\\x{4F8B}.jp NOTIFY=FAILURE,DELAY\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid RCPT response:", scanner.Text())
+	}
+
+	io.WriteString(c, "RCPT TO:<e=mc2@ドメイン名例.jp> ORCPT=utf-8;e\\x{3D}mc2@ドメイン名例.jp NOTIFY=SUCCESS\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid RCPT response:", scanner.Text())
+	}
+
+	// go on as usual
+	io.WriteString(c, "DATA\r\n")
+	scanner.Scan()
+	io.WriteString(c, "Hey <3\r\n")
+	io.WriteString(c, ".\r\n")
+	scanner.Scan()
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid DATA response:", scanner.Text())
+	}
+	if len(be.messages) != 0 || len(be.anonmsgs) != 1 {
+		t.Fatal("Invalid number of sent messages:", be.messages, be.anonmsgs)
+	}
+
+	if val := be.anonmsgs[0].Opts.Return; val != smtp.DSNReturnHeaders {
+		t.Fatal("Invalid RET parameter value:", val)
+	}
+	if val := be.anonmsgs[0].Opts.EnvelopeID; val != dsnEnvelopeID {
+		t.Fatal("Invalid ENVID parameter value:", val)
+	}
+
+	to := be.anonmsgs[0].To
+	if to == nil || len(to) != 3 {
+		t.Fatal("Invalid number of recipients:", to)
+	}
+	if val := to[0]; val != dsnEmailRFC822 {
+		t.Fatal("Invalid recipient:", val)
+	}
+	// Non-ASCII UTF-8 is allowed in TO parameter value
+	if val := to[1]; val != dsnEmailUTF8 {
+		t.Fatal("Invalid recipient:", val)
+	}
+	if val := to[2]; val != dsnEmailUTF8 {
+		t.Fatal("Invalid recipient:", val)
+	}
+
+	opts := be.anonmsgs[0].RcptOpts
+	if opts == nil || len(opts) != 3 {
+		t.Fatal("Invalid number of recipients:", opts)
+	}
+	if val := opts[0].Notify; val == nil || len(val) != 1 || val[0] != smtp.DSNNotifyNever {
+		t.Fatal("Invalid NOTIFY parameter value:", val)
+	}
+	if val := opts[0].OriginalRecipientType; val != smtp.DSNAddressTypeRFC822 {
+		t.Fatal("Invalid ORCPT address type:", val)
+	}
+	if val := opts[0].OriginalRecipient; val != dsnEmailRFC822 {
+		t.Fatal("Invalid ORCPT address:", val)
+	}
+	if val := opts[1].Notify; val == nil || len(val) != 2 || val[0] != smtp.DSNNotifyFailure || val[1] != smtp.DSNNotifyDelayed {
+		t.Fatal("Invalid NOTIFY parameter value:", val)
+	}
+	if val := opts[1].OriginalRecipientType; val != smtp.DSNAddressTypeUTF8 {
+		t.Fatal("Invalid ORCPT address type:", val)
+	}
+	if val := opts[1].OriginalRecipient; val != dsnEmailUTF8 {
+		t.Fatal("Invalid ORCPT address:", val)
+	}
+	// utf-8-addr-unitext form is allowed in ORCPT parameter value
+	if val := opts[2].Notify; val == nil || len(val) != 1 || val[0] != smtp.DSNNotifySuccess {
+		t.Fatal("Invalid NOTIFY parameter value:", val)
+	}
+	if val := opts[2].OriginalRecipientType; val != "utf-8" {
+		t.Fatal("Invalid ORCPT address type:", val)
+	}
+	if val := opts[2].OriginalRecipient; val != dsnEmailUTF8 {
+		t.Fatal("Invalid ORCPT address:", val)
+	}
+}
+
+// An xtext value carries '=' and every octet outside xchar as a hexchar (RFC
+// 3461 section 4, RFC 4954 section 8), so a literal one is malformed.
+//
+// checklist: SMTP-EXT-04
+func TestServer_xtextLiteralNonXchar(t *testing.T) {
+	_, s, c, scanner, _ := testServerEhlo(t,
+		func(s *server.Server) {
+			s.EnableDSN = true
+			s.EnableSMTPUTF8 = true
+		})
+	defer s.Close()
+	defer c.Close()
+
+	for _, tc := range []struct{ cmd, want string }{
+		{"MAIL FROM:<e=mc2@example.com> ENVID=e=mc2", "501 5.5.4"},
+		{"MAIL FROM:<e=mc2@example.com> AUTH=e=mc2@example.com", "501 5.5.4"},
+		{"MAIL FROM:<élisa@example.org> SMTPUTF8 AUTH=élisa@example.org", "501 5.5.4"},
+		{"MAIL FROM:<e=mc2@example.com> ENVID=e+3Dmc2 AUTH=e+3Dmc2@example.com", "250 "},
+		{"RCPT TO:<e=mc2@example.com> ORCPT=rfc822;e=mc2@example.com", "501 5.5.4"},
+		{"RCPT TO:<e=mc2@example.com> ORCPT=rfc822;e+3Dmc2@example.com", "250 "},
+	} {
+		io.WriteString(c, tc.cmd+"\r\n")
+		scanner.Scan()
+		if !strings.HasPrefix(scanner.Text(), tc.want) {
+			t.Fatalf("%s: got %q, want %q", tc.cmd, scanner.Text(), tc.want)
+		}
+	}
+}
+
+// checklist: SMTP-EXT-10 RRVS-SYN-01 RRVS-SYN-03 RRVS-SRV-01
+func TestServerRRVS(t *testing.T) {
+	be, s, c, scanner, caps := testServerEhlo(t,
+		func(s *server.Server) {
+			s.EnableRRVS = true
+		})
+	defer s.Close()
+	defer c.Close()
+
+	if _, ok := caps["RRVS"]; !ok {
+		t.Fatal("Missing capability: RRVS")
+	}
+
+	io.WriteString(c, "MAIL FROM:<root@nsa.gov>\r\n")
+	scanner.Scan()
+
+	io.WriteString(c, "RCPT TO:<root@gchq.gov.uk> RRVS=\r\n")
+	scanner.Scan()
+
+	if !strings.HasPrefix(scanner.Text(), "501 5.5.4") {
+		t.Fatal("Unexpected res on malformed RRVS parameter value:", scanner.Text())
+	}
+
+	io.WriteString(c, "RCPT TO:<root@gchq.gov.uk> RRVS=1234\r\n")
+	scanner.Scan()
+
+	if !strings.HasPrefix(scanner.Text(), "501 5.5.4 ") {
+		t.Fatal("Unexpected res on malformed RRVS parameter value:", scanner.Text())
+	}
+
+	io.WriteString(c, "RCPT TO:<root@gchq.gov.uk> RRVS=2014-04-03T23:01:00Z\r\n")
+	scanner.Scan()
+
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid RRVS parameter value:", scanner.Text())
+	}
+
+	io.WriteString(c, "RCPT TO:<root@bnd.bund.de> RRVS=2020-03-19T11:13:00Z;ign0r3.th1s;othr_stuff\r\n")
+	scanner.Scan()
+
+	if !strings.HasPrefix(scanner.Text(), "501 5.5.4 ") {
+		t.Fatal("Unexpected res on malformed RRVS no-support action:", scanner.Text())
+	}
+
+	io.WriteString(c, "RCPT TO:<root@bnd.bund.de> RRVS=2020-03-19T11:13:00Z;C\r\n")
+	scanner.Scan()
+
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid RRVS parameter value:", scanner.Text())
+	}
+
+	// complete the transaction
+	io.WriteString(c, "DATA\r\n")
+	scanner.Scan()
+	io.WriteString(c, "Hey <3\r\n")
+	io.WriteString(c, ".\r\n")
+	scanner.Scan()
+
+	opts := be.anonmsgs[0].RcptOpts
+	if opts == nil || len(opts) != 2 {
+		t.Fatal("Invalid number of recipients:", opts)
+	}
+
+	if !opts[0].RequireRecipientValidSince.Equal(time.Date(2014, time.April, 3, 23, 1, 0, 0, time.UTC)) {
+		t.Fatal("Invalid RRVS parameter value:", fmt.Sprintf("%#v", opts[0].RequireRecipientValidSince))
+	}
+
+	if !opts[1].RequireRecipientValidSince.Equal(time.Date(2020, time.March, 19, 11, 13, 0, 0, time.UTC)) {
+		t.Fatal("Invalid RRVS parameter value:", fmt.Sprintf("%#v", opts[1].RequireRecipientValidSince))
+	}
+}
+
+// checklist: SMTP-EXT-11
+func TestServerDELIVERBY(t *testing.T) {
+	be, s, c, scanner, caps := testServerEhlo(t,
+		func(s *server.Server) {
+			s.EnableDELIVERBY = true
+			s.MinimumDeliverByTime = 50 * time.Second
+		})
+	defer s.Close()
+	defer c.Close()
+
+	if _, ok := caps["DELIVERBY 50"]; !ok {
+		t.Fatal("Missing capability: DELIVERBY")
+	}
+
+	// RFC 2852 §4 defines BY as a MAIL FROM parameter: the deadline describes
+	// the message, not an individual recipient. A malformed value is refused
+	// before the transaction opens, so each attempt below starts a fresh one.
+	malformedMsgs := []string{
+		"MAIL FROM:<root@nsa.gov> BY=",
+		"MAIL FROM:<root@nsa.gov> BY=1234",
+		"MAIL FROM:<root@nsa.gov> BY=123;RT;",
+		"MAIL FROM:<root@nsa.gov> BY=0;R",
+	}
+
+	for _, msg := range malformedMsgs {
+		io.WriteString(c, msg+"\r\n")
+		scanner.Scan()
+		if !strings.HasPrefix(scanner.Text(), "501 5.5.4") {
+			t.Fatal("Unexpected res on malformed BY parameter value:", scanner.Text())
+		}
+	}
+
+	io.WriteString(c, "MAIL FROM:<root@nsa.gov> BY=100;NT\r\n")
+	scanner.Scan()
+
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid BY parameter value:", scanner.Text())
+	}
+
+	io.WriteString(c, "RCPT TO:<root@gchq.gov.uk>\r\n")
+	scanner.Scan()
+
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid RCPT response:", scanner.Text())
+	}
+
+	// complete the transaction
+	io.WriteString(c, "DATA\r\n")
+	scanner.Scan()
+	io.WriteString(c, "Hey <3\r\n")
+	io.WriteString(c, ".\r\n")
+	scanner.Scan()
+
+	opts := be.anonmsgs[0].Opts
+	if opts == nil {
+		t.Fatal("No MAIL options were captured")
+	}
+
+	deliverByOpts := opts.DeliverBy
+
+	if deliverByOpts == nil {
+		t.Fatal("Deliver by options is nil:", opts)
+	}
+
+	expectedDeliverByOpts := smtp.DeliverByOptions{
+		Time:  100 * time.Second,
+		Mode:  smtp.DeliverByNotify,
+		Trace: true,
+	}
+
+	if deliverByOpts.Time != expectedDeliverByOpts.Time ||
+		deliverByOpts.Mode != expectedDeliverByOpts.Mode ||
+		deliverByOpts.Trace != expectedDeliverByOpts.Trace {
+		t.Fatal("Incorrect BY parameter value:", fmt.Sprintf("expected %#v, got %#v", expectedDeliverByOpts, deliverByOpts))
+	}
+}
+
+// checklist: SMTP-EXT-12
+func TestServerMTPRIORITY(t *testing.T) {
+	be, s, c, scanner, caps := testServerEhlo(t,
+		func(s *server.Server) {
+			s.EnableMTPRIORITY = true
+		})
+	defer s.Close()
+	defer c.Close()
+
+	if _, ok := caps["MT-PRIORITY"]; !ok {
+		t.Fatal("Missing capability: MT-PRIORITY")
+	}
+
+	// RFC 6710 §3 defines MT-PRIORITY as a MAIL FROM parameter: the priority
+	// describes the message, not an individual recipient.
+	malformedMsgs := []string{
+		"MAIL FROM:<root@nsa.gov> MT-PRIORITY=",
+		"MAIL FROM:<root@nsa.gov> MT-PRIORITY=foo",
+		"MAIL FROM:<root@nsa.gov> MT-PRIORITY=-10",
+		"MAIL FROM:<root@nsa.gov> MT-PRIORITY=10",
+	}
+
+	for _, msg := range malformedMsgs {
+		io.WriteString(c, msg+"\r\n")
+		scanner.Scan()
+		if !strings.HasPrefix(scanner.Text(), "501 5.5.2") {
+			t.Fatal("Unexpected res on malformed MT-PRIORITY parameter value:", scanner.Text())
+		}
+	}
+
+	expectedPriority := -2
+
+	io.WriteString(c, fmt.Sprintf("MAIL FROM:<root@nsa.gov> MT-PRIORITY=%d\r\n", expectedPriority))
+	scanner.Scan()
+
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid MT-PRIORITY parameter value:", scanner.Text())
+	}
+
+	io.WriteString(c, "RCPT TO:<root@gchq.gov.uk>\r\n")
+	scanner.Scan()
+
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid RCPT response:", scanner.Text())
+	}
+
+	// complete the transaction
+	io.WriteString(c, "DATA\r\n")
+	scanner.Scan()
+	io.WriteString(c, "Hey <3\r\n")
+	io.WriteString(c, ".\r\n")
+	scanner.Scan()
+
+	opts := be.anonmsgs[0].Opts
+	if opts == nil {
+		t.Fatal("No MAIL options were captured")
+	}
+
+	priority := opts.MTPriority
+
+	if priority == nil {
+		t.Fatal("MtPriority is nil:", opts)
+	}
+
+	if *priority != expectedPriority {
+		t.Fatal("Incorrect MtPriority parameter value:", fmt.Sprintf("expected %d, got %d", expectedPriority, *priority))
+	}
+}
+
+// Both parameters must now be refused where they used to be accepted. A client
+// sending either on RCPT is sending it somewhere neither RFC defines, and
+// quietly accepting it there would hide the mistake — and, for a multi-recipient
+// message, leave it ambiguous which recipient's value described the message.
+//
+// checklist: SMTP-EXT-11
+func TestServerDeliverByAndMTPriorityRejectedOnRcpt(t *testing.T) {
+	_, s, c, scanner, _ := testServerEhlo(t,
+		func(s *server.Server) {
+			s.EnableDELIVERBY = true
+			s.EnableMTPRIORITY = true
+		})
+	defer s.Close()
+	defer c.Close()
+
+	io.WriteString(c, "MAIL FROM:<root@nsa.gov>\r\n")
+	scanner.Scan()
+
+	if !strings.HasPrefix(scanner.Text(), "250 ") {
+		t.Fatal("Invalid MAIL response:", scanner.Text())
+	}
+
+	for _, msg := range []string{
+		"RCPT TO:<root@gchq.gov.uk> BY=100;NT",
+		"RCPT TO:<root@gchq.gov.uk> MT-PRIORITY=6",
+	} {
+		io.WriteString(c, msg+"\r\n")
+		scanner.Scan()
+		if !strings.HasPrefix(scanner.Text(), "500 5.5.4") {
+			t.Fatal("Unexpected res on a MAIL parameter sent to RCPT:", scanner.Text())
+		}
+	}
+}

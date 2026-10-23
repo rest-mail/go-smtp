@@ -3,55 +3,540 @@
 [![CI](https://github.com/rest-mail/go-smtp/actions/workflows/ci.yml/badge.svg)](https://github.com/rest-mail/go-smtp/actions/workflows/ci.yml)
 [![Coverage gate: >=95%](https://img.shields.io/badge/coverage%20gate-%3E%3D95%25-brightgreen)](COVERAGE.md)
 [![Checklist: 360/574 mapped](https://img.shields.io/badge/checklist-360%2F574%20mapped-blue)](CHECKLIST.md)
-[![Go Reference](https://pkg.go.dev/badge/github.com/rest-mail/go-smtp.svg)](https://pkg.go.dev/github.com/rest-mail/go-smtp)
+[![Go Reference](https://pkg.go.dev/badge/github.com/rest-mail/go-smtp.svg)](https://pkg.go.dev/github.com/rest-mail/go-smtp/pkg/smtp)
 
-An ESMTP client and server library written in Go.
+An ESMTP client and server library written in Go, with LMTP and the
+extensions a modern mail server needs.
+
+## Contents
+
+- [Install](#install)
+- [Packages](#packages)
+- [Quick start](#quick-start): [server](#server), [client](#client)
+- [Features](#features): [extensions](#extensions), [server API](#server-api), [client API](#client-api)
+- [What the library does and what the host must do](#what-the-library-does-and-what-the-host-must-do)
+- [Server reply lines](#server-reply-lines)
+- [RFC conformance](#rfc-conformance): [the checklist](#the-rfc-checklist), [badges and coverage](#badges-and-coverage)
+- [Relationship with net/smtp](#relationship-with-netsmtp)
+- [Changelog](#changelog)
+- [Licence](#licence)
+
+## Install
+
+```sh
+go get github.com/rest-mail/go-smtp@latest
+```
+
+The module still declares go 1.13.
+
+## Packages
+
+| Import path | What it holds |
+|-------------|---------------|
+| `github.com/rest-mail/go-smtp/pkg/smtp` | The types the server and the client share: `MailOptions`, `RcptOptions`, the `Body*`, `DSN*`, `DeliverBy*`, `RRVS*` and `Priority*` values, `SMTPError`, `EnhancedCode` and `Errorf`. |
+| `github.com/rest-mail/go-smtp/pkg/smtp/server` | The SMTP and LMTP server: `Server`, `New`, `Backend`, `Session`, `Conn`, `CloseConnection` and the `Err*` values. |
+| `github.com/rest-mail/go-smtp/pkg/smtp/client` | The SMTP and LMTP client: `Client`, `Dial`, `DialTLS`, `DialStartTLS`, `New`, `NewLMTP`, `NewStartTLS`, `SendMail`, `Pipeliner`. |
+| `pkg/smtp/internal/wire` | Codecs and checks both sides use (xtext, RFC 6533 addresses, the line-limited reader). Internal: not importable. |
+| `pkg/smtp/rfctest` | The black-box RFC test suite, driving only the public API. Tests only. |
+
+Upgrading from v0.31 or earlier: the root package is gone and the
+constructors are renamed (`NewServer` is `server.New`, `NewClient` is
+`client.New`). [CHANGELOG.md](CHANGELOG.md#0320---2026-10-23) has the full
+old-to-new table.
+
+## Quick start
+
+### Server
+
+A submission server that requires AUTH, as in `ExampleServer`
+([`pkg/smtp/server/example_test.go`](pkg/smtp/server/example_test.go)):
+
+```go
+package main
+
+import (
+	"errors"
+	"io"
+	"log"
+	"time"
+
+	"github.com/emersion/go-sasl"
+	"github.com/rest-mail/go-smtp/pkg/smtp"
+	"github.com/rest-mail/go-smtp/pkg/smtp/server"
+)
+
+// Backend opens a Session for each connection.
+type Backend struct{}
+
+func (Backend) NewSession(*server.Conn) (server.Session, error) {
+	return &Session{}, nil
+}
+
+// Session handles one connection's commands.
+type Session struct{ auth bool }
+
+func (s *Session) AuthMechanisms() []string { return []string{sasl.Plain} }
+
+func (s *Session) Auth(mech string) (sasl.Server, error) {
+	return sasl.NewPlainServer(func(identity, username, password string) error {
+		if username != "username" || password != "password" {
+			return errors.New("invalid username or password")
+		}
+		s.auth = true
+		return nil
+	}), nil
+}
+
+func (s *Session) Mail(from string, opts *smtp.MailOptions) error {
+	if !s.auth {
+		return server.ErrAuthRequired // 530 5.7.0
+	}
+	return nil
+}
+
+func (s *Session) Rcpt(to string, opts *smtp.RcptOptions) error { return nil }
+
+func (s *Session) Data(r io.Reader) error {
+	b, err := io.ReadAll(r)
+	if err != nil {
+		return err
+	}
+	log.Printf("received %d bytes", len(b))
+	return nil
+}
+
+func (s *Session) Reset()        {}
+func (s *Session) Logout() error { return nil }
+
+func main() {
+	s := server.New(Backend{})
+	s.Addr = "localhost:1025"
+	s.Domain = "localhost"
+	s.ReadTimeout = 10 * time.Second
+	s.WriteTimeout = 10 * time.Second
+	s.MaxMessageBytes = 1024 * 1024
+	s.MaxRecipients = 50
+	s.AllowInsecureAuth = true // plaintext AUTH, for local testing only
+
+	log.Fatal(s.ListenAndServe())
+}
+```
+
+### Client
+
+Send one message with `SendMail`, as in `ExampleSendMail`
+([`pkg/smtp/client/example_test.go`](pkg/smtp/client/example_test.go)):
+
+```go
+package main
+
+import (
+	"log"
+	"strings"
+
+	"github.com/emersion/go-sasl"
+	"github.com/rest-mail/go-smtp/pkg/smtp/client"
+)
+
+func main() {
+	auth := sasl.NewPlainClient("", "user@example.com", "password")
+	to := []string{"recipient@example.net"}
+	msg := strings.NewReader("To: recipient@example.net\r\n" +
+		"Subject: discount Gophers!\r\n" +
+		"\r\n" +
+		"This is the email body.\r\n")
+	if err := client.SendMail("mail.example.com:25", auth, "sender@example.org", to, msg); err != nil {
+		log.Fatal(err)
+	}
+}
+```
+
+For more control, `client.Dial` (or `client.New` on an existing connection)
+returns a `*client.Client` with `Mail`, `Rcpt`, `Data` and `Quit`; see
+`ExampleDial`.
 
 ## Features
 
-### Protocol
+### Extensions
 
-* ESMTP **client and server** implementing [RFC 5321], plus [LMTP] client and server support
-* **TLS** — implicit TLS and [STARTTLS]
-* **SASL authentication** via [go-sasl], with pluggable mechanisms
-* **PIPELINING** and enhanced status codes
-* **CHUNKING** (`BDAT`) and **BINARYMIME** ([RFC 3030])
-* **SMTPUTF8** — internationalized addresses and headers ([RFC 6531]) — and **8BITMIME** bodies
-* Message-size controls — **SIZE** ([RFC 1870]) and **LIMITS** `RCPTMAX` ([RFC 9422])
-* **Delivery Status Notifications** — DSN ([RFC 3461])
-* **REQUIRETLS** ([RFC 8689]), **MT-PRIORITY** ([RFC 6710]), **DELIVERBY** ([RFC 2852]) and **RRVS** ([RFC 7293])
-* **XCLIENT** — a trusted proxy (haproxy/nginx/Postfix) can assert the real client's address, name, protocol, HELO and login; gated on a caller-supplied trust check so only trusted peers are honoured
+| Extension | RFC | Server | Client | Server switch |
+|-----------|-----|--------|--------|---------------|
+| ESMTP core | [RFC 5321] | yes | yes | — |
+| [LMTP] | RFC 2033 | yes | `client.NewLMTP` | `Server.LMTP` |
+| TLS: implicit TLS and [STARTTLS] | RFC 3207 | yes | `DialTLS`, `DialStartTLS`, `NewStartTLS` | `Server.TLSConfig` |
+| AUTH: SASL via [go-sasl], pluggable mechanisms | RFC 4954 | yes | `Client.Auth` | the session's `AuthMechanisms`/`Auth`; `AllowInsecureAuth` allows plaintext |
+| PIPELINING | [RFC 2920] | yes | `Client.Pipeline()` | always on |
+| ENHANCEDSTATUSCODES | RFC 2034 | yes | reads them into `SMTPError` | always on |
+| 8BITMIME | RFC 6152 | yes | `MailOptions.Body` | always on |
+| CHUNKING (`BDAT`) | [RFC 3030] | yes | no BDAT sender | always on |
+| BINARYMIME | [RFC 3030] | yes | refused (DATA only) | `EnableBINARYMIME` |
+| SIZE | [RFC 1870] | yes | `MailOptions.Size` | `MaxMessageBytes` |
+| LIMITS `RCPTMAX` | [RFC 9422] | yes | — | `MaxRecipients` |
+| SMTPUTF8: internationalized addresses and headers | [RFC 6531] | yes | `MailOptions.UTF8` | `EnableSMTPUTF8` |
+| Delivery Status Notifications (DSN) | [RFC 3461], RFC 6533 | yes | `MailOptions`/`RcptOptions` fields | `EnableDSN` |
+| REQUIRETLS | [RFC 8689] | yes | `MailOptions.RequireTLS` | `EnableREQUIRETLS` |
+| MT-PRIORITY | [RFC 6710] | yes | `MailOptions.MTPriority` | `EnableMTPRIORITY`, `MtPriorityProfile` |
+| DELIVERBY | [RFC 2852] | yes | `MailOptions.DeliverBy` | `EnableDELIVERBY`, `MinimumDeliverByTime` |
+| RRVS | [RFC 7293] | yes | `RcptOptions.RequireRecipientValidSince` | `EnableRRVS` |
+| XCLIENT (Postfix, non-IETF) | — | yes | — | `EnableXCLIENT`, `TrustXCLIENT` |
+| Message submission | RFC 6409 | the backend decides | — | — |
+
+XCLIENT lets a trusted proxy (haproxy/nginx/Postfix) assert the real client's
+address, name, protocol, HELO and login. It is gated on a caller-supplied
+trust check, so only trusted peers are honoured.
 
 ### Server API
 
 * Pluggable backend with per-message limits (max recipients, max message size, max line length, read/write timeouts)
-* Dynamic EHLO capabilities — the static `ExtraCaps` field, or an optional `FeatureBackend` that computes advertised capabilities per connection
-* `ConnState` hook (in the style of `net/http`) for connection open/close events — a single place for metrics, logging and debugging
-* `Conn.Context()` — a per-connection `context.Context`, cancelled when the connection closes or the server shuts down, so backends can observe cancellation
-* Backend error contract — return an `*SMTPError` (build one with `smtp.Errorf`) to choose the status code; a 2xx `*SMTPError` sets a custom success line, and wrapping an error with `CloseConnection` sends the response and then closes the connection
-* A zero-value `Server` is usable directly, without `NewServer`
+* Dynamic EHLO capabilities: the static `ExtraCaps` field, or an optional `FeatureBackend` that computes advertised capabilities per connection
+* `ConnState` hook (in the style of `net/http`) for connection open/close events: a single place for metrics, logging and debugging
+* `Conn.Context()`: a per-connection `context.Context`, cancelled when the connection closes or the server shuts down, so backends can observe cancellation
+* Backend error contract: return an `*smtp.SMTPError` (build one with `smtp.Errorf`) to choose the status code; a 2xx `*smtp.SMTPError` sets a custom success line, and wrapping an error with `server.CloseConnection` sends the response and then closes the connection
+* A zero-value `server.Server` is usable directly, without `server.New`
 
 ### Client API
 
-* Command batching with `Client.Pipeline()` — pipelines `RSET`/`MAIL`/`RCPT` per [RFC 2920] to cut round-trips on high-throughput senders
-* `Client.DataTransferTimeout` — a fresh timeout for each DATA network write, including the final flush (default 3 minutes); `SubmissionTimeout` separately bounds the final response. A failed body write is retained; close the connection rather than retrying or terminating a partial message.
-* `Client.CheckConn()` — detect a server-closed idle/pooled connection without sending a command (STARTTLS-safe)
+* Command batching with `Client.Pipeline()`: pipelines `RSET`/`MAIL`/`RCPT` per [RFC 2920] to cut round-trips on high-throughput senders
+* `Client.DataTransferTimeout`: a fresh timeout for each DATA network write, including the final flush (default 3 minutes); `SubmissionTimeout` separately bounds the final response. A failed body write is retained; close the connection rather than retrying or terminating a partial message.
+* `Client.CheckConn()`: detect a server-closed idle/pooled connection without sending a command (STARTTLS-safe)
 
-## The RFC checklist
+## What the library does and what the host must do
 
-[CHECKLIST.md](CHECKLIST.md) lists the requirements of RFC 5321 (the SMTP
-server and client core), RFC 3207 (STARTTLS), RFC 1870 (SIZE),
-RFC 2920 (PIPELINING), RFC 3030 (CHUNKING/BINARYMIME) and
-RFC 6152 (8BITMIME) item by item, plus individual
-AUTH exchange requirements from RFC 4954 §4 and the DSN parameter/protocol
-and relay transport rules from RFC 3461 §§2–4, 5.1, 5.2.1–5.2.2 and 5.4,
-and the SMTPUTF8 envelope rules from RFC 6531 (including refusal of `SMTPUTF8=`) and the RRVS parameter
-from RFC 7293, DELIVERBY transport from RFC 2852 and MT-PRIORITY transport
-from RFC 6710, LMTP from RFC 2033, and Postfix XCLIENT session state and
-trust boundaries (a non-IETF extension with explicit syntax gaps), plus the
-RFC 6409 §4.3 submission authentication error/backend contract. A small program,
-[`internal/checklist`](internal/checklist/main.go), checks it against the tests
-in CI. It is the same program as
+Each extension below says what go-smtp handles and what stays with the host
+(the program that uses it). The [checklist](CHECKLIST.md) records every one of
+these boundaries row by row.
+
+### 8BITMIME, BINARYMIME and CHUNKING
+
+The library:
+
+- The client honors explicit `MailOptions.Body`: `Body7Bit` uses 7-bit
+  transport, and `Body8BitMIME` requires the peer's advertised 8BITMIME
+  support. With no body option, it selects 8BITMIME when available, as before.
+- This DATA-only client refuses `BodyBinaryMIME`; it requires BDAT. The client
+  has no BDAT sender.
+- The default `Mail`/`SendMail` API and `Data` do not inspect or convert MIME.
+- CHUNKING is always advertised; `EnableBINARYMIME` additionally advertises
+  BINARYMIME.
+- BDAT payloads reach the backend unchanged, even when binary bytes share a
+  read buffer with the command.
+- Every failed, syntactically valid chunk is consumed before its reply,
+  including chunks already pipelined after an error; incomplete chunks close
+  the connection and are never delivered.
+- The current per-chunk count limit is 2^32-1 octets; larger messages can use
+  multiple chunks.
+- The DATA fuzz target compares transparency against Go's `net/textproto`
+  reader, accounting for that reader's CRLF-to-LF conversion. The BDAT
+  argument parser has a fuzz target with an independent grammar/integer
+  oracle.
+
+The host:
+
+- Callers must provide 7-bit content when the peer lacks 8BITMIME.
+- Backends must preserve accepted 8-bit data during storage/delivery and
+  negotiate, convert losslessly, or fail at the next hop.
+- Senders must issue RSET after a failed chunk or illegal DATA/BDAT mixing.
+- MIME canonicalization, lossless storage/relay, next-hop conversion and
+  delivery notifications remain host responsibilities; enabling BINARYMIME
+  promises those capabilities.
+
+Those responsibilities, the automatic API's validation gap and the RFC 3030
+limitations are explicit in the checklist.
+
+### SIZE
+
+The library:
+
+- SIZE declarations are whole-message octet estimates (headers and CRLF
+  included, SMTP transparency dots and the DATA terminator excluded).
+- The server accepts 1–20 decimal digits, passes estimates up to `int64` to
+  the backend, and answers 552 for declarations above its configured limit or
+  representable range.
+- The unlimited configuration advertises `SIZE 0`.
+- The declared size never delimits DATA; actual content is bounded by
+  `MaxMessageBytes`.
+- A client omits SIZE when `MailOptions.Size` is zero and rejects negative
+  estimates.
+
+The host: storage reservation, recipient limits, retry queues and delivery
+notifications remain host policy; see the RFC 1870 checklist's explicit policy
+rows.
+
+### DSN
+
+DSN (`EnableDSN`) is an opt-in promise by the host to honor notification
+requests, not just to parse the parameters.
+
+The library:
+
+- The transport exposes decoded `MailOptions.Return`/`EnvelopeID` and each
+  recipient's `Notify`/original address.
+- NOTIFY accepts repeated conditions and null list elements as RFC 3461's
+  RFC 822 list grammar permits; the server passes unique conditions to the
+  backend in first-occurrence order. NEVER must be standalone.
+- RET and NOTIFY keywords are ASCII and case-insensitive; Unicode look-alikes
+  are refused.
+- Unset NOTIFY/RET values remain unset for host defaults.
+- RFC822 original addresses are opaque printable ASCII, not revalidated
+  mailbox syntax.
+- Other registered address types besides RFC822 and RFC 6533 UTF-8 remain
+  unsupported; the checklist records this conformance gap.
+- With no DSN capability the client silently omits the options; inspect
+  `Extension("DSN")` before choosing fallback policy.
+- The default command limit covers the tested DSN size allowances.
+
+The host:
+
+- The host owns report generation, retries, alias/list policy and
+  preservation of these options when relaying.
+- No DSN may be generated for a null sender.
+- Hosts changing `MaxLineLength` must budget all enabled extension
+  combinations.
+
+### PIPELINING
+
+The library:
+
+- PIPELINING replies retain command order. Only transaction-command replies
+  (RSET/MAIL/RCPT) are held for batching; synchronization and unknown-command
+  replies flush before later commands are processed.
+- The client exposes those three queue operations and returns every status
+  from `Wait`; DATA is sent synchronously afterwards.
+- An empty DATA writer sends the terminator without an extra blank line.
+- Known gap: the client still assumes a 4096-byte transport window instead of
+  checking the actual TCP window or reading responses concurrently. Its
+  congestion tests prove that assumed window only; smaller windows and
+  oversized individual commands remain a conformance gap (PIPE-CLIENT-07),
+  bounded by `CommandTimeout`.
+
+The host (the caller):
+
+- Inspect every result before sending message content.
+- If every recipient failed but a peer nevertheless accepts DATA, close the
+  unwritten writer to send only `.\r\n`, check the final response, and reset.
+
+### DELIVERBY
+
+DELIVERBY (`EnableDELIVERBY`) requires the host to enforce RFC 2852's deadline
+and notification rules.
+
+The library:
+
+- `Session.Mail` receives a relative `DeliverBy.Time`.
+- Return mode requires a positive deadline; notify mode accepts zero and
+  negative values.
+- A valid return request below the configured minimum receives 555 5.5.4.
+- The client checks the peer's advertised minimum for return mode before MAIL,
+  including comma-separated future options. It refuses malformed minima and
+  all unadvertised BY requests, and does not silently drop the parameter.
+
+The host:
+
+- Capture receipt time in `Session.Mail`, enforce expiry in the queue, and
+  recompute time remaining before relaying.
+- `MinimumDeliverByTime` should be whole seconds in the range 0–999999999;
+  zero omits the advertised minimum.
+- Notify-mode fallback to a peer without DELIVERBY is a host decision
+  requiring DSNs and notification adjustments.
+- Hosts also generate deadline/trace DSNs, include Arrival-Date/Deliver-By-Date,
+  preserve mode/trace across hops and choose MX routes.
+
+The transport checklist explicitly records these responsibilities.
+
+### MT-PRIORITY
+
+MT-PRIORITY (`EnableMTPRIORITY`) transports one priority for the whole
+message.
+
+The library:
+
+- The server accepts only RFC 6710's `0`, `1` through `9`, and `-1` through
+  `-9`; `+1`, `-0` and leading zeroes are syntax errors (501 5.5.2).
+- A nil `MailOptions.MTPriority` leaves the default of 0 or site policy to the
+  backend.
+- The original requested value is preserved even if the selected policy
+  internally rounds to fewer service classes.
+- `MtPriorityProfile` is only an advertisement: set it to a valid 1–20
+  character ASCII policy name, or leave it empty to withhold the name (clients
+  assume MIXER). The configuration is not validated.
+- `Client.Mail` refuses an explicit priority when the peer does not advertise
+  MT-PRIORITY.
+
+The host:
+
+- Enable this extension only when the backend authorizes priority requests.
+  In particular, `Session.Mail` must reject or lower positive priorities from
+  untrusted or unauthorized sources; successful SMTP AUTH alone does not grant
+  that permission.
+- The host implements policy levels, queue ordering, retries, trace/log
+  fields, DSN priorities and metadata preservation across aliases and relay
+  hops.
+- Custom backend SMTP replies can report reassignment (250 2.3.6), a priority
+  below the current minimum (450/550 X.7.15), or priority-specific size limits
+  (552 5.7.16).
+- A relay must explicitly choose fallback and omit the option for a peer that
+  does not advertise MT-PRIORITY.
+
+These policy boundaries are recorded in the checklist.
+
+### SMTPUTF8
+
+The library:
+
+- The streaming client does not inspect content; `SendMail` detects envelope
+  addresses only.
+- With `MailOptions.UTF8` set, an unsupported next hop is refused before MAIL
+  or content is sent.
+- The server refuses `SMTPUTF8=` (the parameter takes no value).
+
+The host:
+
+- A message with internationalized headers needs `MailOptions.UTF8` even when
+  all envelope addresses are ASCII, including headers inside nested MIME
+  messages.
+- A relay host must choose how that refusal becomes an upstream rejection,
+  notification, retry or transformation; the checked two-hop example chooses
+  rejection and then proves ASCII recovery.
+
+### LMTP
+
+The library:
+
+- LMTP uses LHLO and refuses SMTP HELO/EHLO. `client.NewLMTP` preserves an
+  LHLO refusal instead of falling back to HELO.
+- If the connection fails while the client reads DATA replies, each recipient
+  left without a reply gets a temporary `451 4.4.2` failure in the
+  `LMTPDataError`, joined with the transport error (RFC 2033 §5).
+- `LMTPSession.LMTPData` can supply one status per accepted RCPT, including
+  duplicate paths; unset statuses use the method's returned error. A plain
+  `Session.Data` result applies to all recipients.
+- DATA and BDAT LAST replies are flushed individually in RCPT order as
+  statuses become available, including before `LMTPData` returns. The server
+  waits for the method to return before resetting the transaction or
+  processing the next command.
+- `CloseWithLMTPResponse` accepts every 2xx final recipient reply as success,
+  including unrecognized codes, and returns partial successes and known
+  failures alongside transport errors. There are no synthetic per-recipient
+  4xx entries or streaming callbacks. Its address-keyed maps cannot preserve
+  separate duplicate-path outcomes.
+- The server drains BDAT LAST with no accepted recipients and sends zero
+  replies. Size-limit, early-backend and short-transfer LAST failures retain
+  one reply per accepted RCPT, including duplicates; non-LAST chunks still
+  have one reply. A failed transfer closes if unread octets would break
+  command framing.
+
+The host:
+
+- A successful status promises durable delivery or relay responsibility: the
+  host must persist the message before reporting success.
+- Deploy LMTP only by prior arrangement on local transports, never TCP port
+  25; explicit listeners and addresses are not validated (the default network
+  is Unix sockets).
+- Treat every unanswered recipient as a temporary failure. A peer that
+  completely loses its connection must still apply that rule to any outcomes
+  it did not receive.
+
+### XCLIENT
+
+The library:
+
+- XCLIENT is restricted to connections approved by `TrustXCLIENT`.
+- A successful assertion logs out the old backend session, clears SMTP
+  greeting/authentication state and sends 220. The proxy must greet again;
+  `Backend.NewSession` then sees the accumulated `Conn.XClient()` identity.
+- Asserted HELO/PROTO remain metadata; the transport peer and TLS session
+  remain intact.
+- XCLIENT during a mail transaction gets 503, and rejected syntax leaves the
+  existing identity intact.
+- A backend may retain an identity pointer: later assertions use a copy.
+- Values are xtext-decoded as Postfix does: `+HH` becomes its octet, a `+`
+  without two hex digits gets 501 and other octets stay literal.
+- Identity policy runs when the replacement backend session is created after
+  the new greeting, rather than before the 220.
+
+The [Postfix XCLIENT checklist](CHECKLIST.md#postfix-xclient-session-state-and-trust-boundaries)
+records incomplete compatibility:
+
+- Asserted HELO does not satisfy the new SMTP greeting requirement and PROTO
+  does not select effective protocol state.
+- Per-attribute address/protocol/sentinel validation is not implemented, and
+  PORT/DESTADDR/DESTPORT are accepted but not surfaced or advertised.
+
+The host must validate attributes, map LOGIN to its own identity policy, apply
+relay/access rules and reset cached client assertions appropriately.
+
+### Message submission (RFC 6409)
+
+- For message submission, the backend must require successful AUTH or
+  independently established authorization in `Session.Mail`, returning
+  `server.ErrAuthRequired` otherwise (as in `ExampleServer` and the
+  [quick start](#server)). This error sends `530 5.7.0`.
+- Binding to port 587 does not select a submission mode, and
+  `AllowInsecureAuth` only permits plaintext AUTH; it does not require
+  authentication.
+- The checklist covers the RFC 6409 §4.3 submission authentication
+  error/backend contract; other RFC 6409 requirements remain unaudited.
+
+### REQUIRETLS
+
+The [RFC 8689 checklist](CHECKLIST.md#requiretls-rfc-8689) checks the envelope
+parameter and its TLS-only transport.
+
+The library:
+
+- The server refuses valued REQUIRETLS parameters with 501 5.5.4 and plaintext
+  requests with 530 5.7.0.
+- Both synchronous and pipelined clients refuse explicit REQUIRETLS over
+  plaintext, even if a peer advertised it.
+- It does not parse `TLS-Required: No`, implement TLS-optional policy,
+  generate reports, override RET=FULL for bounces or choose the null-sender
+  fallback.
+
+The host:
+
+- Hosts using `MailOptions.RequireTLS` must establish TLS first and configure
+  certificate/hostname verification; the flag does not override `tls.Config`
+  or prove DNSSEC, MTA-STS or DANE validation.
+- Enable `Server.EnableREQUIRETLS` only when the host persists and honors the
+  received tag across storage, alias expansion and onward delivery.
+- The unimplemented items above remain explicit host duties and API gaps,
+  rather than full RFC 8689 conformance claims.
+- Hosts overriding `MaxLineLength` must budget all enabled extensions
+  themselves.
+
+## Server reply lines
+
+The server limits each ordinary reply line to 512 octets, including its reply
+code, enhanced status (if present), and CRLF. Overlong text is truncated at a
+UTF-8 character boundary; the status and existing multiline framing are kept.
+Backends can use newline-separated text to supply longer diagnostics across
+multiple lines. This also bounds greetings and backend-supplied EHLO lines;
+keep domain names, capabilities and other protocol tokens within the budget.
+SASL `334` challenges are sent intact because RFC 4954 §4 makes their size
+independent of ordinary SMTP line limits.
+
+## RFC conformance
+
+### The RFC checklist
+
+[CHECKLIST.md](CHECKLIST.md) lists, item by item:
+
+- RFC 5321 (the SMTP server and client core)
+- RFC 3207 (STARTTLS), RFC 1870 (SIZE), RFC 2920 (PIPELINING),
+  RFC 3030 (CHUNKING/BINARYMIME) and RFC 6152 (8BITMIME)
+- individual AUTH exchange requirements from RFC 4954 §4
+- the DSN parameter/protocol and relay transport rules from RFC 3461 §§2–4,
+  5.1, 5.2.1–5.2.2 and 5.4
+- the SMTPUTF8 envelope rules from RFC 6531 (including refusal of `SMTPUTF8=`)
+- the RRVS parameter from RFC 7293
+- DELIVERBY transport from RFC 2852 and MT-PRIORITY transport from RFC 6710
+- LMTP from RFC 2033
+- Postfix XCLIENT session state and trust boundaries (a non-IETF extension
+  with explicit syntax gaps)
+- the RFC 6409 §4.3 submission authentication error/backend contract
+
+A small program, [`internal/checklist`](internal/checklist/main.go), checks it
+against the tests in CI. It is the same program as
 [go-spf](https://github.com/rest-mail/go-spf)'s and the other `go-*`
 libraries', without package `slices`, since this module still declares go 1.13.
 
@@ -74,206 +559,25 @@ func TestRFC5321_RsetAndSecondEhloClearTransaction(t *testing.T) {
 
 `go run ./internal/checklist [-file CHECKLIST.md] [package dir ...]` fails when
 an ID is used twice, an item names no test and is not `n/a`, an item and a test
-disagree about each other, or a `Test` or `Fuzz` function names no item.
-Coverage is in [COVERAGE.md](COVERAGE.md).
+disagree about each other, or a `Test` or `Fuzz` function names no item. It
+scans only the directories it is given, not their subdirectories, so CI passes
+every package that holds tests:
+
+```sh
+go run ./internal/checklist -file CHECKLIST.md pkg/smtp pkg/smtp/client pkg/smtp/internal/wire pkg/smtp/rfctest pkg/smtp/server
+```
+
+The black-box tests in `pkg/smtp/rfctest` use only the public API; tests that
+need a package's internals live beside that package.
+
+### Badges and coverage
 
 The badges at the top are checked by `TestReadmeBadges` in
 `internal/checklist`. The checklist badge counts mapped items over all items:
 the 214 `n/a` rows are in the denominator, so the badge never claims more than
 the tests prove. The coverage badge shows the floor CI enforces (`FLOOR` in
 `.github/workflows/ci.yml`), not a measured figure; each CI run prints the
-measured statement coverage.
-
-The server limits each ordinary reply line to 512 octets, including its reply
-code, enhanced status (if present), and CRLF. Overlong text is truncated at a
-UTF-8 character boundary; the status and existing multiline framing are kept.
-Backends can use newline-separated text to supply longer diagnostics across
-multiple lines. This also bounds greetings and backend-supplied EHLO lines;
-keep domain names, capabilities and other protocol tokens within the budget.
-SASL `334` challenges are sent intact because RFC 4954 §4 makes their size
-independent of ordinary SMTP line limits.
-
-The client honors explicit `MailOptions.Body`: `Body7Bit` uses 7-bit transport,
-and `Body8BitMIME` requires the peer's advertised 8BITMIME support. With no body
-option, it selects 8BITMIME when available, as before. This DATA-only client
-refuses `BodyBinaryMIME`; it requires BDAT. The default `Mail`/`SendMail` API and
-`Data` do not inspect or convert MIME: callers must provide 7-bit content when
-the peer lacks 8BITMIME. Backends must preserve accepted 8-bit data during
-storage/delivery and negotiate, convert losslessly, or fail at the next hop.
-Those responsibilities and the automatic API's validation gap are explicit in
-the checklist. The DATA fuzz target compares transparency against Go's
-`net/textproto` reader, accounting for that reader's CRLF-to-LF conversion.
-
-CHUNKING is always advertised; `EnableBINARYMIME` additionally advertises
-BINARYMIME. BDAT payloads reach the backend unchanged, even when binary bytes
-share a read buffer with the command. Every failed, syntactically valid chunk
-is consumed before its reply, including chunks already pipelined after an
-error; incomplete chunks close the connection and are never delivered.
-Senders must issue RSET after a failed chunk or illegal DATA/BDAT mixing.
-The current per-chunk count limit is 2^32-1 octets; larger messages can use
-multiple chunks. The client has no BDAT sender. MIME canonicalization,
-lossless storage/relay, next-hop conversion and delivery notifications remain
-host responsibilities; enabling BINARYMIME promises those capabilities.
-The argument parser has a fuzz target with an independent grammar/integer
-oracle. The RFC 3030 checklist records these limitations explicitly.
-
-SIZE declarations are whole-message octet estimates (headers and CRLF included,
-SMTP transparency dots and the DATA terminator excluded). The server accepts
-1–20 decimal digits, passes estimates up to `int64` to the backend, and answers
-552 for declarations above its configured limit or representable range. The
-unlimited configuration advertises `SIZE 0`. The declared size never delimits
-DATA; actual content is bounded by `MaxMessageBytes`. A client omits SIZE when
-`MailOptions.Size` is zero and rejects negative estimates. Storage reservation,
-recipient limits, retry queues and delivery notifications remain host policy;
-see the RFC 1870 checklist's explicit policy rows.
-
-DSN (`EnableDSN`) is an opt-in promise by the host to honor notification
-requests, not just to parse the parameters. The transport exposes decoded
-`MailOptions.Return`/`EnvelopeID` and each recipient's `Notify`/original address.
-NOTIFY accepts repeated conditions and null list elements as RFC 3461's RFC 822
-list grammar permits; the server passes unique conditions to the backend in
-first-occurrence order. NEVER must be standalone. RET and NOTIFY keywords are
-ASCII and case-insensitive; Unicode look-alikes are refused.
-
-The host owns report generation, retries, alias/list policy and preservation
-of these options when relaying. With no DSN capability the client silently
-omits the options; inspect `Extension("DSN")` before choosing fallback policy.
-No DSN may be generated for a null sender. Unset NOTIFY/RET values remain unset
-for host defaults. RFC822 original addresses are opaque printable ASCII, not
-revalidated mailbox syntax. Other registered address types besides RFC822 and
-RFC 6533 UTF-8 remain unsupported; the checklist records this conformance gap.
-The default command limit covers the tested DSN size allowances, but hosts
-changing `MaxLineLength` must budget all enabled extension combinations.
-
-PIPELINING replies retain command order. Only transaction-command replies
-(RSET/MAIL/RCPT) are held for batching; synchronization and unknown-command
-replies flush before later commands are processed. The client exposes those
-three queue operations and returns every status from `Wait`; DATA is sent
-synchronously afterwards. Inspect every result before sending message content.
-If every recipient failed but a peer nevertheless accepts DATA, close the
-unwritten writer to send only `.\r\n`, check the final response, and reset.
-An empty DATA writer now sends that terminator without an extra blank line.
-
-The client still assumes a 4096-byte transport window instead of checking the
-actual TCP window or reading responses concurrently. Its congestion tests prove
-that assumed window only; smaller windows and oversized individual commands
-remain a conformance gap (PIPE-CLIENT-07), bounded by `CommandTimeout`.
-
-DELIVERBY (`EnableDELIVERBY`) requires the host to enforce RFC 2852's deadline
-and notification rules. `Session.Mail` receives a relative `DeliverBy.Time`;
-capture receipt time there, enforce expiry in the queue, and recompute time
-remaining before relaying. Return mode requires a positive deadline; notify
-mode accepts zero and negative values. `MinimumDeliverByTime` should be whole
-seconds in the range 0–999999999; zero omits the advertised minimum. A valid
-return request below the configured minimum receives 555 5.5.4.
-
-The client checks the peer's advertised minimum for return mode before MAIL,
-including comma-separated future options. It refuses malformed minima and
-all unadvertised BY requests. Notify-mode fallback to a peer without DELIVERBY
-is a host decision requiring DSNs and notification adjustments; the client
-does not silently drop the parameter. Hosts also generate deadline/trace DSNs,
-include Arrival-Date/Deliver-By-Date, preserve mode/trace across hops and choose
-MX routes. The transport checklist explicitly records these responsibilities.
-
-MT-PRIORITY (`EnableMTPRIORITY`) transports one priority for the whole message.
-The server accepts only RFC 6710's `0`, `1` through `9`, and `-1` through `-9`;
-`+1`, `-0` and leading zeroes are syntax errors (501 5.5.2). A nil
-`MailOptions.MTPriority` leaves the default of 0 or site policy to the backend.
-The original requested value is preserved even if the selected policy internally
-rounds to fewer service classes. `MtPriorityProfile` is only an advertisement:
-set it to a valid 1–20 character ASCII policy name, or leave it empty to withhold
-the name (clients assume MIXER). The configuration is not validated.
-
-Enable this extension only when the backend authorizes priority requests.
-In particular, `Session.Mail` must reject or lower positive priorities from
-untrusted or unauthorized sources; successful SMTP AUTH alone does not grant
-that permission. The host implements policy levels, queue ordering, retries,
-trace/log fields, DSN priorities and metadata preservation across aliases and
-relay hops. Custom backend SMTP replies can report reassignment (250 2.3.6),
-a priority below the current minimum (450/550 X.7.15), or priority-specific size
-limits (552 5.7.16). Client.Mail refuses an explicit priority when the peer does
-not advertise MT-PRIORITY; a relay must explicitly choose fallback and omit the
-option for such a peer. These policy boundaries are recorded in the checklist.
-
-A message with internationalized headers needs `MailOptions.UTF8` even when
-all envelope addresses are ASCII, including headers inside nested MIME
-messages. The streaming client does not inspect content; `SendMail` detects
-envelope addresses only. With the flag set, an unsupported next hop is refused
-before MAIL or content is sent. A relay host must choose how that refusal
-becomes an upstream rejection, notification, retry or transformation; the
-checked two-hop example chooses rejection and then proves ASCII recovery.
-
-LMTP uses LHLO and refuses SMTP HELO/EHLO. `NewClientLMTP` preserves an LHLO
-refusal instead of falling back to HELO. If the connection fails while the
-client reads DATA replies, each recipient left without a reply gets a
-temporary `451 4.4.2` failure in the `LMTPDataError`, joined with the
-transport error (RFC 2033 §5). `LMTPSession.LMTPData` can supply
-one status per accepted RCPT, including duplicate paths; unset statuses use
-the method's returned error. A plain `Session.Data` result applies to all
-recipients. DATA and BDAT LAST replies are flushed individually in RCPT order
-as statuses become available, including before `LMTPData` returns. The server
-waits for the method to return before resetting the transaction or processing
-the next command.
-
-A successful status promises durable delivery or relay responsibility: the
-host must persist the message before reporting success. Deploy LMTP only by
-prior arrangement on local transports, never TCP port 25; explicit listeners
-and addresses are not validated (the default network is Unix sockets).
-`CloseWithLMTPResponse` accepts every 2xx final recipient reply as success,
-including unrecognized codes, and returns partial successes and known failures
-alongside transport errors. Treat every unanswered recipient as a temporary failure;
-there are no synthetic per-recipient 4xx entries or streaming callbacks. Its
-address-keyed maps cannot preserve separate duplicate-path outcomes. The
-server drains BDAT LAST with no accepted recipients and sends zero replies.
-Size-limit, early-backend and short-transfer LAST failures retain one reply
-per accepted RCPT, including duplicates; non-LAST chunks still have one reply.
-A failed transfer closes if unread octets would break command framing. A peer
-that completely loses its connection must still apply the temporary-failure
-rule above to any outcomes it did not receive.
-
-XCLIENT is restricted to connections approved by `TrustXCLIENT`. A successful
-assertion logs out the old backend session, clears SMTP greeting/authentication
-state and sends 220. The proxy must greet again; `Backend.NewSession` then sees
-the accumulated `Conn.XClient()` identity. Asserted HELO/PROTO remain metadata;
-the transport peer and TLS session remain intact. XCLIENT during a mail
-transaction gets 503, and rejected syntax leaves the existing identity intact.
-A backend may retain an identity pointer: later assertions use a copy.
-
-The [Postfix XCLIENT checklist](CHECKLIST.md#postfix-xclient-session-state-and-trust-boundaries)
-records incomplete compatibility: asserted HELO does not satisfy the new
-SMTP greeting requirement and PROTO does not select effective protocol state.
-Values are xtext-decoded as Postfix does: `+HH` becomes its octet, a `+`
-without two hex digits gets 501 and other octets stay literal. Per-attribute
-address/protocol/sentinel validation is not implemented, and PORT/DESTADDR/DESTPORT
-are accepted but not surfaced or advertised. The host must validate attributes,
-map LOGIN to its own identity policy, apply relay/access rules and reset cached
-client assertions appropriately. Identity policy runs when the replacement
-backend session is created after the new greeting, rather than before the 220.
-
-For message submission, the backend must require successful AUTH or independently
-established authorization in `Session.Mail`, returning `ErrAuthRequired` otherwise
-(as in `ExampleServer`). This error sends `530 5.7.0`. Binding to port 587 does
-not select a submission mode, and `AllowInsecureAuth` only permits plaintext AUTH;
-it does not require authentication. Other RFC 6409 requirements remain unaudited.
-
-### REQUIRETLS transport scope
-
-
-The [RFC 8689 checklist](CHECKLIST.md#requiretls-rfc-8689) checks the envelope
-parameter and its TLS-only transport. The server refuses valued REQUIRETLS
-parameters with 501 5.5.4 and plaintext requests with 530 5.7.0. Both synchronous
-and pipelined clients refuse explicit REQUIRETLS over plaintext, even if a
-peer advertised it. Hosts using `MailOptions.RequireTLS` must establish TLS
-first and configure certificate/hostname verification; the flag does not
-override `tls.Config` or prove DNSSEC, MTA-STS or DANE validation.
-
-Enable `Server.EnableREQUIRETLS` only when the host persists and honors the
-received tag across storage, alias expansion and onward delivery. The library
-does not parse `TLS-Required: No`, implement TLS-optional policy, generate
-reports, override RET=FULL for bounces or choose the null-sender fallback.
-Those remain explicit host duties and API gaps, rather than full RFC 8689
-conformance claims. Hosts overriding `MaxLineLength` must budget all enabled
-extensions themselves.
+measured statement coverage. Coverage is in [COVERAGE.md](COVERAGE.md).
 
 ## Relationship with net/smtp
 
@@ -283,11 +587,13 @@ provides a server implementation and a number of client improvements.
 
 ## Changelog
 
-Recent releases — see [CHANGELOG.md](CHANGELOG.md) for the complete history.
+Recent releases; see [CHANGELOG.md](CHANGELOG.md) for the complete history.
 
-- **v0.28.3** (2026-07-26) — `MaxLineLength` now bounds command lines only; the per-line limit is disabled during DATA (mirroring BDAT), so a server can cap pre-auth command input without limiting message body lines.
-- **v0.28.2** (2026-07-25) — STARTTLS/Close data race, nested-MAIL 503, AUTH/BDAT desync fixes, EHLO case-normalization, MAIL/RCPT param strictness, shutdown 421.
-- **v0.28.1** (2026-07-25) — BDAT inter-chunk line-limit enforcement, over-limit chunk discard framing, LMTP oversized-DATA discard bound, client recipient-list reset per transaction.
+- **v0.32.0** (2026-10-23): the library is split into `pkg/smtp`, `pkg/smtp/server` and `pkg/smtp/client`; `NewServer` is `server.New` and `NewClient*` are `client.New*` (breaking, migration table in the changelog). AUTH responses and challenges get their own size bounds, and XCLIENT values are xtext-decoded.
+- **v0.31.0** (2026-10-22): clause-by-clause RFC audits behind the checklist, `HELP` answers 214, unanswered LMTP recipients become temporary failures.
+- **v0.28.3** (2026-07-26): `MaxLineLength` now bounds command lines only; the per-line limit is disabled during DATA (mirroring BDAT), so a server can cap pre-auth command input without limiting message body lines.
+- **v0.28.2** (2026-07-25): STARTTLS/Close data race, nested-MAIL 503, AUTH/BDAT desync fixes, EHLO case-normalization, MAIL/RCPT param strictness, shutdown 421.
+- **v0.28.1** (2026-07-25): BDAT inter-chunk line-limit enforcement, over-limit chunk discard framing, LMTP oversized-DATA discard bound, client recipient-list reset per transaction.
 
 ## Licence
 

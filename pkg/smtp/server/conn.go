@@ -1,0 +1,2004 @@
+package server
+
+import (
+	"bytes"
+	"context"
+	"crypto/tls"
+	"encoding/base64"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/textproto"
+	"runtime/debug"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+	"unicode/utf8"
+
+	"github.com/emersion/go-sasl"
+	"github.com/rest-mail/go-smtp/pkg/smtp"
+	"github.com/rest-mail/go-smtp/pkg/smtp/internal/wire"
+)
+
+// Number of protocol errors tolerated per connection: the connection is closed
+// once errCount exceeds this, i.e. on the 4th error.
+const errThreshold = 3
+
+// Upper bound on server->client challenge round-trips within a single AUTH
+// command. Real SASL mechanisms complete in a handful of steps; this cap keeps
+// the continuation loop bounded so a misbehaving mechanism cannot spin it
+// indefinitely.
+const maxAuthContinuations = 100
+
+type Conn struct {
+	conn   net.Conn
+	text   *textproto.Conn
+	server *Server
+	ctx    context.Context
+	cancel context.CancelFunc
+	helo   string
+
+	// Number of errors witnessed on this connection
+	errCount int
+
+	session    Session
+	locker     sync.Mutex
+	binarymime bool
+	// utf8 records SMTPUTF8 on the current MAIL (RFC 6531 §3.4).
+	utf8 bool
+
+	// First error encountered writing a response. Once set, the command loop
+	// stops: further responses cannot reach the peer.
+	writeErr error
+
+	// When > 0, the read deadline is re-armed to now+bodyReadDeadline before
+	// each underlying connection read (see deadlineReader). Set only while a
+	// DATA/BDAT message body is being read.
+	bodyReadDeadline time.Duration
+	// bdatPipe is shared between the connection's own goroutine (handleBdat) and
+	// the Server.Close() goroutine, which tears an in-flight transfer down. All
+	// access to the field goes through the connection lock (c.locker) — read it
+	// via bdatWriter() — so those goroutines do not race on it. The
+	// *io.PipeWriter's own methods (Write/Close/CloseWithError) are already
+	// goroutine-safe, so they are called outside the lock.
+	bdatPipe      *io.PipeWriter
+	bdatStatus    *statusCollector // used for BDAT on LMTP
+	dataResult    chan error
+	bytesReceived int64 // counts total size of chunks when BDAT is used
+
+	// closing is set once the connection's own goroutine has closed it, so the
+	// command loop stops instead of handling input still buffered after it.
+	closing bool
+
+	fromReceived bool
+	recipients   []string
+	didAuth      bool
+
+	// xclient holds the client identity a trusted proxy asserted via XCLIENT,
+	// or nil if none. See Server.EnableXCLIENT.
+	xclient *XClientAttrs
+}
+
+func newConn(c net.Conn, s *Server) *Conn {
+	sc := &Conn{
+		server: s,
+		conn:   c,
+	}
+	sc.ctx, sc.cancel = context.WithCancel(s.baseContext())
+
+	sc.init()
+	return sc
+}
+
+func (c *Conn) init() {
+	rwc := struct {
+		io.Reader
+		io.Writer
+		io.Closer
+	}{
+		Reader: &deadlineReader{c: c, r: c.conn},
+		Writer: c.conn,
+		Closer: c.conn,
+	}
+
+	if c.server.Debug != nil {
+		rwc = struct {
+			io.Reader
+			io.Writer
+			io.Closer
+		}{
+			io.TeeReader(rwc.Reader, c.server.Debug),
+			io.MultiWriter(rwc.Writer, c.server.Debug),
+			rwc.Closer,
+		}
+	}
+
+	c.text = textproto.NewConn(rwc)
+}
+
+// handleHelp answers HELP with a 214 reply that points the client at the
+// greeting command, which lists the extensions this server offers.
+func (c *Conn) handleHelp() {
+	greet := "EHLO"
+	if c.server.LMTP {
+		greet = "LHLO"
+	}
+	c.writeResponse(214, smtp.EnhancedCode{2, 0, 0}, fmt.Sprintf("Send %v to list the supported extensions", greet))
+}
+
+// Commands are dispatched to the appropriate handler functions.
+func (c *Conn) handle(cmd string, arg string) {
+	// If panic happens during command handling - send 421 response
+	// and close connection.
+	defer func() {
+		if err := recover(); err != nil {
+			c.writeResponse(421, smtp.EnhancedCode{4, 0, 0}, "Internal server error")
+			c.closeAfterReplies()
+
+			stack := debug.Stack()
+			c.server.ErrorLog.Printf("panic serving %v: %v\n%s", c.conn.RemoteAddr(), err, stack)
+		}
+	}()
+
+	if cmd == "" {
+		c.protocolError(500, smtp.EnhancedCode{5, 5, 2}, "Error: bad syntax")
+		return
+	}
+
+	cmd = strings.ToUpper(cmd)
+	switch cmd {
+	case "SEND", "SOML", "SAML", "EXPN", "TURN":
+		// These commands are not implemented in any state
+		c.writeResponse(502, smtp.EnhancedCode{5, 5, 1}, fmt.Sprintf("%v command not implemented", cmd))
+	case "HELP":
+		// RFC 5321 §4.1.1.8: HELP SHOULD work without arguments and is valid
+		// in any state (§4.1.4). An argument MAY ask for more specific help;
+		// it gets the same general reply.
+		c.handleHelp()
+	case "HELO", "EHLO", "LHLO":
+		lmtp := cmd == "LHLO"
+		enhanced := lmtp || cmd == "EHLO"
+		if c.server.LMTP && !lmtp {
+			c.writeResponse(500, smtp.EnhancedCode{5, 5, 1}, "This is a LMTP server, use LHLO")
+			return
+		}
+		if !c.server.LMTP && lmtp {
+			c.writeResponse(500, smtp.EnhancedCode{5, 5, 1}, "This is not a LMTP server")
+			return
+		}
+		c.handleGreet(enhanced, arg)
+	case "MAIL":
+		c.handleMail(arg)
+	case "RCPT":
+		c.handleRcpt(arg)
+	case "VRFY":
+		c.writeResponse(252, smtp.EnhancedCode{2, 5, 0}, "Cannot VRFY user, but will accept message")
+	case "NOOP":
+		c.writeResponse(250, smtp.EnhancedCode{2, 0, 0}, "I have successfully done nothing")
+	case "RSET": // Reset session
+		if arg != "" {
+			c.writeResponse(501, smtp.EnhancedCode{5, 5, 4}, "RSET does not accept parameters")
+			return
+		}
+		c.reset()
+		c.writeResponse(250, smtp.EnhancedCode{2, 0, 0}, "Session reset")
+	case "BDAT":
+		c.handleBdat(arg)
+	case "DATA":
+		c.handleData(arg)
+	case "QUIT":
+		if arg != "" {
+			c.writeResponse(501, smtp.EnhancedCode{5, 5, 4}, "QUIT does not accept parameters")
+			return
+		}
+		c.writeResponse(221, smtp.EnhancedCode{2, 0, 0}, "Bye")
+		c.closeAfterReplies()
+	case "AUTH":
+		c.handleAuth(arg)
+	case "STARTTLS":
+		if arg != "" {
+			c.writeResponse(501, smtp.EnhancedCode{5, 5, 4}, "STARTTLS does not accept parameters")
+			return
+		}
+		c.handleStartTLS()
+	case "XCLIENT":
+		c.handleXClient(arg)
+	default:
+		msg := fmt.Sprintf("Syntax errors, %v command unrecognized", cmd)
+		c.protocolError(500, smtp.EnhancedCode{5, 5, 2}, msg)
+	}
+}
+
+func (c *Conn) Server() *Server {
+	return c.server
+}
+
+// Context returns the connection's context. It is cancelled when the connection
+// is closed or the server is shut down, so a backend can observe those events
+// (for example to cancel in-flight work). It is never nil.
+func (c *Conn) Context() context.Context {
+	if c.ctx != nil {
+		return c.ctx
+	}
+	return context.Background()
+}
+
+func (c *Conn) Session() Session {
+	c.locker.Lock()
+	defer c.locker.Unlock()
+	return c.session
+}
+
+// bdatWriter returns the in-flight BDAT pipe writer (or nil) under the
+// connection lock, so a read in the connection's own goroutine does not race
+// Server.Close()/reset() clearing the field from another goroutine. The returned
+// writer's own methods are goroutine-safe, so the caller uses it without the
+// lock held.
+func (c *Conn) bdatWriter() *io.PipeWriter {
+	c.locker.Lock()
+	defer c.locker.Unlock()
+	return c.bdatPipe
+}
+
+func (c *Conn) setSession(session Session) {
+	c.locker.Lock()
+	defer c.locker.Unlock()
+	c.session = session
+}
+
+// setConn swaps the underlying connection under the connection lock. The
+// STARTTLS upgrade calls it to install the *tls.Conn; taking c.locker serializes
+// the swap with Close(), which reads c.conn under the same lock from the
+// Server.Close()/Shutdown() goroutine, so the two do not race on the field. The
+// TLS handshake itself runs before this, outside the lock, so no blocking I/O is
+// held under it.
+func (c *Conn) setConn(conn net.Conn) {
+	c.locker.Lock()
+	defer c.locker.Unlock()
+	c.conn = conn
+}
+
+func (c *Conn) Close() error {
+	c.locker.Lock()
+	defer c.locker.Unlock()
+
+	if c.cancel != nil {
+		c.cancel()
+	}
+
+	if c.bdatPipe != nil {
+		c.bdatPipe.CloseWithError(ErrDataReset)
+		c.bdatPipe = nil
+	}
+
+	if c.session != nil {
+		c.session.Logout()
+		c.session = nil
+	}
+
+	return c.conn.Close()
+}
+
+// closeAfterReplies sends the buffered replies, then closes the connection.
+// Only the connection's own goroutine may call it: it writes to the reply
+// buffer, which Close (callable from anywhere) must not touch.
+func (c *Conn) closeAfterReplies() {
+	c.flush()
+	c.closing = true
+	c.Close()
+}
+
+// beginServerClose is invoked by Server.Close on every live connection to start
+// a service-closing teardown. It tears down any in-flight message pipe and wakes
+// a blocked read (by expiring the read deadline) so the connection's own command
+// loop returns, notices the server is shutting down, emits a 421 service-closing
+// reply and then closes the socket. The reply is written by the connection
+// goroutine (never here) so it cannot race that goroutine's own writes; this
+// method only sets a read deadline, which is safe to do from another goroutine.
+func (c *Conn) beginServerClose() {
+	c.locker.Lock()
+	defer c.locker.Unlock()
+
+	if c.bdatPipe != nil {
+		c.bdatPipe.CloseWithError(ErrDataReset)
+		c.bdatPipe = nil
+	}
+
+	_ = c.conn.SetReadDeadline(time.Now())
+}
+
+// TLSConnectionState returns the connection's TLS connection state.
+// Zero values are returned if the connection doesn't use TLS.
+func (c *Conn) TLSConnectionState() (state tls.ConnectionState, ok bool) {
+	tc, ok := c.conn.(*tls.Conn)
+	if !ok {
+		return
+	}
+	return tc.ConnectionState(), true
+}
+
+func (c *Conn) Hostname() string {
+	return c.helo
+}
+
+func (c *Conn) Conn() net.Conn {
+	return c.conn
+}
+
+// XClientAttrs holds the client identity a trusted proxy asserted via the
+// XCLIENT extension, with each xtext value already decoded. Empty fields were
+// not asserted.
+type XClientAttrs struct {
+	Addr  string // real client IP address (ADDR)
+	Name  string // real client reverse-DNS name (NAME)
+	Proto string // client protocol (PROTO), e.g. "SMTP" or "ESMTP"
+	Helo  string // client HELO/EHLO name (HELO)
+	Login string // authenticated username (LOGIN)
+}
+
+// XClient returns the client identity a trusted proxy asserted via XCLIENT, or
+// nil if none was asserted on this connection. See Server.EnableXCLIENT.
+// Treat the returned attributes as read-only. Each successful XCLIENT command
+// creates a new snapshot; pointers retained by earlier Sessions stay unchanged.
+// HELO, PROTO and LOGIN are metadata for the host, not protocol/auth state.
+func (c *Conn) XClient() *XClientAttrs {
+	return c.xclient
+}
+
+func (c *Conn) xclientAllowed() bool {
+	return c.server.EnableXCLIENT && c.server.TrustXCLIENT != nil && c.server.TrustXCLIENT(c)
+}
+
+// handleXClient processes the XCLIENT command, letting a trusted proxy assert
+// the real client's identity. It is honored only for peers TrustXCLIENT
+// approves; per the widely-used (Postfix) semantics, a successful XCLIENT resets
+// the session and the server issues a fresh greeting, after which the client
+// re-issues EHLO.
+func (c *Conn) handleXClient(arg string) {
+	if !c.xclientAllowed() {
+		c.writeResponse(550, smtp.EnhancedCode{5, 7, 1}, "XCLIENT not allowed")
+		return
+	}
+	if c.fromReceived || c.bdatWriter() != nil {
+		c.writeResponse(503, smtp.EnhancedCode{5, 5, 1}, "XCLIENT not allowed during mail transaction")
+		return
+	}
+
+	fields := splitWSP(arg)
+	if len(fields) == 0 {
+		c.writeResponse(501, smtp.EnhancedCode{5, 5, 4}, "XCLIENT requires an attribute")
+		return
+	}
+	// Validate into a copy: a rejected command must not partly replace the
+	// current identity, nor mutate an identity retained by an old Session.
+	attrs := XClientAttrs{}
+	if c.xclient != nil {
+		attrs = *c.xclient
+	}
+	for _, field := range fields {
+		key, value, ok := strings.Cut(field, "=")
+		if !ok {
+			c.writeResponse(501, smtp.EnhancedCode{5, 5, 4}, "Malformed XCLIENT attribute: "+field)
+			return
+		}
+		name := strings.ToUpper(key)
+		var target *string
+		switch name {
+		case "ADDR":
+			target = &attrs.Addr
+		case "NAME":
+			target = &attrs.Name
+		case "PROTO":
+			target = &attrs.Proto
+		case "HELO":
+			target = &attrs.Helo
+		case "LOGIN":
+			target = &attrs.Login
+		case "PORT", "DESTADDR", "DESTPORT":
+			// Accepted for compatibility but not currently surfaced.
+		default:
+			c.writeResponse(501, smtp.EnhancedCode{5, 5, 4}, "Unknown XCLIENT attribute: "+key)
+			return
+		}
+		decoded, ok := decodeXClientValue(value)
+		if !ok {
+			c.writeResponse(501, smtp.EnhancedCode{5, 5, 4}, "Bad XCLIENT "+name+" syntax")
+			return
+		}
+		if target != nil {
+			*target = decoded
+		}
+	}
+	// XCLIENT starts a new SMTP session on the same transport. Backend state
+	// (including authentication and access decisions) belongs to the previous
+	// identity. TLS and accumulated proxy attributes survive this reset.
+	if session := c.Session(); session != nil {
+		session.Logout()
+		c.setSession(nil)
+	}
+	c.helo = ""
+	c.didAuth = false
+	c.xclient = &attrs
+
+	c.reset()
+	c.greet()
+}
+
+func (c *Conn) authAllowed() bool {
+	_, isTLS := c.TLSConnectionState()
+	return isTLS || c.server.AllowInsecureAuth
+}
+
+// protocolError writes errors responses and closes the connection once too many
+// have occurred.
+func (c *Conn) protocolError(code int, ec smtp.EnhancedCode, msg string) {
+	c.writeResponse(code, ec, msg)
+
+	c.errCount++
+	if c.errCount > errThreshold {
+		c.writeResponse(500, smtp.EnhancedCode{5, 5, 1}, "Too many errors. Quiting now")
+		c.closeAfterReplies()
+	}
+}
+
+// GREET state -> waiting for HELO
+func (c *Conn) handleGreet(enhanced bool, arg string) {
+	domain, err := parseHelloArgument(arg)
+	if err != nil {
+		c.writeResponse(501, smtp.EnhancedCode{5, 5, 2}, "Domain/address argument required for HELO")
+		return
+	}
+	// RFC 6710 section 7 restricts the advertised policy to 1..20 ASCII
+	// letters, digits, hyphen, underscore or dot. Empty omits the policy.
+	// Refuse a bad configuration rather than advertising a different policy.
+	profile := string(c.server.MtPriorityProfile)
+	if enhanced && c.server.EnableMTPRIORITY && (len(profile) > 20 ||
+		strings.Trim(profile, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.") != "") {
+		c.writeResponse(451, smtp.EnhancedCode{4, 3, 5}, "Invalid MT-PRIORITY policy configuration")
+		return
+	}
+	// c.helo is populated before NewSession so
+	// NewSession can access it via Conn.Hostname.
+	c.helo = domain
+
+	// RFC 5321: "An EHLO command MAY be issued by a client later in the session"
+	// Session() reads c.session under the connection lock so this does not race a
+	// concurrent Server.Close() clearing it.
+	if c.Session() != nil {
+		// RFC 5321: "... the SMTP server MUST clear all buffers
+		// and reset the state exactly as if a RSET command has been issued."
+		c.reset()
+	} else {
+		sess, err := c.server.Backend.NewSession(c)
+		if err != nil {
+			c.helo = ""
+			c.writeError(451, smtp.EnhancedCode{4, 0, 0}, err)
+			if isTerminating(err) {
+				c.closeAfterReplies()
+			}
+			return
+		}
+
+		c.setSession(sess)
+	}
+
+	// RFC 5321 §4.1.1.1: the server identifies itself on the first line of
+	// its HELO and EHLO replies (ehlo-ok-rsp = "250" SP Domain [SP ehlo-greet]).
+	greeting := "Hello " + domain
+	if c.server.Domain != "" {
+		greeting = c.server.Domain + " " + greeting
+	}
+	if !enhanced {
+		c.writeResponse(250, smtp.EnhancedCode{2, 0, 0}, greeting)
+		return
+	}
+
+	caps := []string{
+		"PIPELINING",
+		"8BITMIME",
+		"ENHANCEDSTATUSCODES",
+		"CHUNKING",
+	}
+	if _, isTLS := c.TLSConnectionState(); c.server.TLSConfig != nil && !isTLS {
+		caps = append(caps, "STARTTLS")
+	}
+	if c.authAllowed() {
+		mechs := c.authMechanisms()
+
+		authCap := "AUTH"
+		for _, name := range mechs {
+			authCap += " " + name
+		}
+
+		if len(mechs) > 0 {
+			caps = append(caps, authCap)
+		}
+	}
+	if c.server.EnableSMTPUTF8 {
+		caps = append(caps, "SMTPUTF8")
+	}
+	if _, isTLS := c.TLSConnectionState(); isTLS && c.server.EnableREQUIRETLS {
+		caps = append(caps, "REQUIRETLS")
+	}
+	if c.server.EnableBINARYMIME {
+		caps = append(caps, "BINARYMIME")
+	}
+	if c.server.EnableDSN {
+		caps = append(caps, "DSN")
+	}
+	if c.server.MaxMessageBytes > 0 {
+		caps = append(caps, fmt.Sprintf("SIZE %v", c.server.MaxMessageBytes))
+	} else {
+		// RFC 1870 §3: zero explicitly means no fixed limit. A bare SIZE
+		// instead promises resource checks before accepting a declaration (§7).
+		caps = append(caps, "SIZE 0")
+	}
+	if c.server.MaxRecipients > 0 {
+		caps = append(caps, fmt.Sprintf("LIMITS RCPTMAX=%v", c.server.MaxRecipients))
+	}
+	if c.server.EnableRRVS {
+		caps = append(caps, "RRVS")
+	}
+	if c.server.EnableDELIVERBY {
+		if c.server.MinimumDeliverByTime == 0 {
+			caps = append(caps, "DELIVERBY")
+		} else {
+			caps = append(caps, fmt.Sprintf("DELIVERBY %d", int(c.server.MinimumDeliverByTime.Seconds())))
+		}
+	}
+	if c.server.EnableMTPRIORITY {
+		if c.server.MtPriorityProfile == smtp.PriorityUnspecified {
+			caps = append(caps, "MT-PRIORITY")
+		} else {
+			caps = append(caps, fmt.Sprintf("MT-PRIORITY %s", c.server.MtPriorityProfile))
+		}
+	}
+	if c.xclientAllowed() {
+		caps = append(caps, "XCLIENT ADDR NAME PROTO HELO LOGIN")
+	}
+	caps = append(caps, c.server.ExtraCaps...)
+
+	if fb, ok := c.server.Backend.(FeatureBackend); ok {
+		caps = append(caps, fb.Features(c)...)
+	}
+
+	args := []string{greeting}
+	args = append(args, caps...)
+	c.writeResponse(250, smtp.NoEnhancedCode, args...)
+}
+
+// READY state -> waiting for MAIL
+func (c *Conn) handleMail(arg string) {
+	if c.helo == "" {
+		c.writeResponse(503, smtp.EnhancedCode{5, 5, 1}, "Please introduce yourself first.")
+		return
+	}
+	if c.bdatWriter() != nil {
+		c.writeResponse(503, smtp.EnhancedCode{5, 5, 1}, "MAIL not allowed during message transfer")
+		return
+	}
+	// RFC 5321 §4.1.1.2/§4.1.4: MAIL begins a mail transaction, and a new one
+	// may not start while another is in progress. A nested MAIL (a prior MAIL
+	// FROM not yet completed by DATA/BDAT nor cleared by RSET) is a bad command
+	// sequence — reject it with 503 and leave the in-progress transaction (its
+	// sender and recipients) intact, rather than silently clobbering it.
+	if c.fromReceived {
+		c.writeResponse(503, smtp.EnhancedCode{5, 5, 1}, "Nested MAIL command; use RSET to start a new transaction")
+		return
+	}
+
+	arg, ok := cutPrefixFold(arg, "FROM:")
+	if !ok {
+		c.writeResponse(501, smtp.EnhancedCode{5, 5, 2}, "Was expecting MAIL arg syntax of FROM:<address>")
+		return
+	}
+
+	p := parser{s: trimWSP(arg)}
+	from, err := p.parseReversePath()
+	if err != nil {
+		c.writeResponse(501, smtp.EnhancedCode{5, 5, 2}, "Was expecting MAIL arg syntax of FROM:<address>")
+		return
+	}
+	// RFC 5321 §4.1.1.2: whitespace must separate the reverse-path from any
+	// Mail-parameters. Reject e.g. "MAIL FROM:<a@b>SIZE=10" rather than silently
+	// treating the run-on text as an ESMTP parameter.
+	if p.s != "" && p.s[0] != ' ' && p.s[0] != '\t' {
+		c.writeResponse(501, smtp.EnhancedCode{5, 5, 2}, "Was expecting MAIL arg syntax of FROM:<address>")
+		return
+	}
+	args, err := parseArgs(p.s)
+	if err != nil {
+		c.writeResponse(501, smtp.EnhancedCode{5, 5, 4}, "Unable to parse MAIL ESMTP parameters")
+		return
+	}
+
+	opts := &smtp.MailOptions{}
+
+	c.binarymime = false
+	c.utf8 = false
+	// This is where the Conn may put BODY=8BITMIME, but we already
+	// read the DATA as bytes, so it does not effect our processing.
+	for key, arg := range args {
+		value := arg.value
+		switch key {
+		case "SIZE":
+			if len(value) > 20 || !wire.IsDecimal(value) {
+				c.writeResponse(501, smtp.EnhancedCode{5, 5, 4}, "SIZE must contain 1 to 20 decimal digits")
+				return
+			}
+
+			// Valid 20-digit values can exceed int64. They are too large for
+			// this implementation, not malformed SIZE syntax (RFC 1870 §6.1).
+			size, err := strconv.ParseInt(value, 10, 64)
+			if err != nil || (c.server.MaxMessageBytes > 0 && size > c.server.MaxMessageBytes) {
+				c.writeResponse(552, smtp.EnhancedCode{5, 3, 4}, "Max message size exceeded")
+				return
+			}
+
+			opts.Size = size
+		case "SMTPUTF8":
+			if !c.server.EnableSMTPUTF8 {
+				c.writeResponse(504, smtp.EnhancedCode{5, 5, 4}, "SMTPUTF8 is not implemented")
+				return
+			}
+			// RFC 6531 §3.1 item 4: the parameter does not accept a value.
+			if arg.hasValue {
+				c.writeResponse(501, smtp.EnhancedCode{5, 5, 4}, "SMTPUTF8 does not accept a value")
+				return
+			}
+			opts.UTF8 = true
+		case "REQUIRETLS":
+			if !c.server.EnableREQUIRETLS {
+				c.writeResponse(504, smtp.EnhancedCode{5, 5, 4}, "REQUIRETLS is not implemented")
+				return
+			}
+			if arg.hasValue {
+				c.writeResponse(501, smtp.EnhancedCode{5, 5, 4}, "REQUIRETLS does not accept a value")
+				return
+			}
+			if state, ok := c.TLSConnectionState(); !ok || !state.HandshakeComplete {
+				c.writeResponse(530, smtp.EnhancedCode{5, 7, 0}, "REQUIRETLS requires a TLS connection")
+				return
+			}
+			opts.RequireTLS = true
+		case "BODY":
+			value = strings.ToUpper(value)
+			switch smtp.BodyType(value) {
+			case smtp.BodyBinaryMIME:
+				if !c.server.EnableBINARYMIME {
+					c.writeResponse(504, smtp.EnhancedCode{5, 5, 4}, "BINARYMIME is not implemented")
+					return
+				}
+				c.binarymime = true
+			case smtp.Body7Bit, smtp.Body8BitMIME:
+				// This space is intentionally left blank
+			default:
+				c.writeResponse(501, smtp.EnhancedCode{5, 5, 4}, "Unknown BODY value")
+				return
+			}
+			opts.Body = smtp.BodyType(value)
+		case "RET":
+			if !c.server.EnableDSN {
+				c.writeResponse(504, smtp.EnhancedCode{5, 5, 4}, "RET is not implemented")
+				return
+			}
+			if !wire.IsASCII(value) {
+				c.writeResponse(501, smtp.EnhancedCode{5, 5, 4}, "Unknown RET value")
+				return
+			}
+			value = strings.ToUpper(value)
+			switch smtp.DSNReturn(value) {
+			case smtp.DSNReturnFull, smtp.DSNReturnHeaders:
+				// This space is intentionally left blank
+			default:
+				c.writeResponse(501, smtp.EnhancedCode{5, 5, 4}, "Unknown RET value")
+				return
+			}
+			opts.Return = smtp.DSNReturn(value)
+		case "ENVID":
+			if !c.server.EnableDSN {
+				c.writeResponse(504, smtp.EnhancedCode{5, 5, 4}, "ENVID is not implemented")
+				return
+			}
+			value, err := wire.DecodeXtext(value)
+			if err != nil || value == "" || !wire.IsPrintableASCII(value) {
+				c.writeResponse(501, smtp.EnhancedCode{5, 5, 4}, "Malformed ENVID parameter value")
+				return
+			}
+			opts.EnvelopeID = value
+		case "AUTH":
+			value, err := wire.DecodeXtext(value)
+			if err != nil || value == "" {
+				// RFC 5321 §4.2.2: a syntax error in a parameter is 501, not 500.
+				c.writeResponse(501, smtp.EnhancedCode{5, 5, 4}, "Malformed AUTH parameter value")
+				return
+			}
+			if value == "<>" {
+				value = ""
+			} else {
+				p := parser{s: value}
+				value, err = p.parseMailbox()
+				if err != nil || p.s != "" {
+					c.writeResponse(501, smtp.EnhancedCode{5, 5, 4}, "Malformed AUTH parameter mailbox")
+					return
+				}
+			}
+			opts.Auth = &value
+		case "BY":
+			// RFC 2852 §4: BY is a MAIL parameter. The deadline applies to the
+			// message, so it is read once here rather than per recipient.
+			if !c.server.EnableDELIVERBY {
+				c.writeResponse(504, smtp.EnhancedCode{5, 5, 4}, "DELIVERBY is not implemented")
+				return
+			}
+			deliverBy := parseDeliverByArgument(value)
+			if deliverBy == nil {
+				c.writeResponse(501, smtp.EnhancedCode{5, 5, 4}, "Malformed BY parameter value")
+				return
+			}
+			if c.server.MinimumDeliverByTime != 0 &&
+				deliverBy.Mode == smtp.DeliverByReturn &&
+				deliverBy.Time < c.server.MinimumDeliverByTime {
+				c.writeResponse(555, smtp.EnhancedCode{5, 5, 4}, "BY parameter is below server minimum")
+				return
+			}
+			opts.DeliverBy = deliverBy
+		case "MT-PRIORITY":
+			// RFC 6710 §3: MT-PRIORITY is a MAIL parameter, and the priority
+			// applies to the message.
+			if !c.server.EnableMTPRIORITY {
+				c.writeResponse(504, smtp.EnhancedCode{5, 5, 4}, "MT-PRIORITY is not implemented")
+				return
+			}
+			mtPriority, err := parseMTPriority(value)
+			if err != nil {
+				c.writeResponse(501, smtp.EnhancedCode{5, 5, 2}, "Malformed MT-PRIORITY parameter value")
+				return
+			}
+			opts.MTPriority = &mtPriority
+		default:
+			c.writeResponse(500, smtp.EnhancedCode{5, 5, 4}, "Unknown MAIL FROM argument")
+			return
+		}
+	}
+
+	// RFC 6531 §3.5: a non-ASCII reverse-path needs SMTPUTF8 on this MAIL.
+	if !opts.UTF8 && !wire.IsASCII(from) {
+		c.writeResponse(550, smtp.EnhancedCode{5, 6, 7}, "Non-ASCII addresses not permitted for that sender")
+		return
+	}
+	if !utf8.ValidString(from) {
+		c.writeResponse(501, smtp.EnhancedCode{5, 5, 2}, "Address is not valid UTF-8")
+		return
+	}
+
+	if err := c.Session().Mail(from, opts); err != nil {
+		if se, ok := successResponse(err); ok {
+			// The backend accepted the sender but supplied a custom 2xx line.
+			c.writeResponse(se.Code, se.EnhancedCode, se.Message)
+			c.fromReceived = true
+			c.utf8 = opts.UTF8
+			if isTerminating(err) {
+				c.closeAfterReplies()
+			}
+			return
+		}
+		c.writeError(451, smtp.EnhancedCode{4, 0, 0}, err)
+		if isTerminating(err) {
+			c.closeAfterReplies()
+		}
+		return
+	}
+
+	c.writeResponse(250, smtp.EnhancedCode{2, 0, 0}, fmt.Sprintf("Roger, accepting mail from <%v>", from))
+	c.fromReceived = true
+	c.utf8 = opts.UTF8
+}
+
+// decodeXClientValue decodes an XCLIENT attribute value. Values are RFC 1891
+// xtext (now RFC 3461 section 4), so a proxy can carry '+', '=' and octets
+// outside printable ASCII as "+HH". Like Postfix, the reference XCLIENT
+// server, any other octet is taken literally, but a '+' must start a hexchar.
+func decodeXClientValue(val string) (string, bool) {
+	if !strings.Contains(val, "+") {
+		return val, true
+	}
+	var out strings.Builder
+	out.Grow(len(val))
+	for i := 0; i < len(val); i++ {
+		if val[i] != '+' {
+			out.WriteByte(val[i])
+			continue
+		}
+		if i+2 >= len(val) {
+			return "", false
+		}
+		hi, ok1 := wire.FromHexDigit(val[i+1])
+		lo, ok2 := wire.FromHexDigit(val[i+2])
+		if !ok1 || !ok2 {
+			return "", false
+		}
+		out.WriteByte(hi<<4 | lo)
+		i += 2
+	}
+	return out.String(), true
+}
+
+func decodeTypedAddress(val string) (smtp.DSNAddressType, string, error) {
+	tv := strings.SplitN(val, ";", 2)
+	if len(tv) != 2 || tv[0] == "" || tv[1] == "" {
+		return "", "", errors.New("bad address")
+	}
+	aType, aAddr := strings.ToUpper(tv[0]), tv[1]
+
+	var err error
+	switch smtp.DSNAddressType(aType) {
+	case smtp.DSNAddressTypeRFC822:
+		aAddr, err = wire.DecodeXtext(aAddr)
+		if err == nil && !wire.IsPrintableASCII(aAddr) {
+			err = errors.New("illegal address:" + aAddr)
+		}
+	case smtp.DSNAddressTypeUTF8:
+		aAddr, err = wire.DecodeUTF8AddrXtext(aAddr)
+	default:
+		err = errors.New("unknown address type:" + aType)
+	}
+	if err != nil {
+		return "", "", err
+	}
+
+	// Preserve the original type spelling for relays (RFC 3461 section
+	// 5.2.1(d)); normalization above is only for choosing the decoder.
+	return smtp.DSNAddressType(tv[0]), aAddr, nil
+}
+
+// MAIL state -> waiting for RCPTs followed by DATA
+func (c *Conn) handleRcpt(arg string) {
+	if !c.fromReceived {
+		c.writeResponse(503, smtp.EnhancedCode{5, 5, 1}, "Missing MAIL FROM command.")
+		return
+	}
+	if c.bdatWriter() != nil {
+		c.writeResponse(503, smtp.EnhancedCode{5, 5, 1}, "RCPT not allowed during message transfer")
+		return
+	}
+
+	arg, ok := cutPrefixFold(arg, "TO:")
+	if !ok {
+		c.writeResponse(501, smtp.EnhancedCode{5, 5, 2}, "Was expecting RCPT arg syntax of TO:<address>")
+		return
+	}
+
+	p := parser{s: trimWSP(arg)}
+	// RFC 5321 §4.1.1.3/§4.5.1: accept the domainless "<Postmaster>" form, which
+	// parsePath cannot parse (it has no "@domain"). Fall back to normal path
+	// parsing for every other address.
+	recipient, ok := p.parsePostmasterPath()
+	if !ok {
+		var err error
+		recipient, err = p.parsePath()
+		if err != nil {
+			c.writeResponse(501, smtp.EnhancedCode{5, 5, 2}, "Was expecting RCPT arg syntax of TO:<address>")
+			return
+		}
+	}
+
+	// RFC 6531 §3.5: a non-ASCII forward-path needs SMTPUTF8 on the MAIL.
+	if !c.utf8 && !wire.IsASCII(recipient) {
+		c.writeResponse(553, smtp.EnhancedCode{5, 6, 7}, "Non-ASCII addresses not permitted for that recipient")
+		return
+	}
+	if !utf8.ValidString(recipient) {
+		c.writeResponse(501, smtp.EnhancedCode{5, 5, 2}, "Address is not valid UTF-8")
+		return
+	}
+
+	if c.server.MaxRecipients > 0 && len(c.recipients) >= c.server.MaxRecipients {
+		c.writeResponse(452, smtp.EnhancedCode{4, 5, 3}, fmt.Sprintf("Maximum limit of %v recipients reached", c.server.MaxRecipients))
+		return
+	}
+
+	// RFC 5321 §4.1.1.3: whitespace must separate the forward-path from any
+	// Rcpt-parameters. Reject run-on text (e.g. "RCPT TO:<a@b>NOTIFY=NEVER")
+	// rather than silently treating it as an ESMTP parameter.
+	if p.s != "" && p.s[0] != ' ' && p.s[0] != '\t' {
+		c.writeResponse(501, smtp.EnhancedCode{5, 5, 2}, "Was expecting RCPT arg syntax of TO:<address>")
+		return
+	}
+
+	args, err := parseArgs(p.s)
+	if err != nil {
+		c.writeResponse(501, smtp.EnhancedCode{5, 5, 4}, "Unable to parse RCPT ESMTP parameters")
+		return
+	}
+
+	opts := &smtp.RcptOptions{}
+
+	for key, arg := range args {
+		value := arg.value
+		switch key {
+		case "NOTIFY":
+			if !c.server.EnableDSN {
+				c.writeResponse(504, smtp.EnhancedCode{5, 5, 4}, "NOTIFY is not implemented")
+				return
+			}
+			notify, err := parseDSNNotify(value)
+			if err != nil {
+				c.writeResponse(501, smtp.EnhancedCode{5, 5, 4}, "Malformed NOTIFY parameter value")
+				return
+			}
+			opts.Notify = notify
+		case "ORCPT":
+			if !c.server.EnableDSN {
+				c.writeResponse(504, smtp.EnhancedCode{5, 5, 4}, "ORCPT is not implemented")
+				return
+			}
+			aType, aAddr, err := decodeTypedAddress(value)
+			if err != nil || aAddr == "" {
+				c.writeResponse(501, smtp.EnhancedCode{5, 5, 4}, "Malformed ORCPT parameter value")
+				return
+			}
+			opts.OriginalRecipientType = aType
+			opts.OriginalRecipient = aAddr
+		case "RRVS":
+			if !c.server.EnableRRVS {
+				c.writeResponse(504, smtp.EnhancedCode{5, 5, 4}, "RRVS is not implemented")
+				return
+			}
+			rrvsTime, action, ok := parseRRVSArgument(value)
+			if !ok {
+				c.writeResponse(501, smtp.EnhancedCode{5, 5, 4}, "Malformed RRVS parameter value")
+				return
+			}
+			opts.RequireRecipientValidSince = rrvsTime
+			opts.RequireRecipientValidSinceAction = action
+		default:
+			c.writeResponse(500, smtp.EnhancedCode{5, 5, 4}, "Unknown RCPT TO argument")
+			return
+		}
+	}
+
+	if err := c.Session().Rcpt(recipient, opts); err != nil {
+		if se, ok := successResponse(err); ok {
+			// The backend accepted the recipient but supplied a custom 2xx line.
+			c.recipients = append(c.recipients, recipient)
+			c.writeResponse(se.Code, se.EnhancedCode, se.Message)
+			if isTerminating(err) {
+				c.closeAfterReplies()
+			}
+			return
+		}
+		c.writeError(451, smtp.EnhancedCode{4, 0, 0}, err)
+		if isTerminating(err) {
+			c.closeAfterReplies()
+		}
+		return
+	}
+	c.recipients = append(c.recipients, recipient)
+	c.writeResponse(250, smtp.EnhancedCode{2, 0, 0}, fmt.Sprintf("I'll make sure <%v> gets this", recipient))
+}
+
+// parseDSNNotify implements RFC 3461 section 4.1's RFC 822 1# list.
+// Null elements and repeated conditions are valid; expose each condition once
+// to the backend, in first-occurrence order. NEVER is not a list element.
+func parseDSNNotify(value string) ([]smtp.DSNNotify, error) {
+	if !wire.IsASCII(value) {
+		return nil, errors.New("Malformed NOTIFY parameter value")
+	}
+	value = strings.ToUpper(value)
+	if value == string(smtp.DSNNotifyNever) {
+		return []smtp.DSNNotify{smtp.DSNNotifyNever}, nil
+	}
+	var notify []smtp.DSNNotify
+	seen := make(map[smtp.DSNNotify]bool)
+	for _, part := range strings.Split(value, ",") {
+		if part == "" {
+			continue
+		}
+		flag := smtp.DSNNotify(part)
+		switch flag {
+		case smtp.DSNNotifySuccess, smtp.DSNNotifyFailure, smtp.DSNNotifyDelayed:
+		default:
+			return nil, errors.New("Malformed NOTIFY parameter value")
+		}
+		if !seen[flag] {
+			notify = append(notify, flag)
+			seen[flag] = true
+		}
+	}
+	if len(notify) == 0 {
+		return nil, errors.New("Malformed NOTIFY parameter value")
+	}
+	return notify, nil
+}
+
+func (c *Conn) handleAuth(arg string) {
+	if c.helo == "" {
+		c.writeResponse(503, smtp.EnhancedCode{5, 5, 1}, "Please introduce yourself first.")
+		return
+	}
+	if c.didAuth {
+		c.writeResponse(503, smtp.EnhancedCode{5, 5, 1}, "Already authenticated")
+		return
+	}
+	// RFC 4954 section 4 forbids AUTH during a mail transaction.
+	if c.fromReceived {
+		c.writeResponse(503, smtp.EnhancedCode{5, 5, 1}, "AUTH not allowed during mail transaction")
+		return
+	}
+
+	parts := splitWSP(arg)
+	if len(parts) == 0 {
+		c.writeResponse(501, smtp.EnhancedCode{5, 5, 4}, "Missing parameter")
+		return
+	}
+	// RFC 4954 §4: the AUTH command carries a mechanism and at most one optional
+	// initial-response. Reject any trailing tokens rather than silently ignoring
+	// them.
+	if len(parts) > 2 {
+		c.writeResponse(501, smtp.EnhancedCode{5, 5, 4}, "Too many parameters")
+		return
+	}
+
+	if !c.authAllowed() {
+		// RFC 3207 §4: refuse AUTH on an unprotected connection with 530 5.7.0
+		// ("Must issue a STARTTLS command first"). 523 is unassigned.
+		c.writeResponse(530, smtp.EnhancedCode{5, 7, 0}, "Must issue a STARTTLS command first")
+		return
+	}
+
+	mechanism := strings.ToUpper(parts[0])
+
+	// Parse client initial response if there is one
+	var ir []byte
+	if len(parts) > 1 {
+		var err error
+		ir, err = decodeSASLResponse(parts[1])
+		if err != nil {
+			c.writeResponse(501, smtp.EnhancedCode{5, 5, 2}, "Invalid base64 data")
+			return
+		}
+	}
+
+	sasl, err := c.auth(mechanism)
+	if err != nil {
+		c.writeError(454, smtp.EnhancedCode{4, 7, 0}, err)
+		if isTerminating(err) {
+			c.closeAfterReplies()
+		}
+		return
+	}
+
+	response := ir
+	for round := 0; ; round++ {
+		challenge, done, err := sasl.Next(response)
+		if err != nil {
+			c.writeError(454, smtp.EnhancedCode{4, 7, 0}, err)
+			if isTerminating(err) {
+				c.closeAfterReplies()
+			}
+			return
+		}
+
+		if done {
+			break
+		}
+
+		if round >= maxAuthContinuations {
+			// A well-behaved mechanism finishes in a few steps; refuse to keep
+			// looping and close, rather than trusting the mechanism to stop.
+			c.writeResponse(454, smtp.EnhancedCode{4, 7, 0}, "Too many authentication steps")
+			c.closeAfterReplies()
+			return
+		}
+
+		encoded := ""
+		if len(challenge) > 0 {
+			encoded = base64.StdEncoding.EncodeToString(challenge)
+		}
+		c.writeResponse(334, smtp.NoEnhancedCode, encoded)
+		// The client sends its response only after it sees the challenge.
+		c.flush()
+
+		// RFC 4954 §4: challenge and response sizes are independent of the
+		// SMTP command line limit, so a continuation has its own bound.
+		encoded, err = c.readLineLimit(c.server.MaxAuthResponseLength)
+		if err != nil {
+			// A failed read mid-exchange must not fall through into the main
+			// command loop: the exchange is half-finished, so the client's next
+			// line (its base64 SASL response) would be misparsed as an SMTP
+			// command, desyncing the connection (RFC 4954). Terminate the AUTH
+			// exchange and close the connection instead. This is distinct from
+			// the client-cancel case ("*") handled below, which only applies to
+			// a line that was read successfully.
+			c.handleAuthReadError(err)
+			return
+		}
+
+		if encoded == "*" {
+			// https://tools.ietf.org/html/rfc4954#page-4
+			c.writeResponse(501, smtp.EnhancedCode{5, 0, 0}, "Negotiation cancelled")
+			return
+		}
+
+		response, err = decodeSASLResponse(encoded)
+		if err != nil {
+			c.writeResponse(501, smtp.EnhancedCode{5, 5, 2}, "Invalid base64 data")
+			return
+		}
+	}
+
+	c.writeResponse(235, smtp.EnhancedCode{2, 7, 0}, "Authentication succeeded")
+	c.didAuth = true
+}
+
+// handleAuthReadError terminates an in-progress AUTH exchange after a SASL
+// continuation line could not be read. It mirrors the connection's top-level
+// read-error handling (see Server.handleConn): a clean disconnect closes
+// silently, an idle timeout or over-long line gets a final status line, and any
+// other transport error gets a generic 4xx. In every case the connection is
+// closed so the command loop cannot resume and reprocess buffered bytes as
+// commands.
+func (c *Conn) handleAuthReadError(err error) {
+	switch {
+	case err == io.EOF || errors.Is(err, net.ErrClosed):
+		// Peer is gone; there is nothing to send.
+	case err == wire.ErrTooLongLine:
+		c.writeResponse(500, smtp.EnhancedCode{5, 5, 6}, "Too long line, closing connection")
+	case err == errBareLF:
+		c.writeResponse(500, smtp.EnhancedCode{5, 5, 2}, "Bare LF is not a line ending, closing connection")
+	default:
+		if neterr, ok := err.(net.Error); ok && neterr.Timeout() {
+			c.writeResponse(421, smtp.EnhancedCode{4, 4, 2}, "Idle timeout, bye bye")
+		} else {
+			c.writeResponse(421, smtp.EnhancedCode{4, 4, 0}, "Connection error, sorry")
+		}
+	}
+	c.closeAfterReplies()
+}
+
+func decodeSASLResponse(s string) ([]byte, error) {
+	if s == "=" {
+		return []byte{}, nil
+	}
+	// encoding/base64 ignores CR and LF; SASL forbids every non-alphabet byte.
+	if strings.ContainsAny(s, "\r\n") {
+		return nil, errors.New("smtp: invalid SASL base64")
+	}
+	return base64.StdEncoding.DecodeString(s)
+}
+
+func (c *Conn) authMechanisms() []string {
+	if authSession, ok := c.Session().(AuthSession); ok {
+		return authSession.AuthMechanisms()
+	}
+	return nil
+}
+
+func (c *Conn) auth(mech string) (sasl.Server, error) {
+	if authSession, ok := c.Session().(AuthSession); ok {
+		return authSession.Auth(mech)
+	}
+	return nil, ErrAuthUnknownMechanism
+}
+
+// testHookStartTLSUpgrade, when non-nil, is called after a successful STARTTLS
+// handshake and just before c.conn is swapped for the *tls.Conn. It exists only
+// so tests can widen that window deterministically; it is nil in production.
+var testHookStartTLSUpgrade func()
+
+func (c *Conn) handleStartTLS() {
+	if _, isTLS := c.TLSConnectionState(); isTLS {
+		c.writeResponse(503, smtp.EnhancedCode{5, 5, 1}, "Already running in TLS")
+		return
+	}
+
+	if c.fromReceived {
+		c.writeResponse(503, smtp.EnhancedCode{5, 5, 1}, "STARTTLS not allowed during mail transaction")
+		return
+	}
+
+	if c.server.TLSConfig == nil {
+		c.writeResponse(502, smtp.EnhancedCode{5, 5, 1}, "TLS not supported")
+		return
+	}
+
+	c.writeResponse(220, smtp.EnhancedCode{2, 0, 0}, "Ready to start TLS")
+	// The client starts the handshake only after it sees the 220, and the
+	// handshake reads the socket directly, bypassing readLine's flush.
+	c.flush()
+
+	// Upgrade to TLS
+	tlsConn := tls.Server(c.conn, c.server.TLSConfig)
+
+	// Bound the handshake with the configured deadlines, mirroring the
+	// implicit-TLS listener path in Server.handleConn, so a peer that stalls
+	// before or during the handshake cannot block the connection indefinitely.
+	if d := c.server.ReadTimeout; d != 0 {
+		c.conn.SetReadDeadline(time.Now().Add(d))
+	}
+	if d := c.server.WriteTimeout; d != 0 {
+		c.conn.SetWriteDeadline(time.Now().Add(d))
+	}
+
+	if err := tlsConn.Handshake(); err != nil {
+		c.writeResponse(550, smtp.EnhancedCode{5, 0, 0}, "Handshake error")
+		// The connection is in an indeterminate, half-upgraded state; do not
+		// keep serving commands on it.
+		c.closeAfterReplies()
+		return
+	}
+
+	if testHookStartTLSUpgrade != nil {
+		testHookStartTLSUpgrade()
+	}
+	c.setConn(tlsConn)
+	c.init()
+
+	// Reset all state and close the previous Session.
+	// This is different from just calling reset() since we want the Backend to
+	// be able to see the information about TLS connection in the
+	// ConnectionState object passed to it.
+	if session := c.Session(); session != nil {
+		session.Logout()
+		c.setSession(nil)
+	}
+	c.helo = ""
+	c.didAuth = false
+	// Proxy assertions are SMTP knowledge obtained before TLS, too.
+	c.xclient = nil
+	c.reset()
+}
+
+// DATA
+// errBodyTimeout is the response sent when a read times out while the backend
+// is consuming the message body. The client is mid-message, so any further
+// bytes would be re-parsed as commands; the connection must be closed after the
+// response is sent rather than drained and reused.
+var errBodyTimeout = &smtp.SMTPError{
+	Code: 451, EnhancedCode: smtp.EnhancedCode{4, 4, 2}, Message: "Timeout waiting for data",
+}
+
+// errBodyReadFailed is the response sent when a transport read error other than
+// a timeout interrupts a BDAT chunk copy. The announced chunk was not fully
+// consumed, so the command stream is desynced and the connection must be closed
+// after the response rather than reused. The underlying error is logged, never
+// interpolated into the reply, so net-error internals are not disclosed to the
+// client.
+var errBodyReadFailed = &smtp.SMTPError{
+	Code: 451, EnhancedCode: smtp.EnhancedCode{4, 4, 2}, Message: "Connection error during chunk transfer",
+}
+
+// isBodyReadTimeout reports whether err is a network read timeout surfaced from
+// the backend while it was consuming the message body.
+func isBodyReadTimeout(err error) bool {
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
+}
+
+// drainDataReader fast-forwards the DATA reader past whatever the backend left
+// unread, so the connection is framed for the next command and the client gets
+// a clean, permanent rejection instead of an ambiguous connection drop — but it
+// bounds how far it reads.
+//
+// A legitimate oversized message is only a small multiple of the limit, so
+// reading up to another 2*MaxMessageBytes past the point the limit was hit
+// reaches the end-of-data marker for any such message and the connection
+// survives for a retry. A stream that still has not produced the marker after
+// that is never-ending or many times the limit, so the caller must close the
+// connection instead of draining unboundedly. With no limit configured the
+// operator has opted out of bounding message size, so the drain stays
+// unbounded.
+//
+// It returns true when the connection can no longer be safely reused: reaching
+// the marker drains the reader to io.EOF, so copying the full budget without it
+// (io.CopyN returns a nil error) means the marker never came, and any other
+// error means the read failed. In either non-EOF case the caller must close.
+// With no limit configured it always returns false.
+func (c *Conn) drainDataReader(r *dataReader) (mustClose bool) {
+	r.limited = false
+	var drainErr error
+	if c.server.MaxMessageBytes > 0 {
+		_, drainErr = io.CopyN(io.Discard, r, 2*c.server.MaxMessageBytes)
+	} else {
+		_, drainErr = io.Copy(io.Discard, r)
+	}
+	return c.server.MaxMessageBytes > 0 && drainErr != io.EOF
+}
+
+func (c *Conn) handleData(arg string) {
+	if arg != "" {
+		c.writeResponse(501, smtp.EnhancedCode{5, 5, 4}, "DATA command should not have any arguments")
+		return
+	}
+	if c.bdatWriter() != nil {
+		c.writeResponse(503, smtp.EnhancedCode{5, 5, 1}, "DATA not allowed during message transfer")
+		return
+	}
+	if c.binarymime {
+		c.writeResponse(503, smtp.EnhancedCode{5, 5, 1}, "DATA not allowed for BINARYMIME messages")
+		return
+	}
+
+	if !c.fromReceived || len(c.recipients) == 0 {
+		c.writeResponse(503, smtp.EnhancedCode{5, 5, 1}, "Missing RCPT TO command.")
+		return
+	}
+
+	// We have recipients, go to accept data
+	c.writeResponse(354, smtp.NoEnhancedCode, "Go ahead. End your data with <CR><LF>.<CR><LF>")
+	// The client sends the body only after it sees the 354.
+	c.flush()
+
+	defer c.reset()
+
+	if c.server.LMTP {
+		c.handleDataLMTP()
+		return
+	}
+
+	r := newDataReader(c)
+	c.bodyReadDeadline = c.server.ReadTimeout
+	dataErr := c.Session().Data(r)
+
+	// A read timeout while consuming the body leaves the connection unusable:
+	// the client is mid-message, so any further bytes would be re-parsed as
+	// commands. Respond and close instead of draining and continuing.
+	if isBodyReadTimeout(dataErr) {
+		c.bodyReadDeadline = 0
+		c.writeResponse(errBodyTimeout.Code, errBodyTimeout.EnhancedCode, errBodyTimeout.Message)
+		c.closeAfterReplies()
+		return
+	}
+
+	// The backend asked to send the response and then drop the connection
+	// (policy/abuse). Skip the drain — the connection is going away regardless.
+	if isTerminating(dataErr) {
+		c.bodyReadDeadline = 0
+		c.writeResponse(dataErrorToStatus(dataErr))
+		c.closeAfterReplies()
+		return
+	}
+
+	// The backend is done with the body (it succeeded, rejected the message, or
+	// hit the size limit). Fast-forward past the unread remainder within a
+	// bounded budget so the connection is framed for the next command, closing
+	// it if the end-of-data marker never arrives. See drainDataReader.
+	mustClose := c.drainDataReader(r)
+	c.bodyReadDeadline = 0
+
+	code, enhancedCode, msg := dataErrorToStatus(dataErr)
+	c.writeResponse(code, enhancedCode, msg)
+
+	if mustClose {
+		c.closeAfterReplies()
+	}
+}
+
+func (c *Conn) handleBdat(arg string) {
+	size, last, err := parseBdatArgs(arg)
+	if err != nil {
+		c.writeResponse(501, smtp.EnhancedCode{5, 5, 4}, err.Error())
+		return
+	}
+
+	// Even an out-of-sequence chunk carries opaque data. Consume its full
+	// announced length before replying, including chunks already pipelined
+	// after a failed transaction or BDAT LAST (RFC 3030 §2).
+	if !c.fromReceived || len(c.recipients) == 0 {
+		if c.discardBdat(int64(size), last) {
+			c.writeBdatFailure(last, 503, smtp.EnhancedCode{5, 5, 1}, "Missing RCPT TO command.")
+		}
+		if c.server.LMTP && last {
+			c.reset()
+		}
+		return
+	}
+
+	if c.server.MaxMessageBytes > 0 && int64(size) > c.server.MaxMessageBytes-c.bytesReceived {
+		if c.discardBdat(int64(size), last) {
+			c.writeBdatFailure(last, 552, smtp.EnhancedCode{5, 3, 4}, "Max message size exceeded")
+		}
+		c.reset()
+		return
+	}
+
+	if c.bdatStatus == nil && c.server.LMTP {
+		c.bdatStatus = c.createStatusCollector()
+	}
+
+	c.locker.Lock()
+	var r *io.PipeReader
+	if c.bdatPipe == nil {
+		var w *io.PipeWriter
+		r, w = io.Pipe()
+		c.bdatPipe = w
+	}
+	c.locker.Unlock()
+
+	if r != nil {
+		// RSET can start a new transaction before this backend returns. Keep
+		// its result channel and envelope tied to the original transfer.
+		result := make(chan error, 1)
+		c.dataResult = result
+		status := c.bdatStatus
+		recipients := append([]string(nil), c.recipients...)
+		session := c.Session()
+
+		go func() {
+			defer func() {
+				if err := recover(); err != nil {
+					c.handlePanic(err, status)
+
+					result <- errPanic
+					r.CloseWithError(errPanic)
+				}
+			}()
+
+			var err error
+			if !c.server.LMTP {
+				err = session.Data(r)
+			} else {
+				lmtpSession, ok := session.(LMTPSession)
+				if !ok {
+					err = session.Data(r)
+					for _, rcpt := range recipients {
+						status.SetStatus(rcpt, err)
+					}
+				} else {
+					err = lmtpSession.LMTPData(r, status)
+					// Publish unset recipients before the connection waits for
+					// them. Explicit statuses can already be going to the peer.
+					status.fillRemaining(err)
+				}
+			}
+
+			result <- err
+			r.CloseWithError(err)
+		}()
+	}
+
+	// Flush prior envelope replies before waiting for the chunk's octets.
+	// Command limits are enforced by readLine, not on opaque body bytes.
+	c.flush()
+
+	chunk := &io.LimitedReader{R: c.text.R, N: int64(size)}
+	c.bodyReadDeadline = c.server.ReadTimeout
+	pipe := c.bdatWriter()
+	if pipe == nil {
+		// The transfer was torn down concurrently (e.g. Server.Close); the
+		// connection is going away, so stop consuming this chunk.
+		c.bodyReadDeadline = 0
+		return
+	}
+	_, err = io.Copy(pipe, chunk)
+	if err == nil && chunk.N != 0 {
+		err = io.ErrUnexpectedEOF
+	}
+	if err != nil {
+		// The copy can fail two ways. The backend may reject the chunk early via
+		// CloseWithError, in which case the write to the pipe fails but the read
+		// side is healthy: draining the rest of the announced chunk from the
+		// client then succeeds and the command stream stays framed for the next
+		// command. Alternatively the read from the client fails (timeout / reset /
+		// short read), in which case the drain fails too and the chunk is left
+		// partially consumed: the unread octets would be misparsed as commands, so
+		// the connection must be closed rather than resumed. A non-nil drainErr is
+		// thus the signal that the stream is desynced.
+		_, drainErr := io.Copy(io.Discard, chunk)
+		if drainErr == nil && chunk.N != 0 {
+			drainErr = io.ErrUnexpectedEOF
+		}
+		c.bodyReadDeadline = 0
+
+		switch {
+		case isBodyReadTimeout(err) || isBodyReadTimeout(drainErr):
+			// A read timeout while pulling the chunk leaves the client mid-chunk.
+			// Mirror the DATA path: reply with a clean, generic status and close.
+			// The raw net error is logged, never sent to the client.
+			c.server.ErrorLog.Printf("BDAT chunk read timed out from %v: %v", c.conn.RemoteAddr(), err)
+			c.writeBdatFailure(last, errBodyTimeout.Code, errBodyTimeout.EnhancedCode, errBodyTimeout.Message)
+			c.closeAfterReplies()
+		case err == errPanic || isTerminating(err):
+			// A panic or a backend-requested termination: send the mapped status
+			// (already generic) and drop the connection.
+			c.writeBdatBackendResult(last, err)
+			c.closeAfterReplies()
+		case drainErr != nil:
+			// The announced chunk could not be fully read from the client (a
+			// transport error other than a timeout): the command stream is
+			// desynced. Reply with a clean, generic status and close rather than
+			// leaking the raw transport error or misparsing the unread octets as
+			// commands.
+			c.server.ErrorLog.Printf("BDAT chunk read error from %v: %v", c.conn.RemoteAddr(), err)
+			c.writeBdatFailure(last, errBodyReadFailed.Code, errBodyReadFailed.EnhancedCode, errBodyReadFailed.Message)
+			c.closeAfterReplies()
+		default:
+			// A backend refusal with a fully drained chunk keeps the command
+			// stream framed and retains any explicit recipient outcomes.
+			c.writeBdatBackendResult(last, err)
+		}
+
+		c.reset()
+		return
+	}
+	c.bodyReadDeadline = 0
+
+	c.bytesReceived += int64(size)
+
+	if last {
+		if p := c.bdatWriter(); p != nil {
+			p.Close()
+		}
+
+		var err error
+		if c.server.LMTP {
+			for i, rcpt := range c.recipients {
+				code, enchCode, msg := dataErrorToStatus(<-c.bdatStatus.status[i])
+				c.writeResponse(code, enchCode, "<"+rcpt+"> "+msg)
+				// RFC 2033 §5: do not hold a completed recipient's reply
+				// behind a slower recipient or the backend's return.
+				c.flush()
+			}
+			// The backend may still be finishing after its last SetStatus.
+			// Join it before resetting or handling the next transaction.
+			err = <-c.dataResult
+		} else {
+			err = <-c.dataResult
+			c.writeResponse(dataErrorToStatus(err))
+		}
+
+		// Termination is honored for single-response (non-LMTP) BDAT; per-recipient
+		// LMTP responses are not subject to it.
+		if err == errPanic || (!c.server.LMTP && isTerminating(err)) {
+			c.closeAfterReplies()
+			return
+		}
+
+		c.reset()
+	} else {
+		c.writeResponse(250, smtp.EnhancedCode{2, 0, 0}, "Continue")
+	}
+}
+
+// discardBdat preserves command framing when rejecting a syntactically valid
+// chunk. Flush prior envelope replies first, but send this chunk's failure only
+// after all its octets have arrived. Body deadlines and command limits apply as
+// on the normal transfer path; a partial discard makes the connection unusable.
+func (c *Conn) discardBdat(size int64, last bool) bool {
+	c.flush()
+	c.bodyReadDeadline = c.server.ReadTimeout
+	_, err := io.CopyN(io.Discard, c.text.R, size)
+	c.bodyReadDeadline = 0
+	if err != nil {
+		if isBodyReadTimeout(err) {
+			c.writeBdatFailure(last, errBodyTimeout.Code, errBodyTimeout.EnhancedCode, errBodyTimeout.Message)
+		} else {
+			c.writeBdatFailure(last, errBodyReadFailed.Code, errBodyReadFailed.EnhancedCode, errBodyReadFailed.Message)
+		}
+		c.closeAfterReplies()
+		return false
+	}
+	return true
+}
+
+func (c *Conn) writeBdatBackendResult(last bool, err error) {
+	if c.server.LMTP && last {
+		// The worker fills unset statuses before closing its reader, including
+		// on panic, so all these results are already available.
+		for i, rcpt := range c.recipients {
+			code, enhanced, message := dataErrorToStatus(<-c.bdatStatus.status[i])
+			c.writeResponse(code, enhanced, "<"+rcpt+"> "+message)
+			c.flush()
+		}
+		return
+	}
+	c.writeResponse(dataErrorToStatus(err))
+}
+
+// writeBdatFailure preserves RFC 2033 section 4.3 reply counting on early
+// failure paths too. With no accepted recipients an LMTP LAST has no replies;
+// ordinary SMTP and non-LAST chunks retain their single reply.
+func (c *Conn) writeBdatFailure(last bool, code int, enhanced smtp.EnhancedCode, message string) {
+	if c.server.LMTP && last {
+		for _, rcpt := range c.recipients {
+			c.writeResponse(code, enhanced, "<"+rcpt+"> "+message)
+			c.flush()
+		}
+		return
+	}
+	c.writeResponse(code, enhanced, message)
+}
+
+// ErrDataReset is returned by Reader pased to Data function if client does not
+// send another BDAT command and instead closes connection or issues RSET command.
+var ErrDataReset = errors.New("smtp: message transmission aborted")
+
+var errPanic = &smtp.SMTPError{
+	Code: 421, EnhancedCode: smtp.EnhancedCode{4, 0, 0}, Message: "Internal server error",
+}
+
+func (c *Conn) handlePanic(err interface{}, status *statusCollector) {
+	if status != nil {
+		status.fillRemaining(errPanic)
+	}
+
+	stack := debug.Stack()
+	c.server.ErrorLog.Printf("panic serving %v: %v\n%s", c.conn.RemoteAddr(), err, stack)
+}
+
+func (c *Conn) createStatusCollector() *statusCollector {
+	rcptCounts := make(map[string]int, len(c.recipients))
+
+	status := &statusCollector{
+		statusMap: make(map[string]chan error, len(c.recipients)),
+		status:    make([]chan error, 0, len(c.recipients)),
+	}
+	for _, rcpt := range c.recipients {
+		rcptCounts[rcpt]++
+	}
+	// Create channels with buffer sizes necessary to fit all
+	// statuses for a single recipient to avoid deadlocks.
+	for rcpt, count := range rcptCounts {
+		status.statusMap[rcpt] = make(chan error, count)
+	}
+	for _, rcpt := range c.recipients {
+		status.status = append(status.status, status.statusMap[rcpt])
+	}
+
+	return status
+}
+
+type statusCollector struct {
+	// Contains map from recipient to list of channels that are used for that
+	// recipient.
+	statusMap map[string]chan error
+
+	// Contains channels from statusMap, in the same
+	// order as Conn.recipients.
+	status []chan error
+}
+
+// fillRemaining sets status for all recipients SetStatus was not called for before.
+func (s *statusCollector) fillRemaining(err error) {
+	// Amount of times certain recipient was specified is indicated by the channel
+	// buffer size, so once we fill it, we can be confident that we sent
+	// at least as much statuses as needed. Extra statuses will be ignored anyway.
+chLoop:
+	for _, ch := range s.statusMap {
+		for {
+			select {
+			case ch <- err:
+			default:
+				continue chLoop
+			}
+		}
+	}
+}
+
+func (s *statusCollector) SetStatus(rcptTo string, err error) {
+	ch := s.statusMap[rcptTo]
+	if ch == nil {
+		panic("SetStatus is called for recipient that was not specified before")
+	}
+
+	select {
+	case ch <- err:
+	default:
+		// There enough buffer space to fit all statuses at once, if this is
+		// not the case - backend is doing something wrong.
+		panic("SetStatus is called more times than particular recipient was specified")
+	}
+}
+
+func (c *Conn) handleDataLMTP() {
+	r := newDataReader(c)
+	c.bodyReadDeadline = c.server.ReadTimeout
+	status := c.createStatusCollector()
+
+	done := make(chan bool, 1)
+
+	lmtpSession, ok := c.Session().(LMTPSession)
+	if !ok {
+		// Fallback to using a single status for all recipients.
+		dataErr := c.Session().Data(r)
+		if isBodyReadTimeout(dataErr) {
+			// A mid-body read timeout leaves the client mid-message, so any
+			// further bytes would be re-parsed as commands. Report 451 4.4.2 per
+			// recipient and close instead of draining and continuing.
+			for _, rcpt := range c.recipients {
+				status.SetStatus(rcpt, errBodyTimeout)
+			}
+			done <- false
+		} else {
+			// Bound the discard of the remainder so a never-ending or hugely
+			// oversized message cannot pin the connection.
+			mustClose := c.drainDataReader(r)
+			for _, rcpt := range c.recipients {
+				status.SetStatus(rcpt, dataErr)
+			}
+			done <- !mustClose
+		}
+	} else {
+		go func() {
+			defer func() {
+				if err := recover(); err != nil {
+					status.fillRemaining(errPanic)
+
+					stack := debug.Stack()
+					c.server.ErrorLog.Printf("panic serving %v: %v\n%s", c.conn.RemoteAddr(), err, stack)
+					done <- false
+				}
+			}()
+
+			dataErr := lmtpSession.LMTPData(r, status)
+			if isBodyReadTimeout(dataErr) {
+				// A mid-body read timeout leaves the client mid-message, so any
+				// further bytes would be re-parsed as commands. Report 451 4.4.2
+				// per recipient and close instead of draining and continuing.
+				status.fillRemaining(errBodyTimeout)
+				done <- false
+				return
+			}
+			status.fillRemaining(dataErr)
+			// Bound the discard of the remainder so a never-ending or hugely
+			// oversized message cannot pin the connection.
+			done <- !c.drainDataReader(r)
+		}()
+	}
+
+	for i, rcpt := range c.recipients {
+		code, enchCode, msg := dataErrorToStatus(<-status.status[i])
+		c.writeResponse(code, enchCode, "<"+rcpt+"> "+msg)
+		// Each status arrives when the backend decides it; send it then rather
+		// than holding it behind a slower recipient.
+		c.flush()
+	}
+
+	// done is false when the LMTPData goroutine panicked, a body read timed out,
+	// or the over-limit drain hit its budget without reaching the end-of-data
+	// marker. In all three the connection is desynced and must be closed.
+	ok = <-done
+	c.bodyReadDeadline = 0
+	if !ok {
+		c.closeAfterReplies()
+	}
+}
+
+func dataErrorToStatus(err error) (code int, enchCode smtp.EnhancedCode, msg string) {
+	if err != nil {
+		var smtperr *smtp.SMTPError
+		if errors.As(err, &smtperr) {
+			return smtperr.Code, smtperr.EnhancedCode, smtperr.Message
+		}
+		return 554, smtp.EnhancedCode{5, 0, 0}, "Error: transaction failed: " + err.Error()
+	}
+
+	return 250, smtp.EnhancedCode{2, 0, 0}, "OK: queued"
+}
+
+func (c *Conn) Reject() {
+	c.writeResponse(421, smtp.EnhancedCode{4, 4, 5}, "Too busy. Try again later.")
+	c.closeAfterReplies()
+}
+
+func (c *Conn) greet() {
+	protocol := "ESMTP"
+	if c.server.LMTP {
+		protocol = "LMTP"
+	}
+	c.writeResponse(220, smtp.NoEnhancedCode, fmt.Sprintf("%v %s Service Ready", c.server.Domain, protocol))
+}
+
+// writeResponse buffers a reply without sending it. Buffered replies go out
+// when readLine is about to wait for the client, so the replies to a pipelined
+// batch of commands (RFC 2920) share one write. Any reply the client must see
+// before it sends more, or before the connection closes, needs an explicit
+// flush.
+func (c *Conn) writeResponse(code int, enhCode smtp.EnhancedCode, text ...string) {
+	if c.server.WriteTimeout != 0 {
+		c.conn.SetWriteDeadline(time.Now().Add(c.server.WriteTimeout))
+	}
+
+	// All responses must include an enhanced code, if it is missing - use
+	// a generic code X.0.0.
+	if enhCode == smtp.EnhancedCodeNotSet {
+		cat := code / 100
+		switch cat {
+		case 2, 4, 5:
+			enhCode = smtp.EnhancedCode{cat, 0, 0}
+		default:
+			enhCode = smtp.NoEnhancedCode
+		}
+	}
+
+	// transform each single line with \n, into separate lines
+	text = strings.Split(strings.Join(text, "\n"), "\n")
+
+	// RFC 2034 §4: the same status code begins the text of every line of a
+	// multiline reply, not only the last.
+	status := ""
+	if enhCode != smtp.NoEnhancedCode {
+		status = fmt.Sprintf("%d.%d.%d ", enhCode[0], enhCode[1], enhCode[2])
+	}
+	lastLineIndex := len(text) - 1
+	for i, line := range text {
+		prefix := fmt.Sprintf("%d-%s", code, status)
+		if i == lastLineIndex {
+			prefix = fmt.Sprintf("%d %s", code, status)
+		}
+
+		// RFC 5321 §4.5.3.1.5: count the prefix and CRLF in the 512-octet
+		// reply line limit. Keep the existing line structure and status codes;
+		// only the text is shortened, at a UTF-8 character boundary.
+		// SASL challenges are protocol data, not diagnostics: RFC 4954 §4
+		// explicitly makes their size independent of ordinary SMTP limits.
+		limit := 512 - len(prefix) - len("\r\n")
+		if code != 334 && len(line) > limit {
+			for limit > 0 && !utf8.RuneStart(line[limit]) {
+				limit--
+			}
+			line = line[:limit]
+		}
+		if _, err := fmt.Fprintf(c.text.W, "%s%s\r\n", prefix, line); err != nil {
+			c.setWriteError(err)
+			return
+		}
+	}
+}
+
+// flush sends the buffered replies to the client.
+func (c *Conn) flush() {
+	if c.text.W.Buffered() == 0 {
+		return
+	}
+	if c.server.WriteTimeout != 0 {
+		c.conn.SetWriteDeadline(time.Now().Add(c.server.WriteTimeout))
+	}
+	if err := c.text.W.Flush(); err != nil {
+		c.setWriteError(err)
+	}
+}
+
+// commandBuffered reports whether the client's next command line has already
+// arrived, i.e. the client is pipelining and is not waiting for the replies
+// buffered so far. A partial line does not count: the rest of it may never come
+// while the client waits for those replies.
+func (c *Conn) commandBuffered() bool {
+	n := c.text.R.Buffered()
+	if n == 0 {
+		return false
+	}
+	b, _ := c.text.R.Peek(n)
+	return bytes.IndexByte(b, '\n') >= 0
+}
+
+// setWriteError records the first response-write error seen on the connection.
+func (c *Conn) setWriteError(err error) {
+	if c.writeErr == nil {
+		c.writeErr = err
+	}
+}
+
+func (c *Conn) writeError(code int, enhCode smtp.EnhancedCode, err error) {
+	var smtpErr *smtp.SMTPError
+	if errors.As(err, &smtpErr) {
+		c.writeResponse(smtpErr.Code, smtpErr.EnhancedCode, smtpErr.Message)
+	} else {
+		c.writeResponse(code, enhCode, err.Error())
+	}
+}
+
+// deadlineReader sits at the bottom of the connection read chain. While a
+// message body transfer is in progress (c.bodyReadDeadline > 0) it re-arms the
+// read deadline before every underlying read, so that Server.ReadTimeout acts
+// as an idle timeout for the duration of the body rather than a single absolute
+// deadline measured from the DATA/BDAT command line. Outside of body transfers
+// it is a passthrough, leaving the per-command absolute deadline (armed by
+// readLine) in force.
+type deadlineReader struct {
+	c *Conn
+	r io.Reader
+}
+
+func (dr *deadlineReader) Read(b []byte) (int, error) {
+	if d := dr.c.bodyReadDeadline; d > 0 {
+		dr.c.conn.SetReadDeadline(time.Now().Add(d))
+	}
+	return dr.r.Read(b)
+}
+
+// Reads a line of input
+func (c *Conn) readLine() (string, error) {
+	return c.readLineLimit(c.server.MaxLineLength)
+}
+
+// readLineLimit reads a line of input no longer than limit octets, including
+// its CRLF; a limit of zero or less means no limit.
+func (c *Conn) readLineLimit(limit int) (string, error) {
+	// Hold the replies back while the next pipelined command is already here;
+	// send them before waiting on the client for more.
+	if !c.commandBuffered() {
+		c.flush()
+		if c.writeErr != nil {
+			return "", c.writeErr
+		}
+	}
+
+	if c.server.ReadTimeout != 0 {
+		if err := c.conn.SetReadDeadline(time.Now().Add(c.server.ReadTimeout)); err != nil {
+			return "", err
+		}
+	}
+
+	// Only <CRLF> ends a command line (RFC 5321 §2.3.8). textproto's ReadLine
+	// would also accept a bare LF and so run "NOOP\nMAIL ..." as two commands,
+	// which a relay that frames lines differently can exploit; refuse instead.
+	line, err := c.readCommandLine(limit)
+	if err != nil && !(err == io.EOF && line != "") {
+		return "", err
+	}
+	if strings.HasSuffix(line, "\n") {
+		if !strings.HasSuffix(line, "\r\n") {
+			return "", errBareLF
+		}
+		line = line[:len(line)-2]
+	}
+	return line, nil
+}
+
+// readCommandLine bounds allocation while applying limit only to
+// the command being parsed. A connection-level limiter also inspects read-ahead
+// body bytes, incorrectly rejecting a long BDAT payload sharing a TCP packet
+// with its command. Retain bufio's read-ahead for PIPELINING, but do not examine
+// those bytes until the command/body state machine consumes them.
+func (c *Conn) readCommandLine(limit int) (string, error) {
+	var line []byte
+	for {
+		// Peek one byte only when empty: ReadSlice would wait for its entire
+		// buffer (or a newline) even after a smaller limit was exceeded.
+		if c.text.R.Buffered() == 0 {
+			if _, err := c.text.R.Peek(1); err != nil {
+				return string(line), err
+			}
+		}
+		part, _ := c.text.R.Peek(c.text.R.Buffered())
+		end := bytes.IndexByte(part, '\n')
+		if end >= 0 {
+			part = part[:end+1]
+		}
+		if limit > 0 && len(part) > limit-len(line) {
+			return "", wire.ErrTooLongLine
+		}
+		line = append(line, part...)
+		c.text.R.Discard(len(part))
+		if end >= 0 {
+			return string(line), nil
+		}
+	}
+}
+
+// errBareLF is returned by readLine for a command line ended by a bare LF.
+var errBareLF = errors.New("smtp: bare LF in command stream")
+
+func (c *Conn) reset() {
+	c.locker.Lock()
+	defer c.locker.Unlock()
+
+	if c.bdatPipe != nil {
+		c.bdatPipe.CloseWithError(ErrDataReset)
+		c.bdatPipe = nil
+	}
+	c.bdatStatus = nil
+	c.bytesReceived = 0
+
+	if c.session != nil {
+		c.session.Reset()
+	}
+
+	c.fromReceived = false
+	c.utf8 = false
+	c.recipients = nil
+}

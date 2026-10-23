@@ -14,6 +14,21 @@ go test -race -count=1 -covermode=atomic -coverprofile=coverage.out . ./internal
 go tool cover -func=coverage.out
 ```
 
+Since the v0.32.0 package split (`pkg/smtp`, `pkg/smtp/server`,
+`pkg/smtp/client`, `pkg/smtp/internal/wire` and the black-box suite in
+`pkg/smtp/rfctest`), CI measures every package with `-coverpkg`, so the
+statements a test runs count wherever they live: the rfctest suite and the
+client tests drive the server, as they did when all of this was one package.
+
+```sh
+go test -race -count=1 -covermode=atomic -coverpkg=./pkg/...,./internal/... -coverprofile=coverage.out ./pkg/... ./internal/...
+go tool cover -func=coverage.out
+```
+
+The same command without `-race` (the race detector does not run on that
+machine) measured **97.2%** locally on Go 1.27 linux/arm64 for the split
+(2026-10-23). The first main CI run after the split supplies the CI figure.
+
 CI now fails below **95%**, the same minimum as the shared RFC verification
 workflow used by other `go-*` libraries. The existing go-smtp workflow retains
 its package selection, race tests, checklist check and parser fuzz targets.
