@@ -363,7 +363,7 @@ does not automatically choose that recovery or the host's retry policy.
 | PIPE-CLIENT-04 | 3.1 | MUST NOT | Do not confuse a multiline response with responses to multiple commands. | `TestRFC2920ClientResponseCorrelation` |
 | PIPE-CLIENT-05 | 3.1 | Normative | Check DATA even when every RCPT failed; if DATA is accepted, recovery sends only a dot and checks the final response. | `TestRFC2920EmptyDataRecovery`, `TestRFC2920EmptyDataWriter` |
 | PIPE-CLIENT-06 | 3.1 | Normative | Only permitted commands occur inside a group; EHLO, DATA, VRFY, EXPN, TURN, QUIT and NOOP end a group. | `TestPipeline_Integration` |
-| PIPE-CLIENT-07 | 3.1 | MUST | A blocking client checks the actual TCP window and keeps each group within it, or processes replies while writing. | n/a: not supported yet; Pipeliner assumes a fixed 4096-byte window, does not discover the actual window and does not read concurrently. Existing congestion tests prove only that configured window, not arbitrary transports or oversized single commands. Tracked by rest-mail/rest-mail-server#374. |
+| PIPE-CLIENT-07 | 3.1 | MUST | A blocking client checks the actual TCP window and keeps each group within it, or processes replies while writing. | n/a: not supported yet; Pipeliner assumes a fixed 4096-byte window, does not discover the actual window and does not read concurrently. Existing congestion tests prove only that configured window, not arbitrary transports or oversized single commands. Tracked by [#137](https://github.com/rest-mail/go-smtp/issues/137). |
 | PIPE-CLIENT-08 | 3.1 | Normative | Additional extension commands end a group unless their defining extension allows otherwise. | `TestRFC2920ExtensionCommandBetweenGroups` |
 | PIPE-SERVER-01 | 3.2(1) | MUST | Respond to commands in received order. | `TestRFC2920SynchronizationFlush`, `TestRFC2920Examples`, `TestPipelinedRepliesShareOneWrite` |
 | PIPE-SERVER-02 | 3.2(2) | SHOULD | Buffer responses to grouped transaction commands for transmission together. | `TestPipelinedRepliesShareOneWrite` |
@@ -843,8 +843,8 @@ assumed merged: their rows/tests must be retained when reconciling this audit.
 The additional rows below distinguish transport proofs, unsupported behavior
 and duties of the application using the transport. **n/a does not waive an
 MTA's obligation**: a host must implement those duties before claiming full
-RFC conformance. Known transport gaps remain tracked by
-[rest-mail-server#374](https://github.com/rest-mail/rest-mail-server/issues/374).
+RFC conformance. Known transport gaps are listed, each with its issue, in the
+README's [What it does not do](README.md#what-it-does-not-do).
 
 ### Additional transport proofs
 
