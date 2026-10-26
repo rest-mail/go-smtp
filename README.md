@@ -16,7 +16,7 @@ extensions a modern mail server needs.
 - [Features](#features): [extensions](#extensions), [server API](#server-api), [client API](#client-api)
 - [What the library does and what the host must do](#what-the-library-does-and-what-the-host-must-do)
 - [Server reply lines](#server-reply-lines)
-- [RFC conformance](#rfc-conformance): [the checklist](#the-rfc-checklist), [badges and coverage](#badges-and-coverage)
+- [RFC conformance](#rfc-conformance): [the checklist](#the-rfc-checklist), [what it does not do](#what-it-does-not-do), [badges and coverage](#badges-and-coverage)
 - [Relationship with net/smtp](#relationship-with-netsmtp)
 - [Changelog](#changelog)
 - [Licence](#licence)
@@ -306,8 +306,9 @@ The library:
 - Known gap: the client still assumes a 4096-byte transport window instead of
   checking the actual TCP window or reading responses concurrently. Its
   congestion tests prove that assumed window only; smaller windows and
-  oversized individual commands remain a conformance gap (PIPE-CLIENT-07),
-  bounded by `CommandTimeout`.
+  oversized individual commands remain a conformance gap (PIPE-CLIENT-07,
+  [#137](https://github.com/rest-mail/go-smtp/issues/137)), bounded by
+  `CommandTimeout`.
 
 The host (the caller):
 
@@ -570,6 +571,43 @@ go run ./internal/checklist -file CHECKLIST.md pkg/smtp pkg/smtp/client pkg/smtp
 The black-box tests in `pkg/smtp/rfctest` use only the public API; tests that
 need a package's internals live beside that package.
 
+### What it does not do
+
+Some gaps are deliberate, and go-smtp will not fill them. Others are planned,
+each with an issue. The checklist records every one as an `n/a` row with its
+reason, alongside the duties that belong to the host, which
+[What the library does and what the host must do](#what-the-library-does-and-what-the-host-must-do)
+describes.
+
+#### Not supported, by design
+
+| Area | What go-smtp does | Why |
+|------|-------------------|-----|
+| VRFY and EXPN | VRFY answers 252 without looking at its argument; EXPN is not implemented. | Both let a stranger harvest addresses and list members. RFC 5321 §3.5.3 allows 252, and public servers turn both off. |
+| Message content | DATA and BDAT pass the message through unchanged: no MIME inspection or conversion, no header parsing (`TLS-Required` included) and no `Received` trace fields. | The library is a transport. What a message contains, and what to add to it, is the host's policy. |
+| Queueing and reports | No queue, retries, DNS or MX lookups, and no DSN or bounce generation. The client talks to the one peer it is connected to. | These belong to the mail server built on the library. |
+| Temporary TLS unavailability | No 454 reply: with a nil `TLSConfig` STARTTLS is refused with 502, otherwise the handshake is attempted. | Whether TLS is available is configuration, not a passing state. |
+| XCLIENT HELO and PROTO | Kept as metadata: the proxy must greet again after XCLIENT, and PROTO does not switch between SMTP and LMTP. | The new backend session starts from a real greeting, so its state never depends on asserted values. |
+
+#### Not planned
+
+| Area | What go-smtp does |
+|------|-------------------|
+| BDAT in the client | The client sends with DATA only and refuses `BodyBinaryMIME`. Binary content can be sent encoded over DATA. |
+| XCLIENT in the client | No API to send XCLIENT. Proxies such as Postfix and nginx send it. |
+| DSN address types | ORCPT accepts the `rfc822` and `utf-8` types only; other registered types, such as `x400`, are not accepted. |
+| Server-first SASL mechanisms | The server does not refuse an initial response to a mechanism where the server speaks first; the host's `sasl.Server` must. |
+
+#### Planned
+
+| Gap | Issue |
+|-----|-------|
+| The client rejects a reply code with no text, such as a bare `250`. | [#136](https://github.com/rest-mail/go-smtp/issues/136) |
+| The pipelining client assumes a 4096-byte TCP window instead of reading replies while it writes, so a larger group can deadlock until `CommandTimeout`. | [#137](https://github.com/rest-mail/go-smtp/issues/137) |
+| The address parser does not check domain labels or empty local-part atoms against the RFC 5321 grammar. | [#138](https://github.com/rest-mail/go-smtp/issues/138) |
+| Reply codes supplied by the backend are sent without a range check. | [#139](https://github.com/rest-mail/go-smtp/issues/139) |
+| XCLIENT attribute values are not validated, and PORT, DESTADDR and DESTPORT are not exposed. | [#140](https://github.com/rest-mail/go-smtp/issues/140) |
+
 ### Badges and coverage
 
 The badges at the top are checked by `TestReadmeBadges` in
@@ -589,11 +627,47 @@ provides a server implementation and a number of client improvements.
 
 Recent releases; see [CHANGELOG.md](CHANGELOG.md) for the complete history.
 
-- **v0.32.0** (2026-10-23): the library is split into `pkg/smtp`, `pkg/smtp/server` and `pkg/smtp/client`; `NewServer` is `server.New` and `NewClient*` are `client.New*` (breaking, migration table in the changelog). AUTH responses and challenges get their own size bounds, and XCLIENT values are xtext-decoded.
-- **v0.31.0** (2026-10-22): clause-by-clause RFC audits behind the checklist, `HELP` answers 214, unanswered LMTP recipients become temporary failures.
-- **v0.28.3** (2026-07-26): `MaxLineLength` now bounds command lines only; the per-line limit is disabled during DATA (mirroring BDAT), so a server can cap pre-auth command input without limiting message body lines.
-- **v0.28.2** (2026-07-25): STARTTLS/Close data race, nested-MAIL 503, AUTH/BDAT desync fixes, EHLO case-normalization, MAIL/RCPT param strictness, shutdown 421.
-- **v0.28.1** (2026-07-25): BDAT inter-chunk line-limit enforcement, over-limit chunk discard framing, LMTP oversized-DATA discard bound, client recipient-list reset per transaction.
+### v0.32.0 (2026-10-23)
+
+The library is split into `pkg/smtp`, `pkg/smtp/server` and `pkg/smtp/client`;
+`NewServer` is `server.New` and `NewClient*` are `client.New*` (breaking; the
+changelog has a migration table). AUTH responses and challenges get their own
+size bounds, and XCLIENT values are xtext-decoded.
+
+### v0.31.0 (2026-10-22)
+
+Clause-by-clause RFC audits behind the checklist. `HELP` answers 214, and
+unanswered LMTP recipients become temporary failures.
+
+### v0.30.0 (2026-10-19)
+
+The RFC checklist and its CI check. ESMTP parameters and command arguments are
+separated by SP and HTAB only, out-of-sequence commands get `503 5.5.1`, and a
+command line ends at CRLF only.
+
+### v0.29.0 (2026-09-13)
+
+MT-PRIORITY and BY are MAIL parameters, not RCPT parameters (breaking).
+`Client.Mail` fails instead of dropping either one when the server does not
+advertise it.
+
+### v0.28.3 (2026-07-26)
+
+`MaxLineLength` bounds command lines only. The per-line limit is off during
+DATA, as it is during BDAT, so a server can cap command input before
+authentication without limiting the lines of a message body.
+
+### v0.28.2 (2026-07-25)
+
+Fixes a data race between STARTTLS and `Close`, answers a nested MAIL with 503,
+fixes AUTH and BDAT desyncs, normalizes the case of EHLO keywords, makes MAIL
+and RCPT parameters strict and sends 421 on shutdown.
+
+### v0.28.1 (2026-07-25)
+
+BDAT enforces the line limit between chunks and keeps its framing when it
+discards an over-limit chunk. LMTP bounds the discard of an oversized DATA, and
+the client resets its recipient list for each transaction.
 
 ## Licence
 
