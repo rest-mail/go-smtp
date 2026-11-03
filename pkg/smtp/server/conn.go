@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/netip"
 	"net/textproto"
 	"runtime/debug"
 	"strconv"
@@ -330,12 +331,35 @@ func (c *Conn) Conn() net.Conn {
 // XClientAttrs holds the client identity a trusted proxy asserted via the
 // XCLIENT extension, with each xtext value already decoded. Empty fields were
 // not asserted.
+//
+// The server checks each value's syntax as the Postfix XCLIENT specification
+// gives it, and refuses a malformed one with 501 5.5.4. The sentinels
+// "[UNAVAILABLE]" and "[TEMPUNAVAIL]" and the "IPV6:" prefix are stored in
+// upper case whatever case the proxy used, and PROTO is stored as "SMTP" or
+// "ESMTP".
 type XClientAttrs struct {
-	Addr  string // real client IP address (ADDR)
-	Name  string // real client reverse-DNS name (NAME)
-	Proto string // client protocol (PROTO), e.g. "SMTP" or "ESMTP"
-	Helo  string // client HELO/EHLO name (HELO)
-	Login string // authenticated username (LOGIN)
+	// Addr is the real client IP address (ADDR): an IPv4 address, "IPV6:"
+	// followed by an IPv6 address, or "[UNAVAILABLE]".
+	Addr string
+	// Name is the real client's verified reverse-DNS name (NAME): a host
+	// name of at most 255 characters, "[UNAVAILABLE]" or "[TEMPUNAVAIL]".
+	Name string
+	// Proto is the client protocol (PROTO): "SMTP" or "ESMTP".
+	Proto string
+	// Helo is the client's HELO/EHLO argument (HELO), at most 255
+	// characters, or "[UNAVAILABLE]".
+	Helo string
+	// Login is the client's SASL login name (LOGIN), or "[UNAVAILABLE]".
+	Login string
+	// Port is the real client's TCP port (PORT): a decimal number from 0
+	// to 65535, or "[UNAVAILABLE]".
+	Port string
+	// DestAddr is the server address the client connected to (DESTADDR),
+	// in the same form as Addr.
+	DestAddr string
+	// DestPort is the server port the client connected to (DESTPORT), in
+	// the same form as Port.
+	DestPort string
 }
 
 // XClient returns the client identity a trusted proxy asserted via XCLIENT, or
@@ -396,20 +420,25 @@ func (c *Conn) handleXClient(arg string) {
 			target = &attrs.Helo
 		case "LOGIN":
 			target = &attrs.Login
-		case "PORT", "DESTADDR", "DESTPORT":
-			// Accepted for compatibility but not currently surfaced.
+		case "PORT":
+			target = &attrs.Port
+		case "DESTADDR":
+			target = &attrs.DestAddr
+		case "DESTPORT":
+			target = &attrs.DestPort
 		default:
 			c.writeResponse(501, smtp.EnhancedCode{5, 5, 4}, "Unknown XCLIENT attribute: "+key)
 			return
 		}
 		decoded, ok := decodeXClientValue(value)
+		if ok {
+			decoded, ok = checkXClientValue(name, decoded)
+		}
 		if !ok {
 			c.writeResponse(501, smtp.EnhancedCode{5, 5, 4}, "Bad XCLIENT "+name+" syntax")
 			return
 		}
-		if target != nil {
-			*target = decoded
-		}
+		*target = decoded
 	}
 	// XCLIENT starts a new SMTP session on the same transport. Backend state
 	// (including authentication and access decisions) belongs to the previous
@@ -556,7 +585,7 @@ func (c *Conn) handleGreet(enhanced bool, arg string) {
 		}
 	}
 	if c.xclientAllowed() {
-		caps = append(caps, "XCLIENT ADDR NAME PROTO HELO LOGIN")
+		caps = append(caps, "XCLIENT ADDR NAME PROTO HELO LOGIN PORT DESTADDR DESTPORT")
 	}
 	caps = append(caps, c.server.ExtraCaps...)
 
@@ -597,6 +626,12 @@ func (c *Conn) handleMail(arg string) {
 
 	p := parser{s: trimWSP(arg)}
 	from, err := p.parseReversePath()
+	if isAddressError(err) {
+		// RFC 5321 §4.1.2 Mailbox grammar; RFC 3463 X.1.7 is bad sender
+		// address syntax.
+		c.writeResponse(501, smtp.EnhancedCode{5, 1, 7}, "Bad sender address syntax")
+		return
+	}
 	if err != nil {
 		c.writeResponse(501, smtp.EnhancedCode{5, 5, 2}, "Was expecting MAIL arg syntax of FROM:<address>")
 		return
@@ -826,6 +861,85 @@ func decodeXClientValue(val string) (string, bool) {
 	return out.String(), true
 }
 
+// XCLIENT sentinels (Postfix XCLIENT specification).
+const (
+	xclientUnavailable = "[UNAVAILABLE]"
+	xclientTempUnavail = "[TEMPUNAVAIL]"
+	// maxXClientNameLength is the NAME and HELO limit, from note 1 of the
+	// specification.
+	maxXClientNameLength = 255
+)
+
+// checkXClientValue checks a decoded XCLIENT attribute value against the
+// syntax the Postfix XCLIENT specification gives for attribute name, and
+// returns it normalised. Note 2 of the specification makes the sentinels and
+// the "IPV6:" prefix case-insensitive, so they are returned in upper case.
+func checkXClientValue(name, value string) (string, bool) {
+	if strings.EqualFold(value, xclientUnavailable) {
+		// Every attribute may be unavailable.
+		return xclientUnavailable, true
+	}
+	switch name {
+	case "NAME":
+		if strings.EqualFold(value, xclientTempUnavail) {
+			return xclientTempUnavail, true
+		}
+		// A verified reverse-DNS name is an ASCII host name.
+		if len(value) > maxXClientNameLength || !wire.IsASCII(value) || checkDomain(value) != nil {
+			return "", false
+		}
+		return value, true
+	case "ADDR", "DESTADDR":
+		// IPv4 address, or IPv6 address prefixed with "IPV6:", without
+		// the address-literal brackets.
+		if v6, ok := cutPrefixFold(value, "IPV6:"); ok {
+			addr, err := netip.ParseAddr(v6)
+			if err != nil || !addr.Is6() || addr.Zone() != "" {
+				return "", false
+			}
+			return "IPV6:" + v6, true
+		}
+		addr, err := netip.ParseAddr(value)
+		if err != nil || !addr.Is4() {
+			return "", false
+		}
+		return value, true
+	case "PORT", "DESTPORT":
+		if len(value) > 5 || !wire.IsDecimal(value) {
+			return "", false
+		}
+		if n, _ := strconv.Atoi(value); n > 65535 {
+			return "", false
+		}
+		return value, true
+	case "PROTO":
+		switch {
+		case strings.EqualFold(value, "SMTP"):
+			return "SMTP", true
+		case strings.EqualFold(value, "ESMTP"):
+			return "ESMTP", true
+		}
+		return "", false
+	case "HELO":
+		// The HELO argument is the original client's, which this server
+		// did not check, so like Postfix only its length is limited.
+		// Control bytes are refused, as in any other SMTP argument.
+		if value == "" || len(value) > maxXClientNameLength {
+			return "", false
+		}
+		for i := 0; i < len(value); i++ {
+			if isCTL(value[i]) {
+				return "", false
+			}
+		}
+		return value, true
+	case "LOGIN":
+		// The SASL login is host policy (XC-SYNTAX-08); keep it as sent.
+		return value, true
+	}
+	return "", false
+}
+
 func decodeTypedAddress(val string) (smtp.DSNAddressType, string, error) {
 	tv := strings.SplitN(val, ";", 2)
 	if len(tv) != 2 || tv[0] == "" || tv[1] == "" {
@@ -879,6 +993,12 @@ func (c *Conn) handleRcpt(arg string) {
 	if !ok {
 		var err error
 		recipient, err = p.parsePath()
+		if isAddressError(err) {
+			// RFC 5321 §4.1.2 Mailbox grammar; RFC 3463 X.1.3 is bad
+			// destination mailbox address syntax.
+			c.writeResponse(501, smtp.EnhancedCode{5, 1, 3}, "Bad destination mailbox address syntax")
+			return
+		}
 		if err != nil {
 			c.writeResponse(501, smtp.EnhancedCode{5, 5, 2}, "Was expecting RCPT arg syntax of TO:<address>")
 			return
@@ -1802,6 +1922,8 @@ func (c *Conn) writeResponse(code int, enhCode smtp.EnhancedCode, text ...string
 		c.conn.SetWriteDeadline(time.Now().Add(c.server.WriteTimeout))
 	}
 
+	code, enhCode, text = c.checkReply(code, enhCode, text)
+
 	// All responses must include an enhanced code, if it is missing - use
 	// a generic code X.0.0.
 	if enhCode == smtp.EnhancedCodeNotSet {
@@ -1846,6 +1968,46 @@ func (c *Conn) writeResponse(code int, enhCode smtp.EnhancedCode, text ...string
 			c.setWriteError(err)
 			return
 		}
+	}
+}
+
+// checkReply keeps an invalid reply code off the wire. The server's own
+// replies are always valid, but a backend can return an SMTPError with any
+// Code and EnhancedCode.
+//
+// RFC 5321 §4.2.1 and §4.3.2: a reply code is three digits, the first of them
+// 2, 3, 4 or 5. A reply with any other code is replaced by 451 4.3.0, so that
+// a backend's programming error cannot break the client's reply parsing; the
+// client may retry later. The original is logged.
+//
+// RFC 3463 §2 and RFC 2034 §3: an enhanced status code's class matches the
+// first digit of the reply code (2, 4 or 5), and its subject and detail are
+// 1 to 3 digits. 3xx replies carry none. An enhanced code that breaks these
+// rules is replaced by the generic X.0.0 for the reply's class, or dropped
+// from a 3xx reply, and the reply code and text are kept.
+func (c *Conn) checkReply(code int, enhCode smtp.EnhancedCode, text []string) (int, smtp.EnhancedCode, []string) {
+	if code < 200 || code > 599 {
+		c.logf("backend reply code %d is not a valid SMTP reply code; sending 451 4.3.0 instead (text %q)", code, strings.Join(text, "\n"))
+		return 451, smtp.EnhancedCode{4, 3, 0}, []string{"Internal server error"}
+	}
+	if enhCode == smtp.EnhancedCodeNotSet || enhCode == smtp.NoEnhancedCode {
+		return code, enhCode, text
+	}
+	class := code / 100
+	if class == 3 {
+		c.logf("dropping enhanced status code %d.%d.%d from %d reply", enhCode[0], enhCode[1], enhCode[2], code)
+		return code, smtp.NoEnhancedCode, text
+	}
+	if enhCode[0] != class || enhCode[1] < 0 || enhCode[1] > 999 || enhCode[2] < 0 || enhCode[2] > 999 {
+		c.logf("enhanced status code %d.%d.%d does not fit %d reply; sending %d.0.0 instead", enhCode[0], enhCode[1], enhCode[2], code, class)
+		return code, smtp.EnhancedCode{class, 0, 0}, text
+	}
+	return code, enhCode, text
+}
+
+func (c *Conn) logf(format string, args ...interface{}) {
+	if l := c.server.ErrorLog; l != nil {
+		l.Printf(format, args...)
 	}
 }
 

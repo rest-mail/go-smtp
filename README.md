@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/rest-mail/go-smtp/actions/workflows/ci.yml/badge.svg)](https://github.com/rest-mail/go-smtp/actions/workflows/ci.yml)
 [![Coverage gate: >=95%](https://img.shields.io/badge/coverage%20gate-%3E%3D95%25-brightgreen)](COVERAGE.md)
-[![Checklist: 360/574 mapped](https://img.shields.io/badge/checklist-360%2F574%20mapped-blue)](CHECKLIST.md)
+[![Checklist: 369/574 mapped](https://img.shields.io/badge/checklist-369%2F574%20mapped-blue)](CHECKLIST.md)
 [![Go Reference](https://pkg.go.dev/badge/github.com/rest-mail/go-smtp.svg)](https://pkg.go.dev/github.com/rest-mail/go-smtp/pkg/smtp)
 
 An ESMTP client and server library written in Go, with LMTP and the
@@ -182,7 +182,8 @@ returns a `*client.Client` with `Mail`, `Rcpt`, `Data` and `Quit`; see
 | Message submission | RFC 6409 | the backend decides | — | — |
 
 XCLIENT lets a trusted proxy (haproxy/nginx/Postfix) assert the real client's
-address, name, protocol, HELO and login. It is gated on a caller-supplied
+address, port, name, protocol, HELO and login, and the address and port it
+connected to. It is gated on a caller-supplied
 trust check, so only trusted peers are honoured.
 
 ### Server API
@@ -191,7 +192,7 @@ trust check, so only trusted peers are honoured.
 * Dynamic EHLO capabilities: the static `ExtraCaps` field, or an optional `FeatureBackend` that computes advertised capabilities per connection
 * `ConnState` hook (in the style of `net/http`) for connection open/close events: a single place for metrics, logging and debugging
 * `Conn.Context()`: a per-connection `context.Context`, cancelled when the connection closes or the server shuts down, so backends can observe cancellation
-* Backend error contract: return an `*smtp.SMTPError` (build one with `smtp.Errorf`) to choose the status code; a 2xx `*smtp.SMTPError` sets a custom success line, and wrapping an error with `server.CloseConnection` sends the response and then closes the connection
+* Backend error contract: return an `*smtp.SMTPError` (build one with `smtp.Errorf`) to choose the status code; a 2xx `*smtp.SMTPError` sets a custom success line, and wrapping an error with `server.CloseConnection` sends the response and then closes the connection. A code that is not three digits from 200 to 599 (RFC 5321 §4.2.1) is replaced by `451 4.3.0` and logged to `ErrorLog`; an enhanced code whose class does not match the reply code (RFC 3463 §2) becomes `X.0.0`
 * A zero-value `server.Server` is usable directly, without `server.New`
 
 ### Client API
@@ -205,6 +206,20 @@ trust check, so only trusted peers are honoured.
 Each extension below says what go-smtp handles and what stays with the host
 (the program that uses it). The [checklist](CHECKLIST.md) records every one of
 these boundaries row by row.
+
+### Envelope addresses
+
+- MAIL FROM and RCPT TO addresses are checked against the RFC 5321 §4.1.2
+  Mailbox grammar. A domain's labels are letters, digits and hyphens, none
+  empty and none starting or ending with a hyphen; an ASCII label is at most 63
+  octets and an ASCII domain at most 255. An unquoted local-part has no
+  leading, trailing or doubled dot; a quoted one may.
+- Address literals (§4.1.3) are an IPv4 address or `IPv6:` and an IPv6
+  address. General address literals are refused: no other tag is registered.
+- A bad address gets `501 5.1.7` on MAIL and `501 5.1.3` on RCPT (RFC 3463).
+- With SMTPUTF8 (RFC 6531) UTF-8 is allowed in labels and atoms; the dot and
+  hyphen rules still apply, and U-label validity (IDNA) is the host's.
+- The server sets no length limit on local-parts (§4.5.3.1 asks for none).
 
 ### 8BITMIME, BINARYMIME and CHUNKING
 
@@ -454,16 +469,25 @@ The library:
   without two hex digits gets 501 and other octets stay literal.
 - Identity policy runs when the replacement backend session is created after
   the new greeting, rather than before the 220.
+- Each value is checked against the Postfix XCLIENT attribute syntax, and a
+  malformed one gets `501 5.5.4 Bad XCLIENT <NAME> syntax`: NAME is a host
+  name, ADDR and DESTADDR are IPv4 or `IPV6:` and IPv6, PORT and DESTPORT are
+  0 to 65535, PROTO is SMTP or ESMTP, and NAME and HELO are at most 255
+  characters. `[UNAVAILABLE]` (and `[TEMPUNAVAIL]` for NAME) is accepted for
+  every attribute. Sentinels, the `IPV6:` prefix and PROTO are stored in upper
+  case.
+- PORT, DESTADDR and DESTPORT are advertised and exposed as
+  `XClientAttrs.Port`, `DestAddr` and `DestPort`.
 
 The [Postfix XCLIENT checklist](CHECKLIST.md#postfix-xclient-session-state-and-trust-boundaries)
 records incomplete compatibility:
 
 - Asserted HELO does not satisfy the new SMTP greeting requirement and PROTO
   does not select effective protocol state.
-- Per-attribute address/protocol/sentinel validation is not implemented, and
-  PORT/DESTADDR/DESTPORT are accepted but not surfaced or advertised.
+- HELO is checked only for length and control bytes, as Postfix does: it is
+  the original client's argument, which this server never saw.
 
-The host must validate attributes, map LOGIN to its own identity policy, apply
+The host must map LOGIN to its own identity policy, apply
 relay/access rules and reset cached client assertions appropriately.
 
 ### Message submission (RFC 6409)
@@ -604,15 +628,12 @@ describes.
 |-----|-------|
 | The client rejects a reply code with no text, such as a bare `250`. | [#136](https://github.com/rest-mail/go-smtp/issues/136) |
 | The pipelining client assumes a 4096-byte TCP window instead of reading replies while it writes, so a larger group can deadlock until `CommandTimeout`. | [#137](https://github.com/rest-mail/go-smtp/issues/137) |
-| The address parser does not check domain labels or empty local-part atoms against the RFC 5321 grammar. | [#138](https://github.com/rest-mail/go-smtp/issues/138) |
-| Reply codes supplied by the backend are sent without a range check. | [#139](https://github.com/rest-mail/go-smtp/issues/139) |
-| XCLIENT attribute values are not validated, and PORT, DESTADDR and DESTPORT are not exposed. | [#140](https://github.com/rest-mail/go-smtp/issues/140) |
 
 ### Badges and coverage
 
 The badges at the top are checked by `TestReadmeBadges` in
 `internal/checklist`. The checklist badge counts mapped items over all items:
-the 214 `n/a` rows are in the denominator, so the badge never claims more than
+the 205 `n/a` rows are in the denominator, so the badge never claims more than
 the tests prove. The coverage badge shows the floor CI enforces (`FLOOR` in
 `.github/workflows/ci.yml`), not a measured figure; each CI run prints the
 measured statement coverage. Coverage is in [COVERAGE.md](COVERAGE.md).

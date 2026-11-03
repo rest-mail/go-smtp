@@ -3,6 +3,7 @@ package server
 import (
 	"errors"
 	"fmt"
+	"net/netip"
 	"regexp"
 	"strconv"
 	"strings"
@@ -320,7 +321,7 @@ func (p *parser) parsePath() (string, error) {
 	}
 	mbox, err := p.parseMailbox()
 	if err != nil {
-		return "", fmt.Errorf("in mailbox: %v", err)
+		return "", fmt.Errorf("in mailbox: %w", err)
 	}
 	if hasBracket {
 		if err := p.expectByte('>'); err != nil {
@@ -361,7 +362,7 @@ func (p *parser) parsePostmasterPath() (mbox string, ok bool) {
 func (p *parser) parseMailbox() (string, error) {
 	localPart, err := p.parseLocalPart()
 	if err != nil {
-		return "", fmt.Errorf("in local-part: %v", err)
+		return "", fmt.Errorf("in local-part: %w", err)
 	} else if localPart == "" {
 		return "", fmt.Errorf("local-part is empty")
 	}
@@ -397,8 +398,147 @@ func (p *parser) parseMailbox() (string, error) {
 	if strings.HasSuffix(sb.String(), "@") {
 		return "", fmt.Errorf("domain is empty")
 	}
+	if err := checkMailboxDomain(sb.String()[len(localPart)+1:]); err != nil {
+		return "", err
+	}
 
 	return sb.String(), nil
+}
+
+// addressError reports a local-part or domain that breaks the RFC 5321
+// §4.1.2 Mailbox grammar, as opposed to a malformed path or command. The
+// server answers it 501 with the RFC 3463 address-syntax status: 5.1.7 for
+// the sender, 5.1.3 for a recipient.
+type addressError struct {
+	msg string
+}
+
+func (e *addressError) Error() string { return e.msg }
+
+// isAddressError reports whether err is, or wraps, an addressError.
+func isAddressError(err error) bool {
+	var ae *addressError
+	return errors.As(err, &ae)
+}
+
+// Size limits from RFC 5321 §4.5.3.1.2 and RFC 1035 §2.3.4.
+const (
+	maxDomainLength = 255
+	maxLabelLength  = 63
+)
+
+// checkMailboxDomain checks the domain of a Mailbox: a Domain or an
+// address-literal (RFC 5321 §4.1.2).
+func checkMailboxDomain(domain string) error {
+	if strings.HasPrefix(domain, "[") {
+		return checkAddressLiteral(domain)
+	}
+	return checkDomain(domain)
+}
+
+// checkDomain checks domain against the RFC 5321 §4.1.2 Domain grammar:
+//
+//	Domain     = sub-domain *("." sub-domain)
+//	sub-domain = Let-dig [Ldh-str]
+//	Ldh-str    = *( ALPHA / DIGIT / "-" ) Let-dig
+//
+// So no label is empty, none starts or ends with a hyphen, and only letters,
+// digits and hyphens appear (an underscore does not). RFC 6531 §3.3 adds
+// U-labels, so octets above 0x7F count as label characters; whether a
+// non-ASCII address is allowed at all is checked against SMTPUTF8 later.
+// An ASCII label is at most 63 octets and an ASCII domain at most 255
+// (RFC 5321 §4.5.3.1.2, RFC 1035 §2.3.4). A U-label's length is measured in
+// its A-label form, which needs IDNA, so it is left to the host.
+func checkDomain(domain string) error {
+	if domain == "" {
+		return &addressError{"domain is empty"}
+	}
+	ascii := wire.IsASCII(domain)
+	if ascii && len(domain) > maxDomainLength {
+		return &addressError{"domain is longer than 255 octets"}
+	}
+	for _, label := range strings.Split(domain, ".") {
+		if label == "" {
+			return &addressError{"empty domain label"}
+		}
+		if label[0] == '-' || label[len(label)-1] == '-' {
+			return &addressError{"domain label starts or ends with a hyphen"}
+		}
+		labelASCII := true
+		for i := 0; i < len(label); i++ {
+			ch := label[i]
+			switch {
+			case ch >= 0x80:
+				labelASCII = false
+			case isLetDig(ch), ch == '-':
+			default:
+				return &addressError{"invalid character in domain"}
+			}
+		}
+		if labelASCII && len(label) > maxLabelLength {
+			return &addressError{"domain label is longer than 63 octets"}
+		}
+	}
+	return nil
+}
+
+// isIPv4AddressLiteral reports whether s is an RFC 5321 §4.1.3
+// IPv4-address-literal: Snum 3("." Snum), where Snum is 1*3DIGIT with a value
+// of at most 255. Leading zeros are allowed, as the grammar allows them.
+func isIPv4AddressLiteral(s string) bool {
+	parts := strings.Split(s, ".")
+	if len(parts) != 4 {
+		return false
+	}
+	for _, part := range parts {
+		if len(part) < 1 || len(part) > 3 || !wire.IsDecimal(part) {
+			return false
+		}
+		if n, _ := strconv.Atoi(part); n > 255 {
+			return false
+		}
+	}
+	return true
+}
+
+// isLetDig reports whether ch is an RFC 5321 Let-dig: an ASCII letter or digit.
+func isLetDig(ch byte) bool {
+	return ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z' || ch >= '0' && ch <= '9'
+}
+
+// checkAddressLiteral checks lit against the RFC 5321 §4.1.3 grammar:
+//
+//	address-literal  = "[" ( IPv4-address-literal / IPv6-address-literal /
+//	                   General-address-literal ) "]"
+//	IPv6-address-literal    = "IPv6:" IPv6-addr
+//	General-address-literal = Standardized-tag ":" 1*dcontent
+//
+// The "IPv6:" tag is matched case-insensitively, as ABNF literals are. No
+// other Standardized-tag is registered, so a General-address-literal is
+// refused.
+// A zone (fe80::1%eth0) is not part of IPv6-addr and is refused.
+func checkAddressLiteral(lit string) error {
+	if len(lit) < 3 || lit[0] != '[' || lit[len(lit)-1] != ']' {
+		return &addressError{"malformed address literal"}
+	}
+	body := lit[1 : len(lit)-1]
+	if v6, ok := cutPrefixFold(body, "IPv6:"); ok {
+		addr, err := netip.ParseAddr(v6)
+		if err != nil || !addr.Is6() || addr.Zone() != "" {
+			return &addressError{"malformed IPv6 address literal"}
+		}
+		return nil
+	}
+	if strings.Contains(body, ":") {
+		// A General-address-literal's Standardized-tag MUST be defined in a
+		// Standards-Track RFC and registered with IANA (§4.1.3). "IPv6" is
+		// the only tag registered, so any other is refused.
+		return &addressError{"unregistered address literal tag"}
+	}
+	if !isIPv4AddressLiteral(body) {
+		return &addressError{"malformed IPv4 address literal"}
+	}
+	return nil
 }
 
 func (p *parser) parseLocalPart() (string, error) {
@@ -425,14 +565,29 @@ func (p *parser) parseLocalPart() (string, error) {
 			sb.WriteByte(ch)
 		}
 	} else { // dot-string
+		// Dot-string = Atom *("." Atom), Atom = 1*atext (RFC 5321 §4.1.2):
+		// no leading, trailing or doubled dot. An empty local-part is left
+		// to the caller, which reports it as such.
+		atomStart := true
 		for {
 			ch, ok := p.peekByte()
-			if !ok {
+			if !ok || ch == '@' {
+				if atomStart && sb.Len() > 0 {
+					return "", &addressError{"local-part ends with a dot"}
+				}
 				return sb.String(), nil
 			}
+			if ch == '.' {
+				if atomStart {
+					return "", &addressError{"empty atom in local-part"}
+				}
+				atomStart = true
+				p.readByte()
+				sb.WriteByte(ch)
+				continue
+			}
+			atomStart = false
 			switch ch {
-			case '@':
-				return sb.String(), nil
 			case '(', ')', '<', '>', '[', ']', ':', ';', '\\', ',', '"', ' ', '\t':
 				return "", fmt.Errorf("malformed dot-string")
 			}

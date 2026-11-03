@@ -105,7 +105,7 @@ func TestServerXClientKeepsUnicodeSpaceInValue(t *testing.T) {
 	scanner := bufio.NewScanner(c)
 	scanner.Scan() // 220
 
-	io.WriteString(c, "XCLIENT NAME=client\u0085example\tLOGIN=alice \r\n")
+	io.WriteString(c, "XCLIENT HELO=client\u0085example\tLOGIN=alice \r\n")
 	scanner.Scan()
 	if !strings.HasPrefix(scanner.Text(), "220 ") {
 		t.Fatalf("XCLIENT should be honored with a fresh 220 greeting, got: %q", scanner.Text())
@@ -117,8 +117,8 @@ func TestServerXClientKeepsUnicodeSpaceInValue(t *testing.T) {
 		if attrs == nil {
 			t.Fatal("Conn.XClient() was nil after a trusted XCLIENT")
 		}
-		if attrs.Name != "client\u0085example" {
-			t.Errorf("Name = %q, want %q", attrs.Name, "client\u0085example")
+		if attrs.Helo != "client\u0085example" {
+			t.Errorf("Helo = %q, want %q", attrs.Helo, "client\u0085example")
 		}
 		if attrs.Login != "alice " {
 			t.Errorf("Login = %q, want %q", attrs.Login, "alice ")

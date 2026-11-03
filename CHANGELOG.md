@@ -4,6 +4,37 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Note: pre-1.0, breaking changes may ship in a minor release.
 
+## [Unreleased]
+
+### Changed (breaking)
+
+- The server checks MAIL FROM and RCPT TO addresses against the RFC 5321
+  §4.1.2 Mailbox grammar (#138). Addresses it used to accept are now refused
+  with `501 5.1.7` (MAIL) or `501 5.1.3` (RCPT): a domain label holding an
+  underscore or other non-LDH character, empty, starting or ending with a
+  hyphen, or over 63 octets; an ASCII domain over 255 octets; a malformed
+  IPv4 or IPv6 address literal, or a General-address-literal (no tag but
+  `IPv6` is registered); an unquoted local-part with a leading, trailing or
+  doubled dot. The same checks apply to the mailbox in `AUTH=`. SMTPUTF8
+  addresses keep their UTF-8 labels and atoms.
+- XCLIENT values are checked against the Postfix attribute syntax (#140). A
+  malformed NAME, ADDR, PROTO, HELO, PORT, DESTADDR or DESTPORT gets
+  `501 5.5.4 Bad XCLIENT <NAME> syntax`, and the identity is unchanged. An
+  empty value is now refused for all but LOGIN, and a NAME must be an ASCII
+  host name. `Conn.XClient()` now returns `[UNAVAILABLE]`, `[TEMPUNAVAIL]`,
+  the `IPV6:` prefix and PROTO in upper case, whatever case the proxy used.
+- A backend reply code that is not three digits from 200 to 599 is replaced
+  by `451 4.3.0 Internal server error` and logged to `Server.ErrorLog`
+  (RFC 5321 §4.2.1, #139). An enhanced status code whose class does not match
+  the reply code, or whose subject or detail is out of range, is replaced by
+  `X.0.0` and logged (RFC 3463 §2); a 3xx reply loses its enhanced code.
+
+### Added
+
+- `XClientAttrs.Port`, `DestAddr` and `DestPort` expose the XCLIENT PORT,
+  DESTADDR and DESTPORT attributes, and the EHLO keyword now advertises them:
+  `XCLIENT ADDR NAME PROTO HELO LOGIN PORT DESTADDR DESTPORT` (#140).
+
 ## [0.32.0] - 2026-10-23
 
 ### Changed (breaking)
