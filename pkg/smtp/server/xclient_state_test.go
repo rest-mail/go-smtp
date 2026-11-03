@@ -154,11 +154,11 @@ func TestXClientDecodesXtextValues(t *testing.T) {
 		})
 	})
 	xclientCommand(t, raw, br, "XCLIENT LOGIN=user+2Btag+3Dx@example.com ADDR=IPV6+3A2001:db8::1 "+
-		"NAME=caf+c3+a9.example HELO=[UNAVAILABLE] PROTO=ESMTP PORT=25+32+35", "220")
+		"NAME=xn--caf-dma.example HELO=caf+c3+a9.example PROTO=ESMTP PORT=25+32+35", "220")
 	xclientCommand(t, raw, br, "EHLO proxy.example", "250")
 	want := XClientAttrs{
-		Login: "user+tag=x@example.com", Addr: "IPV6:2001:db8::1", Name: "caf\u00e9.example",
-		Helo: "[UNAVAILABLE]", Proto: "ESMTP",
+		Login: "user+tag=x@example.com", Addr: "IPV6:2001:db8::1", Name: "xn--caf-dma.example",
+		Helo: "caf\u00e9.example", Proto: "ESMTP", Port: "2525",
 	}
 	if got := *conn.XClient(); got != want {
 		t.Fatalf("XClient() = %+v, want %+v", got, want)
@@ -178,7 +178,7 @@ func TestXClientTrustConfiguration(t *testing.T) {
 			caps := xclientCommand(t, raw, br, "EHLO proxy.example", "250")
 			advertised := false
 			for _, line := range caps {
-				if line[4:] == "XCLIENT ADDR NAME PROTO HELO LOGIN" {
+				if line[4:] == "XCLIENT ADDR NAME PROTO HELO LOGIN PORT DESTADDR DESTPORT" {
 					advertised = true
 				}
 			}
@@ -290,4 +290,107 @@ func TestXClientTrustRechecked(t *testing.T) {
 		t.Fatalf("XCLIENT advertised after trust revoked: %q", caps)
 	}
 	xclientCommand(t, raw, br, "XCLIENT ADDR=203.0.113.5", "550")
+}
+
+// xclientAttrs sends one XCLIENT command and returns the identity the next
+// session sees.
+func xclientAttrs(t *testing.T, command string) XClientAttrs {
+	t.Helper()
+	var conn *Conn
+	_, raw, br, _ := newFlushTestConn(t, func(s *Server) {
+		enableTestXClient(s)
+		s.Backend = BackendFunc(func(c *Conn) (Session, error) {
+			conn = c
+			return flushAuthSession{}, nil
+		})
+	})
+	xclientCommand(t, raw, br, command, "220")
+	xclientCommand(t, raw, br, "EHLO proxy.example", "250")
+	return *conn.XClient()
+}
+
+// Postfix XCLIENT specification, attribute syntax and notes 1-2: NAME is a
+// host name of at most 255 characters, [UNAVAILABLE] or [TEMPUNAVAIL]; ADDR
+// and DESTADDR are an IPv4 address, "IPV6:" and an IPv6 address, or
+// [UNAVAILABLE]; PORT and DESTPORT are a decimal port or [UNAVAILABLE];
+// PROTO is SMTP or ESMTP; HELO is at most 255 characters. Sentinels and the
+// IPV6: prefix are case-insensitive and are stored in upper case.
+//
+// checklist: XC-SYNTAX-04 XC-SYNTAX-05 XC-SYNTAX-06 XC-SYNTAX-07 XC-SYNTAX-09 XC-SYNTAX-10
+func TestXClientAttributeSyntax(t *testing.T) {
+	label63 := strings.Repeat("h", 63)
+	name255 := strings.Join([]string{label63, label63, label63, label63}, ".")
+	helo255 := strings.Repeat("h", 255)
+	for _, tc := range []struct {
+		command string
+		want    XClientAttrs
+	}{
+		{"XCLIENT NAME=mx.example.com", XClientAttrs{Name: "mx.example.com"}},
+		{"XCLIENT NAME=" + name255, XClientAttrs{Name: name255}},
+		{"XCLIENT NAME=[unavailable]", XClientAttrs{Name: "[UNAVAILABLE]"}},
+		{"XCLIENT NAME=[TempUnavail]", XClientAttrs{Name: "[TEMPUNAVAIL]"}},
+		{"XCLIENT ADDR=192.0.2.1", XClientAttrs{Addr: "192.0.2.1"}},
+		{"XCLIENT ADDR=ipv6:2001:db8::1", XClientAttrs{Addr: "IPV6:2001:db8::1"}},
+		{"XCLIENT ADDR=IPv6:::ffff:192.0.2.1", XClientAttrs{Addr: "IPV6:::ffff:192.0.2.1"}},
+		{"XCLIENT ADDR=[Unavailable]", XClientAttrs{Addr: "[UNAVAILABLE]"}},
+		{"XCLIENT PROTO=esmtp", XClientAttrs{Proto: "ESMTP"}},
+		{"XCLIENT PROTO=SMTP", XClientAttrs{Proto: "SMTP"}},
+		{"XCLIENT HELO=" + helo255, XClientAttrs{Helo: helo255}},
+		{"XCLIENT HELO=[192.0.2.1]", XClientAttrs{Helo: "[192.0.2.1]"}},
+		{"XCLIENT HELO=[unavailable]", XClientAttrs{Helo: "[UNAVAILABLE]"}},
+		{"XCLIENT LOGIN=[unavailable]", XClientAttrs{Login: "[UNAVAILABLE]"}},
+		{"XCLIENT PORT=0", XClientAttrs{Port: "0"}},
+		{"XCLIENT PORT=65535", XClientAttrs{Port: "65535"}},
+		{"XCLIENT PORT=[UNAVAILABLE]", XClientAttrs{Port: "[UNAVAILABLE]"}},
+		{"XCLIENT DESTADDR=IPV6:2001:db8::25 DESTPORT=587", XClientAttrs{DestAddr: "IPV6:2001:db8::25", DestPort: "587"}},
+		{"XCLIENT DESTADDR=198.51.100.7 DESTPORT=[unavailable]", XClientAttrs{DestAddr: "198.51.100.7", DestPort: "[UNAVAILABLE]"}},
+	} {
+		t.Run(tc.command, func(t *testing.T) {
+			if got := xclientAttrs(t, tc.command); got != tc.want {
+				t.Fatalf("XClient() = %+v, want %+v", got, tc.want)
+			}
+		})
+	}
+}
+
+// A malformed attribute value is refused with 501 5.5.4, and the identity
+// stays as it was.
+//
+// checklist: XC-SYNTAX-04 XC-SYNTAX-05 XC-SYNTAX-06 XC-SYNTAX-07 XC-SYNTAX-09 XC-SYNTAX-10
+func TestXClientRefusesMalformedAttributes(t *testing.T) {
+	label63 := strings.Repeat("h", 63)
+	for _, bad := range []string{
+		"NAME=", "NAME=bad_name.example", "NAME=-mx.example", "NAME=mx..example", "NAME=caf+C3+A9.example",
+		"NAME=" + strings.Repeat("h", 64) + ".example",
+		"NAME=" + strings.Join([]string{label63, label63, label63, label63}, ".") + "h",
+		"NAME=[192.0.2.1]", "NAME=[UNKNOWN]",
+		"ADDR=", "ADDR=192.0.2", "ADDR=192.0.2.256", "ADDR=2001:db8::1", "ADDR=[192.0.2.1]",
+		"ADDR=IPV6:192.0.2.1", "ADDR=IPV6:fe80::1%25eth0", "ADDR=[TEMPUNAVAIL]", "ADDR=mx.example",
+		"PROTO=LMTP", "PROTO=", "PROTO=ESMTPS",
+		"HELO=", "HELO=" + strings.Repeat("h", 256), "HELO=a+01b",
+		"PORT=", "PORT=65536", "PORT=-1", "PORT=+2B25", "PORT=0x19", "PORT=999999",
+		"DESTADDR=example.com", "DESTADDR=IPV6:", "DESTPORT=70000", "DESTPORT=smtp",
+	} {
+		t.Run(bad, func(t *testing.T) {
+			var conn *Conn
+			_, raw, br, _ := newFlushTestConn(t, func(s *Server) {
+				enableTestXClient(s)
+				s.Backend = BackendFunc(func(c *Conn) (Session, error) {
+					conn = c
+					return flushAuthSession{}, nil
+				})
+			})
+			xclientCommand(t, raw, br, "XCLIENT NAME=original.example ADDR=192.0.2.9 PORT=1025", "220")
+			xclientCommand(t, raw, br, "EHLO proxy.example", "250")
+			before := *conn.XClient()
+			reply := xclientCommand(t, raw, br, "XCLIENT "+bad, "501")
+			name, _, _ := strings.Cut(bad, "=")
+			if want := "501 5.5.4 Bad XCLIENT " + name + " syntax"; reply[0] != want {
+				t.Fatalf("reply = %q, want %q", reply, want)
+			}
+			if got := *conn.XClient(); got != before {
+				t.Fatalf("refused command changed identity: %+v, was %+v", got, before)
+			}
+		})
+	}
 }

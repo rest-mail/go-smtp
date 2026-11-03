@@ -212,9 +212,10 @@ func TestRFC6710LongMailAndLMTP(t *testing.T) {
 			t.Fatal(caps)
 		}
 		// 512 octets including CRLF before appending the 15-octet option.
-		// Long domain labels are intentionally synthetic: this checks the
-		// command reader's byte budget, not mailbox routing or DNS validity.
-		base := "MAIL FROM:<a@" + strings.Repeat("b", 512-len("MAIL FROM:<a@>\r\n")) + ">"
+		// The long local-part is intentionally synthetic: this checks the
+		// command reader's byte budget, not mailbox routing. The domain
+		// must stay a valid Domain (RFC 5321 §4.1.2).
+		base := "MAIL FROM:<" + strings.Repeat("a", 512-len("MAIL FROM:<@b>\r\n")) + "@b>"
 		wire := base + " MT-PRIORITY=-9\r\n"
 		if len(wire) != 527 {
 			t.Fatalf("wire length %d, want 527", len(wire))
