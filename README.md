@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/rest-mail/go-smtp/actions/workflows/ci.yml/badge.svg)](https://github.com/rest-mail/go-smtp/actions/workflows/ci.yml)
 [![Coverage gate: >=95%](https://img.shields.io/badge/coverage%20gate-%3E%3D95%25-brightgreen)](COVERAGE.md)
-[![Checklist: 360/574 mapped](https://img.shields.io/badge/checklist-360%2F574%20mapped-blue)](CHECKLIST.md)
+[![Checklist: 362/574 mapped](https://img.shields.io/badge/checklist-362%2F574%20mapped-blue)](CHECKLIST.md)
 [![Go Reference](https://pkg.go.dev/badge/github.com/rest-mail/go-smtp.svg)](https://pkg.go.dev/github.com/rest-mail/go-smtp/pkg/smtp)
 
 An ESMTP client and server library written in Go, with LMTP and the
@@ -303,12 +303,9 @@ The library:
 - The client exposes those three queue operations and returns every status
   from `Wait`; DATA is sent synchronously afterwards.
 - An empty DATA writer sends the terminator without an extra blank line.
-- Known gap: the client still assumes a 4096-byte transport window instead of
-  checking the actual TCP window or reading responses concurrently. Its
-  congestion tests prove that assumed window only; smaller windows and
-  oversized individual commands remain a conformance gap (PIPE-CLIENT-07,
-  [#137](https://github.com/rest-mail/go-smtp/issues/137)), bounded by
-  `CommandTimeout`.
+- The client reads replies on a separate goroutine while it writes a group,
+  so a group of any size completes whatever the transport's buffers hold,
+  and a single command longer than them does too (PIPE-CLIENT-07).
 
 The host (the caller):
 
@@ -602,8 +599,6 @@ describes.
 
 | Gap | Issue |
 |-----|-------|
-| The client rejects a reply code with no text, such as a bare `250`. | [#136](https://github.com/rest-mail/go-smtp/issues/136) |
-| The pipelining client assumes a 4096-byte TCP window instead of reading replies while it writes, so a larger group can deadlock until `CommandTimeout`. | [#137](https://github.com/rest-mail/go-smtp/issues/137) |
 | The address parser does not check domain labels or empty local-part atoms against the RFC 5321 grammar. | [#138](https://github.com/rest-mail/go-smtp/issues/138) |
 | Reply codes supplied by the backend are sent without a range check. | [#139](https://github.com/rest-mail/go-smtp/issues/139) |
 | XCLIENT attribute values are not validated, and PORT, DESTADDR and DESTPORT are not exposed. | [#140](https://github.com/rest-mail/go-smtp/issues/140) |
@@ -612,7 +607,7 @@ describes.
 
 The badges at the top are checked by `TestReadmeBadges` in
 `internal/checklist`. The checklist badge counts mapped items over all items:
-the 214 `n/a` rows are in the denominator, so the badge never claims more than
+the 212 `n/a` rows are in the denominator, so the badge never claims more than
 the tests prove. The coverage badge shows the floor CI enforces (`FLOOR` in
 `.github/workflows/ci.yml`), not a measured figure; each CI run prints the
 measured statement coverage. Coverage is in [COVERAGE.md](COVERAGE.md).
