@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/emersion/go-sasl"
@@ -41,6 +42,10 @@ type Client struct {
 	utf8       bool              // whether the current MAIL carries SMTPUTF8
 
 	writingData bool // DATA body or terminator is being written
+
+	// debugMu serialises DebugWriter: while a pipelined group is open, replies
+	// are read (and logged) on another goroutine while commands are written.
+	debugMu sync.Mutex
 
 	// Time to wait for command responses (this includes 3xx reply to DATA).
 	CommandTimeout time.Duration
@@ -269,15 +274,15 @@ func (c *Client) Hello(localName string) error {
 }
 
 func (c *Client) readResponse(expectCode int) (int, string, error) {
-	code, msg, err := c.text.ReadResponse(expectCode)
+	code, msg, err := readReply(&c.text.Reader, expectCode)
 	if protoErr, ok := err.(*textproto.Error); ok {
 		err = toSMTPErr(protoErr)
 	}
 	return code, msg, err
 }
 
-// cmd is a convenience function that sends a command and returns the response
-// textproto.Error returned by c.text.ReadResponse is converted into SMTPError.
+// cmd is a convenience function that sends a command and returns the response.
+// A textproto.Error returned by readReply is converted into SMTPError.
 func (c *Client) cmd(expectCode int, format string, args ...interface{}) (int, string, error) {
 	c.conn.SetDeadline(time.Now().Add(c.CommandTimeout))
 	defer c.conn.SetDeadline(time.Time{})
@@ -1240,6 +1245,8 @@ func (cdw clientDebugWriter) Write(b []byte) (int, error) {
 	if cdw.c.DebugWriter == nil {
 		return len(b), nil
 	}
+	cdw.c.debugMu.Lock()
+	defer cdw.c.debugMu.Unlock()
 	return cdw.c.DebugWriter.Write(b)
 }
 

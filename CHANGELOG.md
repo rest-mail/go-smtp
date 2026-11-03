@@ -4,6 +4,24 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Note: pre-1.0, breaking changes may ship in a minor release.
 
+## [Unreleased]
+
+### Fixed
+
+- The client accepts a reply line with no text, as RFC 5321 §4.2 allows: a
+  bare code such as `250`, as the only line of a reply or the last line of a
+  multiline one, and a bare continuation such as `250-`. Replies are now read
+  by the client's own reader instead of `net/textproto`, which rejected a bare
+  code as a "short response" (#136).
+- A pipelined group can no longer deadlock against a server that stops reading
+  until its replies are read. The `Pipeliner` reads replies on a separate
+  goroutine while it writes commands, as RFC 2920 §3.1 allows, instead of
+  assuming a 4096-byte window, so a group of any size completes over any
+  transport (#137). The state changes of a group's successful commands are
+  applied by `Wait`, and every group must end with `Wait`.
+- `Client.DebugWriter` is written under a lock, since a pipelined group logs
+  replies and commands from two goroutines.
+
 ## [0.32.0] - 2026-10-23
 
 ### Changed (breaking)

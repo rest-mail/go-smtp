@@ -222,8 +222,8 @@ func serveEager(conn net.Conn, lmtp bool, limit int, hangup bool) <-chan struct{
 }
 
 // startEager wires a client to serveEager over a bounded pipe whose command
-// direction holds exactly the 4 KiB window RFC 2920 assumes and whose reply
-// direction holds 64 bytes, far less than the replies to a large group. The
+// direction holds the 4 KiB RFC 2920 calls usual and whose reply direction
+// holds 64 bytes, far less than the replies to a large group. The
 // connection is closed and the server goroutine reaped at cleanup.
 func startEager(t *testing.T, lmtp bool, limit int, hangup bool) net.Conn {
 	t.Helper()
@@ -328,8 +328,8 @@ func TestPipeline_LargeGroupDoesNotDeadlock(t *testing.T) {
 	}
 }
 
-// TestPipeline_LMTPSeesOnlyAcceptedRecipients splits large groups at the window
-// and checks the recipient set the reads build up: LMTP expects one reply per
+// TestPipeline_LMTPSeesOnlyAcceptedRecipients sends large groups and checks the
+// recipient set Wait builds from their results: LMTP expects one reply per
 // accepted recipient after DATA, so a rejected or stale recipient left in the
 // set would show up in (or hang) CloseWithLMTPResponse. The second group reuses
 // the Pipeliner after RSET and must not inherit the first group's recipients.
@@ -396,10 +396,11 @@ func TestPipeline_LMTPSeesOnlyAcceptedRecipients(t *testing.T) {
 }
 
 // TestPipeline_StalledServerTimesOut has the server answer MAIL and four RCPTs
-// and then read on without replying. The read at the window must time out
-// within one CommandTimeout, refuse every later command without writing it,
-// and leave Wait one result per queued command: the answered ones, then the
-// timeout.
+// and then read on without replying. The reader must time out within one
+// CommandTimeout of the first unanswered command. Commands may be written
+// before the timeout is seen; once it is, every later command is refused with
+// that same error without being written. Wait leaves one result per queued
+// command: the answered ones, then the timeout.
 //
 // checklist: SMTP-EXT-01
 func TestPipeline_StalledServerTimesOut(t *testing.T) {
@@ -429,11 +430,8 @@ func TestPipeline_StalledServerTimesOut(t *testing.T) {
 			t.Fatalf("Rcpt %d: %v, want the sticky %v", i, err, firstErr)
 		}
 	}
-	if failedAt < 0 {
-		t.Fatal("no Rcpt reported the stalled server")
-	}
 	var netErr net.Error
-	if !errors.As(firstErr, &netErr) || !netErr.Timeout() {
+	if failedAt >= 0 && (!errors.As(firstErr, &netErr) || !netErr.Timeout()) {
 		t.Fatalf("Rcpt %d: %v, want a timeout", failedAt, firstErr)
 	}
 
@@ -452,8 +450,91 @@ func TestPipeline_StalledServerTimesOut(t *testing.T) {
 			t.Fatalf("command %d: %v, want a timeout", i, err)
 		}
 	}
-	if err := p.Rcpt("late@example.com", nil); err != firstErr {
-		t.Fatalf("Rcpt after Wait: %v, want the sticky %v", err, firstErr)
+	err = p.Rcpt("late@example.com", nil)
+	if !errors.As(err, &netErr) || !netErr.Timeout() || (firstErr != nil && err != firstErr) {
+		t.Fatalf("Rcpt after Wait: %v, want the sticky timeout", err)
+	}
+	if again := p.Rcpt("later@example.com", nil); again != err {
+		t.Fatalf("second Rcpt after Wait: %v, want the sticky %v", again, err)
+	}
+}
+
+// TestPipeline_ReadsRepliesWhileWriting is issue #137 (RFC 2920 section 3.1):
+// a group far larger than the transport's buffers, against a server that does
+// not read its next command until the reply to the last one is written. Over
+// net.Pipe nothing is buffered at all, and the bounded pipe holds 16 bytes each
+// way, less than one command and far less than the 4096-byte window the client
+// once assumed. A client that does not read replies while it writes blocks on
+// the second command (its write waits for the server, which waits for its
+// reply to be read) until the write deadline.
+//
+// checklist: PIPE-CLIENT-07
+func TestPipeline_ReadsRepliesWhileWriting(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		pipe func() (net.Conn, net.Conn)
+	}{
+		{"net.Pipe", net.Pipe},
+		{"16-byte buffers", func() (net.Conn, net.Conn) { return boundedPipe(16, 16) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cconn, sconn := tc.pipe()
+			done := serveEager(sconn, false, 0, false)
+			t.Cleanup(func() {
+				cconn.Close()
+				<-done
+			})
+			c := client.New(cconn)
+			c.CommandTimeout = 2 * time.Second
+
+			p, err := c.Pipeline()
+			if err != nil {
+				t.Fatalf("Pipeline: %v", err)
+			}
+			for round := 0; round < 2; round++ {
+				queued := 0
+				if round > 0 {
+					if err := p.Reset(); err != nil {
+						t.Fatalf("round %d Reset: %v", round, err)
+					}
+					queued++
+				}
+				if err := p.Mail("from@example.com", nil); err != nil {
+					t.Fatalf("round %d Mail: %v", round, err)
+				}
+				queued++
+				rcpts := testRecipients(fmt.Sprintf("window%d", round), 500, 9)
+				for i, rcpt := range rcpts {
+					if err := p.Rcpt(rcpt, nil); err != nil {
+						t.Fatalf("round %d Rcpt %d of %d: %v (the client stopped reading replies while it wrote)", round, i, len(rcpts), err)
+					}
+				}
+				errs := p.Wait()
+				if len(errs) != queued+len(rcpts) {
+					t.Fatalf("round %d: %d results, want %d", round, len(errs), queued+len(rcpts))
+				}
+				for i := 0; i < queued; i++ {
+					if errs[i] != nil {
+						t.Fatalf("round %d command %d: %v", round, i, errs[i])
+					}
+				}
+				checkRcptResults(t, errs[queued:], rcpts)
+
+				w, err := c.Data()
+				if err != nil {
+					t.Fatalf("round %d Data: %v", round, err)
+				}
+				if _, err := io.WriteString(w, "Subject: hi\r\n\r\nbody\r\n"); err != nil {
+					t.Fatal(err)
+				}
+				if err := w.Close(); err != nil {
+					t.Fatalf("round %d DATA close: %v", round, err)
+				}
+			}
+			if err := c.Quit(); err != nil {
+				t.Fatalf("Quit: %v", err)
+			}
+		})
 	}
 }
 
